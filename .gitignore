@@ -1,0 +1,19 @@
+# Forge — build artifacts
+build/
+cmake-build-*/
+
+# Dependencies (git submodules — not committed as files)
+# (JUCE / tracktion_engine added as submodules in Phase 0)
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# Audio render scratch
+*.wav.tmp
