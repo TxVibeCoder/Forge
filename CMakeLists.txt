@@ -30,6 +30,8 @@ juce_generate_juce_header(Forge)
 target_sources(Forge PRIVATE
     src/main.cpp
     src/services/files/ProjectSession.cpp
+    src/engine/RecordController.cpp
+    src/ui/transport/TransportBar.cpp
     src/ui/arrange/ArrangeView.cpp)
 
 target_include_directories(Forge PRIVATE src)

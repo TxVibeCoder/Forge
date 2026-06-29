@@ -61,6 +61,26 @@ namespace EngineHelpers
                          });
     }
 
+    /** Opens the audio device selector (pick input/output devices, sample rate, buffer). */
+    inline void showAudioDeviceSettings (te::Engine& engine)
+    {
+        juce::DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Audio Settings";
+        o.dialogBackgroundColour = juce::Colours::black;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+
+        auto* selector = new juce::AudioDeviceSelectorComponent (
+            engine.getDeviceManager().deviceManager,
+            1, 512,   // min/max input channels (min 1 -> prompt for an input device)
+            1, 512,   // min/max output channels
+            false, false, true, false);
+        selector->setSize (500, 450);
+        o.content.setOwned (selector);
+        o.launchAsync();
+    }
+
     inline void togglePlay (te::Edit& edit)
     {
         auto& transport = edit.getTransport();
@@ -76,7 +96,7 @@ namespace EngineHelpers
         auto& transport = edit.getTransport();
 
         if (transport.isRecording())
-            transport.stop (true, false);
+            transport.stop (false, false);   // keep the take (engine inserts the clip)
         else
             transport.record (false);
     }
