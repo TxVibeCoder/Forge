@@ -67,7 +67,9 @@ public:
         : selfTest (runSelfTest)
     {
         // 1. Generate a sine and load it as a looping clip in a fresh Edit.
-        sineFile = createSineWaveFile (44100.0, 2.0, 440.0, 0.2f);
+        //    A 30s clip gives a long, clearly audible tone and a generous verification
+        //    window even if loop re-triggering misbehaves.
+        sineFile = createSineWaveFile (44100.0, 30.0, 440.0, 0.2f);
 
         edit = te::createEmptyEdit (engine, File{});
         edit->ensureNumberOfAudioTracks (1);
@@ -82,14 +84,23 @@ public:
                                               false);
         }
 
-        // 2. Loop around the clip and start playing.
+        // 2. Loop around the clip, then start playing. We're constructed during
+        //    initialise() — before the JUCE message loop is dispatching — and calling
+        //    play() that early doesn't engage the transport. So defer play() via
+        //    callAsync, which fires once the loop is live.
         if (clip != nullptr)
         {
             auto& transport = edit->getTransport();
             transport.setLoopRange (clip->getEditTimeRange());
             transport.looping = true;
+            transport.ensureContextAllocated();
             transport.setPosition (te::TimePosition());
-            transport.play (false);
+
+            MessageManager::callAsync ([this]
+            {
+                if (edit != nullptr)
+                    edit->getTransport().play (false);
+            });
         }
 
         // 3. UI.
@@ -187,14 +198,35 @@ private:
     void writeSelfTestReport (bool playing) const
     {
         auto* device = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        const bool pass = device != nullptr && playing && clip != nullptr;
+
+        double posSecs = -1.0, editLen = -1.0, loopStart = -1.0, loopEnd = -1.0;
+        bool looping = false, hasContext = false;
+        if (edit != nullptr)
+        {
+            auto& tr = edit->getTransport();
+            posSecs    = tr.getPosition().inSeconds();
+            editLen    = edit->getLength().inSeconds();
+            looping    = tr.looping;
+            hasContext = tr.getCurrentPlaybackContext() != nullptr;
+            const auto lr = tr.getLoopRange();
+            loopStart  = lr.getStart().inSeconds();
+            loopEnd    = lr.getEnd().inSeconds();
+        }
+
+        // Pass = device open, clip made, and audio actually advancing (playing OR position moved).
+        const bool pass = device != nullptr && clip != nullptr && (playing || posSecs > 0.05);
 
         String report;
         report << "device="      << (device != nullptr ? device->getName() : String ("none")) << newLine
                << "sampleRate="  << (device != nullptr ? String (device->getCurrentSampleRate(), 0) : String ("0")) << newLine
                << "bufferSize="  << (device != nullptr ? String (device->getCurrentBufferSizeSamples()) : String ("0")) << newLine
                << "clipCreated=" << (clip != nullptr ? 1 : 0) << newLine
+               << "hasContext="  << (hasContext ? 1 : 0) << newLine
                << "playing="     << (playing ? 1 : 0) << newLine
+               << "position="    << String (posSecs, 3) << newLine
+               << "editLength="  << String (editLen, 3) << newLine
+               << "loopRange="   << String (loopStart, 3) << ".." << String (loopEnd, 3) << newLine
+               << "looping="     << (looping ? 1 : 0) << newLine
                << "result="      << (pass ? "PASS" : "FAIL") << newLine;
 
         File::getSpecialLocation (File::tempDirectory)

@@ -4,7 +4,9 @@ A native desktop DAW (Digital Audio Workstation), built on **JUCE** + **Tracktio
 in **C++20**. Targets Windows + macOS. Non-commercial; open-source under **AGPLv3**
 (JUCE AGPLv3 + Tracktion Engine GPLv3 ⇒ Forge is AGPLv3).
 
-> **Status:** Phase 0 — proving the toolchain and getting first sound out of the engine.
+> **Status:** Phase 0 ✅ — toolchain builds and the engine plays first sound, verified on
+> Windows (MSVC v143). A generated 440 Hz sine routes through the Tracktion graph to the
+> audio device. Next: Phase 1 (record & play a real track).
 > See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and the build
 > roadmap (Phases 0–5), and [`docs/FEATURE_CATALOG.md`](docs/FEATURE_CATALOG.md) for the
 > feature landscape.
