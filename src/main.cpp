@@ -76,6 +76,71 @@ static File uniqueUntitledFile()
 }
 
 //==============================================================================
+/*  ResizerBar — a thin draggable handle sitting at the edge of a collapsible panel.
+    Dragging it reports the desired new panel size (in pixels) back through onResize,
+    clamped to [minSize, maxSize]. Vertical=true gives a left/right (width) handle for
+    the Browser; vertical=false gives an up/down (height) handle for the Detail-drawer.
+
+    Message-thread only. Owns no layout state itself: the shell holds the size members,
+    re-reads them in resized(), and this bar just nudges them via the callback.            */
+class ResizerBar : public Component
+{
+public:
+    ResizerBar (bool isVertical, int minPx, int maxPx)
+        : vertical (isVertical), minSize (minPx), maxSize (maxPx)
+    {
+        setMouseCursor (vertical ? MouseCursor::LeftRightResizeCursor
+                                 : MouseCursor::UpDownResizeCursor);
+    }
+
+    // Called on each drag with the clamped desired size; the shell stores it and re-lays-out.
+    std::function<void (int)> onResize;
+
+    // The shell tells us the panel's current size when a drag begins (via mouseDown reading it).
+    std::function<int()> getCurrentSize;
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (ForgeLookAndFeel::hairline));
+        if (isMouseOverOrDragging())
+        {
+            g.setColour (Colour (ForgeLookAndFeel::accent).withAlpha (0.6f));
+            g.fillRect (getLocalBounds());
+        }
+    }
+
+    void mouseEnter (const MouseEvent&) override { repaint(); }
+    void mouseExit  (const MouseEvent&) override { repaint(); }
+
+    void mouseDown (const MouseEvent&) override
+    {
+        sizeAtDragStart = getCurrentSize ? getCurrentSize() : 0;
+        repaint();
+    }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        // A left/right (vertical) handle grows the panel as the mouse moves right; an
+        // up/down handle for a bottom drawer grows the panel as the mouse moves UP, hence
+        // the negated Y delta.
+        const int delta = vertical ? e.getDistanceFromDragStartX()
+                                   : -e.getDistanceFromDragStartY();
+        const int wanted = jlimit (minSize, maxSize, sizeAtDragStart + delta);
+        if (onResize)
+            onResize (wanted);
+    }
+
+    void mouseUp (const MouseEvent&) override { repaint(); }
+
+private:
+    bool vertical = true;
+    int  minSize = 0, maxSize = 0;
+    int  sizeAtDragStart = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ResizerBar)
+};
+
+//==============================================================================
 class MainComponent : public Component,
                       private Timer
 {
@@ -83,7 +148,7 @@ public:
     MainComponent (te::Engine& e, SelfTest testMode)
         : engine (e), session (e), recorder (e), mode (testMode)
     {
-        engine.getDeviceManager().initialise();   // open input channels too (for recording)
+        EngineHelpers::initialiseAudioForRecording (engine);   // open input channels too (for recording)
 
         // Self-tests use a fresh, isolated temp project so clip/track counts are deterministic
         // and never polluted by leftovers in the persistent Untitled project.
@@ -99,13 +164,48 @@ public:
         addAndMakeVisible (mixerPanel);
         addAndMakeVisible (browserPanel);
         addAndMakeVisible (drawerPanel);
+        addAndMakeVisible (browserResizer);
+        addAndMakeVisible (drawerResizer);
         addAndMakeVisible (statusLabel);
+
+        setupResizers();
+
+        // The shell handles app-wide shortcuts. Child buttons/views can still grab focus;
+        // keyPressed returns false for keys it doesn't consume so they keep propagating.
+        setWantsKeyboardFocus (true);
 
         if (mode == SelfTest::playback)
             importTestToneAndPlay();
 
         controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
+
+        // Persist structural edits made via the arrange view's context menus / lane controls
+        // (add/delete/rename track, delete clip, colour, mute/solo). ArrangeView fires this after
+        // it has already rebuilt itself, so we only need to save. (onClipSelected/onTrackSelected
+        // -> Inspector are left unwired until that feature exists — see docs/devlog/integration.md.)
+        arrangeView.onEditMutated = [this] { session.save(); };
+
+        // The lane R button toggles its visual state optimistically, then asks us to arm/disarm
+        // the real input. If the record path rejects it (e.g. no capture device on this box), push
+        // the true state back so the lane doesn't show a misleading "armed" tint, and report why.
+        arrangeView.onArmToggled = [this] (te::AudioTrack& track, bool arm)
+        {
+            auto* ed = session.getEdit();
+            if (ed == nullptr)
+                return;
+
+            const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
+                                : recorder.disarmTrack (*ed, track);
+
+            if (! ok)
+            {
+                arrangeView.setTrackArmState (track, ! arm);   // revert the optimistic toggle
+                statusLabel.setText ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError(),
+                                     dontSendNotification);
+            }
+        };
+
         setViewMode (ViewMode::Arrange);
 
         setSize (1040, 620);
@@ -142,14 +242,27 @@ public:
 
         auto work = r;
 
+        // Browser (left): panel + a thin draggable resizer hugging its right edge.
         browserPanel.setVisible (browserVisible);
+        browserResizer.setVisible (browserVisible);
         if (browserVisible)
-            browserPanel.setBounds (work.removeFromLeft (220));
+        {
+            const int w = jlimit (browserMinWidth, browserMaxWidth, browserWidth);
+            browserPanel.setBounds (work.removeFromLeft (w));
+            browserResizer.setBounds (work.removeFromLeft (resizerThickness));
+        }
 
         auto centre = work;
+
+        // Detail-drawer (bottom): resizer hugging its top edge, then the panel below it.
         drawerPanel.setVisible (drawerVisible);
+        drawerResizer.setVisible (drawerVisible);
         if (drawerVisible)
-            drawerPanel.setBounds (centre.removeFromBottom (160));
+        {
+            const int h = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
+            drawerPanel.setBounds (centre.removeFromBottom (h));
+            drawerResizer.setBounds (centre.removeFromBottom (resizerThickness));
+        }
 
         arrangeView.setVisible (viewMode == ViewMode::Arrange);
         mixerPanel.setVisible (viewMode == ViewMode::Mixer);
@@ -179,12 +292,23 @@ private:
     ArrangeView arrangeView { timelineView };
     Label browserPanel, drawerPanel, mixerPanel;
     Label statusLabel;
-    std::unique_ptr<FileChooser> fileChooser;
+
+    // Each async file dialog owns its own FileChooser so open/save-as can't stomp each other.
+    // (Import uses EngineHelpers::browseForAudioFile, which manages its own shared chooser.)
+    std::unique_ptr<FileChooser> openChooser, saveChooser;
     TooltipWindow tooltipWindow;
 
     ViewMode viewMode = ViewMode::Arrange;
     bool browserVisible = false;   // lean default; toggled on demand
     bool drawerVisible  = false;
+
+    // Region sizes are mutable (drag-to-resize). Not persisted across launches yet (future work).
+    static constexpr int resizerThickness = 5;
+    int browserWidth = 220, browserMinWidth = 140, browserMaxWidth = 560;
+    int drawerHeight = 160, drawerMinHeight = 90,  drawerMaxHeight = 420;
+
+    ResizerBar browserResizer { true,  browserMinWidth, browserMaxWidth };   // vertical handle (width)
+    ResizerBar drawerResizer  { false, drawerMinHeight, drawerMaxHeight };   // horizontal handle (height)
 
     //==============================================================================
     void setupControlBar()
@@ -227,44 +351,120 @@ private:
         resized();
     }
 
+    void setupResizers()
+    {
+        browserResizer.getCurrentSize = [this] { return browserWidth; };
+        browserResizer.onResize       = [this] (int w) { browserWidth = w; resized(); };
+
+        drawerResizer.getCurrentSize  = [this] { return drawerHeight; };
+        drawerResizer.onResize        = [this] (int h) { drawerHeight = h; resized(); };
+    }
+
+    //==============================================================================
+    bool keyPressed (const KeyPress& key) override
+    {
+        const auto mods = key.getModifiers();
+        const auto code = key.getKeyCode();
+
+        // For letter keys the keyCode is the (case-insensitive) character itself, which stays
+        // reliable even with modifiers held — unlike getTextCharacter(), which becomes a control
+        // char under Ctrl on some platforms. Normalise to upper case for comparison.
+        const auto letter = (juce_wchar) CharacterFunctions::toUpperCase ((juce_wchar) code);
+
+        // Ctrl/Cmd file commands first (isCommandDown() == Ctrl on Windows).
+        if (mods.isCommandDown())
+        {
+            if (letter == 'S')
+            {
+                if (mods.isShiftDown())  { if (controlBar.onSaveAs) controlBar.onSaveAs(); }
+                else                     { if (controlBar.onSave)   controlBar.onSave(); }
+                return true;
+            }
+            if (letter == 'O') { if (controlBar.onOpen)   controlBar.onOpen();   return true; }
+            if (letter == 'N') { if (controlBar.onNew)    controlBar.onNew();    return true; }
+            if (letter == 'I') { if (controlBar.onImport) controlBar.onImport(); return true; }
+
+            return false;   // unrecognised Ctrl combo: let it propagate
+        }
+
+        // Un-modified shortcuts.
+        if (code == KeyPress::F9Key)  { setViewMode (ViewMode::Arrange); return true; }
+        if (code == KeyPress::F11Key) { setViewMode (ViewMode::Mixer);   return true; }
+
+        if (code == KeyPress::spaceKey)
+        {
+            if (auto* ed = session.getEdit())
+                EngineHelpers::togglePlay (*ed);
+            return true;
+        }
+
+        if (letter == 'B') { browserVisible = ! browserVisible; resized(); return true; }
+        if (letter == 'E') { drawerVisible  = ! drawerVisible;  resized(); return true; }
+        if (letter == 'R') { toggleRecordTake();                           return true; }
+
+        return false;   // unhandled: propagate to other handlers
+    }
+
     //==============================================================================
     void openDialog()
     {
-        fileChooser = std::make_unique<FileChooser> ("Open project...", File(),
+        openChooser = std::make_unique<FileChooser> ("Open project...", File(),
                                                      "*" + String (te::editFileSuffix));
-        fileChooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                                  [this] (const FileChooser& fc)
+        Component::SafePointer<MainComponent> safeThis (this);
+        openChooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                  [safeThis] (const FileChooser& fc)
                                   {
+                                      auto* self = safeThis.getComponent();
+                                      if (self == nullptr)
+                                          return;   // dialog outlived the shell: no-op
+
                                       const auto f = fc.getResult();
                                       if (f.existsAsFile())
-                                          swapProject ([this, f] { session.openProject (f); });
+                                          self->swapProject ([self, f] { self->session.openProject (f); });
                                   });
     }
 
     void saveAsDialog()
     {
-        fileChooser = std::make_unique<FileChooser> ("Save project as...", File(),
+        saveChooser = std::make_unique<FileChooser> ("Save project as...", File(),
                                                      "*" + String (te::editFileSuffix));
-        fileChooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
-                                  [this] (const FileChooser& fc)
+        Component::SafePointer<MainComponent> safeThis (this);
+        saveChooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
+                                  [safeThis] (const FileChooser& fc)
                                   {
+                                      auto* self = safeThis.getComponent();
+                                      if (self == nullptr)
+                                          return;   // dialog outlived the shell: no-op
+
                                       auto f = fc.getResult();
                                       if (f == File())
                                           return;
                                       if (f.getFileExtension().isEmpty())
                                           f = f.withFileExtension (te::editFileSuffix);
-                                      session.saveAs (f);
-                                      rebind();
+
+                                      // saveAs assigns its file only on success; only rebind if it worked.
+                                      if (self->session.saveAs (f))
+                                          self->rebind();
+                                      else
+                                          self->statusLabel.setText ("Save As failed: " + f.getFullPathName(),
+                                                                     dontSendNotification);
                                   });
     }
 
     void importDialog()
     {
-        EngineHelpers::browseForAudioFile (engine, [this] (const File& f)
+        // browseForAudioFile owns its own shared FileChooser, so importChooser isn't used here;
+        // we still guard `this` since the callback fires asynchronously after the file is picked.
+        Component::SafePointer<MainComponent> safeThis (this);
+        EngineHelpers::browseForAudioFile (engine, [safeThis] (const File& f)
         {
-            clip = session.importAudioFile (f, te::TimePosition());
-            session.save();
-            rebind();
+            auto* self = safeThis.getComponent();
+            if (self == nullptr)
+                return;   // dialog outlived the shell: no-op
+
+            self->clip = self->session.importAudioFile (f, te::TimePosition());
+            self->session.save();
+            self->rebind();
         });
     }
 

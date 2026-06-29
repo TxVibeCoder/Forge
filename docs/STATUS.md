@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-29.*
+*Living status document. Last updated 2026-06-29 (Phase 2 fan-out integrated; uncommitted).*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
 [../tests/SELFTEST.md](../tests/SELFTEST.md) (verification contract).*
@@ -18,7 +18,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
 | **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
-| **Code size** | ~1,570 lines of Forge source (engine/JUCE excluded) across 16 files |
+| **Code size** | ~2,660 lines of Forge source (engine/JUCE excluded) across 16 files |
 
 ---
 
@@ -59,6 +59,26 @@ Seven green commits, each compiling and passing the headless `--selftest`:
 - **Planning docs produced:** ARCHITECTURE, FEATURE_CATALOG, INTERFACE, SELFTEST, plus a
   rendered interface mockup.
 
+### Phase 2 — arrange polish + device fix + robustness  (parallel 5-agent fan-out)
+Delivered by five file-disjoint agents, integrated in one green build. Per-area writeups live in
+`docs/devlog/` (arrange · session · device-recording · shell · hygiene · integration).
+- **Device-override FIXED + verified.** `EngineHelpers::initialiseAudioForRecording()` opens input
+  channels while preserving the saved output device; the playback selftest now reports
+  `device=Bose QC35 II` (saved output survives startup, no Bose→Realtek stomp).
+- **Arrange polish** (`ArrangeView`): bars|beats ruler, clip/track **selection** (accent outline),
+  per-lane **M/S/R** buttons + **colour swatch**, **right-click context menus** (clip:
+  rename/delete/colour; lane: add/delete/rename track), `xToTime` span guard, looped-clip waveform
+  tiling. Structural edits persist via `onEditMutated → session.save()`.
+- **Shell interactions** (`main.cpp`): **keyboard shortcuts** (B/E region toggles, F9/F11 view
+  switch, Space play/stop, R record, Ctrl+S/Shift+S/O/N/I), **draggable resizer bars** for the
+  Browser + Detail-drawer, async-dialog **SafePointer guards**, per-dialog `FileChooser` members,
+  `saveAs` success-checked.
+- **Session robustness** (`ProjectSession`): `saveAs` assigns the file only on success;
+  `isModified()`; `getNumClipsOnTrack0()`.
+- **Recording robustness** (`RecordController`): rescan-before-count, precise `getLastError()`,
+  input-name diagnostics; plus a synthetic-input helper (see §4 — wiring is future work).
+- **Hygiene:** `.gitattributes` (`* text=auto`); `formatTimecode` negative-sign fix.
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `editLoaded=0` (fresh) · `importedClip=1` ·
 `numClipComponents=1` · `playing=1` · **result=PASS**.
@@ -80,7 +100,7 @@ src/
     ├── ControlBar                 merged top strip + view-switch + region toggles
     ├── transport/TransportBar     play/stop/rec/loop + timecode/bars|beats
     └── arrange/ArrangeView        TimelineView, TrackLane, AudioClip (waveform), Playhead
-docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS
+docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-area Phase 2 writeups)
 tests/  SELFTEST.md
 ```
 
@@ -89,33 +109,39 @@ tests/  SELFTEST.md
 ## 4. Pending action items
 
 ### Rough edges / near-term
-- [ ] **Recording verification (blocker).** Wired and correct, but unverified end-to-end: on
-  the dev machine no input device reaches the engine (`inputDeviceCount=0`,
-  `deviceTypesInputs` empty) even with a mic present. Needs: investigate Tracktion wave-in
-  enumeration vs. the JUCE device-type/input pairing (and Windows mic-privacy), then confirm
-  a take captures once an input is selected via **Audio**.
-- [ ] **Device-override.** `engine.getDeviceManager().initialise()` at startup selects the
-  default device, overriding the user's saved output (observed Bose → Realtek). Fix: open
-  inputs without resetting the chosen output (init from saved settings / request inputs only).
-- [ ] **Draggable resizer bars.** Regions collapse/expand via buttons but don't drag-resize
-  yet. Add nested `StretchableLayoutManager` + `StretchableLayoutResizerBar` per INTERFACE §layout.
-- [ ] **Keyboard shortcuts.** `B`/`I`/`E` region toggles and `F9`/`F11` view-switch are
-  planned but not bound — currently buttons only.
+- [ ] **Recording verification (blocker, partially advanced).** Real-hardware capture is still
+  unverified end-to-end: this dev box exposes no capture endpoint (`inputDeviceCount=0`,
+  `deviceTypesInputs` empty), so a take can only be confirmed once an input is picked via
+  **Audio** (steps in `docs/devlog/device-recording.md`). Root cause was diagnosed: the saved
+  device opened output-only (empty input name), now addressed by `initialiseAudioForRecording`.
+- [ ] **Synthetic-input record self-test (new, future work).** `installSyntheticInputForSelftest`
+  exists (hosted `HostedAudioDeviceInterface`) but wiring it into `--selftest-record` did not yet
+  land: with just-in-time install the hosted input arms and recording starts, but the transport
+  doesn't advance under synthetic `processBlock` driving (`posAtFinish=0`, no take captured). Full
+  investigation + next steps in `docs/devlog/integration.md`. Wiring was reverted; helper kept.
+- [x] **Device-override.** FIXED — `initialiseAudioForRecording()` preserves the saved output
+  (verified: playback selftest keeps Bose). The startup `initialise()` stomp is gone.
+- [x] **Draggable resizer bars.** DONE — custom `ResizerBar` drags the Browser width + drawer
+  height (clamped); collapse/expand buttons still work. (Sizes not persisted across launches yet.)
+- [x] **Keyboard shortcuts.** DONE — B/E region toggles, F9/F11 view-switch, Space play/stop, R
+  record, Ctrl+S/Shift+S/O/N/I bound via `keyPressed`. (`I` is Ctrl+Import; no Inspector yet.)
 
-### Deferred from the Phase 1 review (real, low-priority)
-- [ ] Import / Open / Save-As callbacks capture raw `this` → guard with
-  `juce::Component::SafePointer` (UAF window if the app closes during an async dialog).
-- [ ] `openDialog`/`saveAsDialog` share one `fileChooser` member → per-dialog members.
-- [ ] `ProjectSession::saveAs` sets `editFile` before the write succeeds; `saveAsDialog`
-  ignores the returned bool → assign on success only.
-- [ ] `TimelineView::xToTime` guards `width<=0` but not `span<=0` → add when zoom/scroll lands.
-- [ ] Waveform draw assumes non-looped clips → handle looped/time-stretched clips later.
-- [ ] `formatTimecode` mixes signed/abs ms (cosmetic; only matters for negative positions).
+### Deferred from the Phase 1 review
+- [x] Import / Open / Save-As async callbacks now guarded with `Component::SafePointer`.
+- [x] `openDialog`/`saveAsDialog` now have separate `openChooser`/`saveChooser` members.
+- [x] `ProjectSession::saveAs` assigns `editFile` only on success; `saveAsDialog` checks the bool.
+- [x] `TimelineView::xToTime` now guards `span<=0` (matches `timeToX`).
+- [x] Waveform draw handles seconds-based looped clips (tiled). *Beat-based loops still single-window
+  (documented in `docs/devlog/arrange.md`); time-stretched edge cases remain.*
+- [x] `formatTimecode` negative-position sign handling fixed.
 
 ### Build / hygiene
-- [ ] Add `.gitattributes` to normalize line endings (silences the CRLF/LF warnings).
+- [x] `.gitattributes` added (`* text=auto`). Optional `git add --renormalize .` not run (avoids a
+  large diff; warnings already silenced for new commits).
 - [ ] macOS build not yet attempted (only Windows verified). VST3 + AU hosting is macOS-relevant.
-- [ ] `--selftest-record` can't self-verify without a real input; consider a synthetic-input path.
+- [ ] **Interactive UI not auto-verified.** Shortcuts/resizers/menus/per-lane controls compile and
+  construct (full shell builds in the playback selftest) but aren't covered headlessly — verify
+  manually or via computer-use before relying on them.
 
 ### Later / feature-gated
 - [ ] **MIDI is not yet supported** — Forge is audio-only (`WaveAudioClip` only). MIDI tracks
@@ -138,7 +164,7 @@ tests/  SELFTEST.md
 | Phase | Goal | State |
 |---|---|---|
 | 0 — Toolchain | Build + first sound | ✅ done |
-| 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (recording input-gated) |
+| 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; recording still input-gated for real HW) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ⏳ next |
 | 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ |
@@ -148,7 +174,7 @@ tests/  SELFTEST.md
 | Phase | Items | State |
 |---|---|---|
 | 1 — Shell refactor | ForgeShell, Control Bar, LookAndFeel, view-slot, collapsible regions, tooltips | ✅ done |
-| 2 — Arrange polish | per-lane mute/solo/arm + color, right-click context menus, Info/Help box, bars|beats ruler, snap, selection state | ⏳ next |
+| 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection state ✅; **snap + Info/Help box** still to do | ✅ mostly |
 | 3 — Browser/Inspector | left column: Browse (drag-onto-track) + Inspect (selection props); value popups; CallOutBox clusters | ⏳ |
 | 4 — Detail Drawer | audio clip editor → piano-roll → automation; color-swatch palette | ⏳ |
 | 5 — Mixer + devices + plugins | Mixer view-switch; device chain; floating VST/AU windows | ⏳ |

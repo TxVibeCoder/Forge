@@ -7,8 +7,9 @@ static String formatTimecode (double seconds)
 {
     const int ms = roundToInt (seconds * 1000.0);
     const int a  = std::abs (ms);
-    return String::formatted ("%02d:%02d:%02d.%03d",
-                              ms / 3600000, (a / 60000) % 60, (a / 1000) % 60, a % 1000);
+    return String (ms < 0 ? "-" : "")
+         + String::formatted ("%02d:%02d:%02d.%03d",
+                              a / 3600000, (a / 60000) % 60, (a / 1000) % 60, a % 1000);
 }
 
 TransportBar::TransportBar()

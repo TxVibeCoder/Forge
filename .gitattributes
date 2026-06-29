@@ -1,0 +1,37 @@
+# Normalize line endings: store text as LF in the repo, check out native on each
+# platform. This silences the CRLF/LF warnings on this Windows checkout without
+# forcing a working-tree rewrite (no eol= override here on purpose).
+* text=auto
+
+# Treat known binary formats as binary so git never tries to normalize or diff
+# them as text. Covers asset/audio/font/archive types present or likely in a
+# JUCE / audio project.
+
+# Images
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+
+# Audio
+*.wav   binary
+*.aif   binary
+*.aiff  binary
+*.mp3   binary
+*.flac  binary
+*.ogg   binary
+
+# Archives / documents
+*.zip   binary
+*.pdf   binary
+
+# Fonts
+*.ttf   binary
+*.otf   binary
+
+# Build / binary artifacts
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.pdb   binary

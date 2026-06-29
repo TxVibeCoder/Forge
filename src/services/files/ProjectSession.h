@@ -43,6 +43,15 @@ public:
     juce::File            getEditFile() const  { return editFile; }
     int                   getNumAudioTracks() const;
 
+    /** True if the edit has unsaved changes. Backed by te::Edit::hasChangedSinceSaved();
+        returns false when there is no open edit. Use this to enable a Save action and to
+        decide whether to prompt before closing. */
+    bool                  isModified() const;
+
+    /** Number of clips on the first audio track (track 0). Returns 0 if there is no edit
+        or no track 0. Safe, read-only convenience accessor. */
+    int                   getNumClipsOnTrack0() const;
+
 private:
     te::Engine& engine;
     std::unique_ptr<te::Edit> edit;

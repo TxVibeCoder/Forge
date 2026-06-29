@@ -55,8 +55,13 @@ bool ProjectSession::saveAs (const juce::File& f)
     if (edit == nullptr)
         return false;
 
+    // Only adopt the new file once the write actually succeeds. On failure leave editFile
+    // (and thus getEditFile()) pointing at the previously-saved location.
+    if (! te::EditFileOperations (*edit).saveAs (f, true))
+        return false;
+
     editFile = f;
-    return te::EditFileOperations (*edit).saveAs (f, true);
+    return true;
 }
 
 te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te::TimePosition start)
@@ -80,4 +85,22 @@ te::TransportControl* ProjectSession::getTransport() const
 int ProjectSession::getNumAudioTracks() const
 {
     return edit != nullptr ? te::getAudioTracks (*edit).size() : 0;
+}
+
+bool ProjectSession::isModified() const
+{
+    return edit != nullptr && edit->hasChangedSinceSaved();
+}
+
+int ProjectSession::getNumClipsOnTrack0() const
+{
+    if (edit == nullptr)
+        return 0;
+
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (tracks.isEmpty())
+        return 0;
+
+    return tracks.getFirst()->getClips().size();
 }
