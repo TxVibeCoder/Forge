@@ -18,6 +18,7 @@
 #include <JuceHeader.h>
 #include "services/files/ProjectSession.h"
 #include "engine/EngineHelpers.h"
+#include "ui/arrange/ArrangeView.h"
 
 namespace te = tracktion;
 using namespace juce;
@@ -76,13 +77,17 @@ public:
 
         setupToolbar();
 
-        statusLabel.setJustificationType (Justification::centred);
+        addAndMakeVisible (arrangeView);
+
+        statusLabel.setJustificationType (Justification::centredLeft);
         addAndMakeVisible (statusLabel);
 
         if (selfTest)
             importTestToneAndPlay();
 
-        setSize (760, 300);
+        arrangeView.setEdit (session.getEdit());
+
+        setSize (980, 520);
 
         if (selfTest)
             startTimer (3000);
@@ -119,7 +124,8 @@ public:
             toolbar.removeFromLeft (gap);
         }
 
-        statusLabel.setBounds (r.reduced (8));
+        statusLabel.setBounds (r.removeFromBottom (44).reduced (8, 4));
+        arrangeView.setBounds (r);
     }
 
 private:
@@ -136,6 +142,9 @@ private:
                importButton { "Import" }, playStopButton { "Play" };
     Label statusLabel { {}, "Empty project" };
     std::unique_ptr<FileChooser> fileChooser;
+
+    TimelineView timelineView;
+    ArrangeView arrangeView { timelineView };
 
     //==============================================================================
     void setupToolbar()
@@ -223,6 +232,7 @@ private:
     /** Re-reads project state into the UI after a project swap/import. */
     void rebind()
     {
+        arrangeView.setEdit (session.getEdit());
         repaint();
     }
 
@@ -270,25 +280,30 @@ private:
         }
 
         const double clipLen = clip != nullptr ? clip->getEditTimeRange().getLength().inSeconds() : -1.0;
+        const int numClipComps = arrangeView.getNumClipComponentsOnTrack0();
+        const int playheadX = arrangeView.getPlayheadX();
 
         const bool pass = device != nullptr
                           && session.getNumAudioTracks() >= 1
                           && clip != nullptr
                           && clipLen > 0.0
-                          && (playing || posSecs > 0.05);
+                          && (playing || posSecs > 0.05)
+                          && numClipComps >= 1;
 
         String report;
-        report << "device="        << (device != nullptr ? device->getName() : String ("none")) << newLine
-               << "sampleRate="    << (device != nullptr ? String (device->getCurrentSampleRate(), 0) : String ("0")) << newLine
-               << "editFile="      << session.getEditFile().getFullPathName() << newLine
-               << "editLoaded="    << (editLoaded ? 1 : 0) << newLine
-               << "numTracks="     << session.getNumAudioTracks() << newLine
-               << "importedClip="  << (clip != nullptr ? 1 : 0) << newLine
-               << "clipLengthSecs="<< String (clipLen, 3) << newLine
-               << "hasContext="    << (hasContext ? 1 : 0) << newLine
-               << "playing="       << (playing ? 1 : 0) << newLine
-               << "position="      << String (posSecs, 3) << newLine
-               << "result="        << (pass ? "PASS" : "FAIL") << newLine;
+        report << "device="          << (device != nullptr ? device->getName() : String ("none")) << newLine
+               << "sampleRate="      << (device != nullptr ? String (device->getCurrentSampleRate(), 0) : String ("0")) << newLine
+               << "editFile="        << session.getEditFile().getFullPathName() << newLine
+               << "editLoaded="      << (editLoaded ? 1 : 0) << newLine
+               << "numTracks="       << session.getNumAudioTracks() << newLine
+               << "importedClip="    << (clip != nullptr ? 1 : 0) << newLine
+               << "clipLengthSecs="  << String (clipLen, 3) << newLine
+               << "numClipComponents=" << numClipComps << newLine
+               << "playheadX="       << playheadX << newLine
+               << "hasContext="      << (hasContext ? 1 : 0) << newLine
+               << "playing="         << (playing ? 1 : 0) << newLine
+               << "position="        << String (posSecs, 3) << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine;
 
         File::getSpecialLocation (File::tempDirectory)
             .getChildFile ("forge_phase0_selftest.log")
