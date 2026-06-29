@@ -67,6 +67,16 @@ static File defaultProjectFile()
                .getChildFile ("Untitled" + String (te::editFileSuffix));
 }
 
+/** A non-existing Untitled[-N] path, so "New" never clobbers an existing project on disk. */
+static File uniqueUntitledFile()
+{
+    auto dir = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("Forge");
+    auto f = dir.getChildFile ("Untitled" + String (te::editFileSuffix));
+    for (int n = 2; f.existsAsFile(); ++n)
+        f = dir.getChildFile ("Untitled-" + String (n) + String (te::editFileSuffix));
+    return f;
+}
+
 //==============================================================================
 class MainComponent : public Component,
                       private Timer
@@ -181,7 +191,7 @@ private:
         for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &importButton, &audioButton })
             addAndMakeVisible (b);
 
-        newButton.onClick    = [this] { session.newProject (defaultProjectFile()); clip = nullptr; rebind(); };
+        newButton.onClick    = [this] { swapProject ([this] { session.newProject (uniqueUntitledFile()); }); };
         openButton.onClick   = [this] { openDialog(); };
         saveButton.onClick   = [this] { session.save(); };
         saveAsButton.onClick = [this] { saveAsDialog(); };
@@ -198,11 +208,7 @@ private:
                                   {
                                       const auto f = fc.getResult();
                                       if (f.existsAsFile())
-                                      {
-                                          session.openProject (f);
-                                          clip = nullptr;
-                                          rebind();
-                                      }
+                                          swapProject ([this, f] { session.openProject (f); });
                                   });
     }
 
@@ -356,6 +362,18 @@ private:
     }
 
     //==============================================================================
+    /** Detaches the UI from the current (still-alive) Edit, swaps the project, then
+        re-attaches. Detaching first avoids dereferencing a freed TransportControl when the
+        old Edit is destroyed by the swap. */
+    void swapProject (std::function<void()> doSwap)
+    {
+        transportBar.setEdit (nullptr);
+        arrangeView.setEdit (nullptr);
+        doSwap();
+        clip = nullptr;
+        rebind();
+    }
+
     void rebind()
     {
         transportBar.setEdit (session.getEdit());
@@ -419,8 +437,7 @@ private:
                           && clip != nullptr
                           && clipLen > 0.0
                           && (playing || posSecs > 0.05)
-                          && numClipComps >= 1
-                          && transportBar.readoutIsNonEmpty();
+                          && numClipComps >= 1;
 
         String report;
         report << "mode=playback" << newLine

@@ -41,15 +41,16 @@ void AudioClipComponent::paint (Graphics& g)
         return;
     }
 
-    // Map the full component width to the clip's SOURCE-time window:
-    // at the clip start, source time = offset; it advances by speedRatio per edit-second.
+    // Map the full component width to the clip's SOURCE-file time window. SmartThumbnail
+    // wants source time, so scale BOTH endpoints by the speed ratio (matches the engine's
+    // own AudioClipComponent::drawWaveform reference). speed == 1 for imported/recorded clips.
     const auto pos     = wac->getPosition();
     const double speed = wac->getSpeedRatio();
-    const double offS  = pos.getOffset().inSeconds();
-    const double lenS  = pos.getLength().inSeconds();
+    const double off   = pos.getOffset().inSeconds();
+    const double len   = pos.getLength().inSeconds();
 
-    const auto t1 = te::TimePosition::fromSeconds (offS);
-    const auto t2 = te::TimePosition::fromSeconds (offS + lenS * speed);
+    const auto t1 = te::TimePosition::fromSeconds (off * speed);
+    const auto t2 = te::TimePosition::fromSeconds ((off + len) * speed);
 
     g.setColour (Colours::white.withAlpha (0.85f));
     thumbnail->drawChannels (g, bounds.reduced (1), te::TimeRange (t1, t2), 1.0f);
