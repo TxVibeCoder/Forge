@@ -8,9 +8,12 @@ in **C++20**. Targets Windows + macOS. Non-commercial; open-source under **AGPLv
 > project on disk, imports audio onto a track, shows it on a timeline with a waveform and a
 > moving playhead, plays it through the transport, and saves/reloads the project. Recording
 > from a live input is wired (the verified Tracktion recipe) and works once an input device
-> is selected via **Audio** settings. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for
-> the full design + roadmap (Phases 0–5) and [`docs/FEATURE_CATALOG.md`](docs/FEATURE_CATALOG.md)
-> for the feature landscape.
+> is selected via **Audio** settings.
+>
+> **Full status, accomplishments, pending items, and roadmap → [`docs/STATUS.md`](docs/STATUS.md).**
+> Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · UI plan:
+> [`docs/INTERFACE.md`](docs/INTERFACE.md) · features:
+> [`docs/FEATURE_CATALOG.md`](docs/FEATURE_CATALOG.md).
 
 ## Using Forge
 
