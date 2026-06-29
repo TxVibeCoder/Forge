@@ -1,24 +1,23 @@
 /*
-    Forge — Phase 0: first sound.
+    Forge — a native DAW on JUCE + Tracktion Engine.
 
-    A deliberately tiny app whose only job is to prove the whole stack end-to-end:
-      1. construct a Tracktion Engine,
-      2. generate a short sine wave into a temporary .wav,
-      3. load it as a looping clip on an audio track inside an Edit,
-      4. play it through the default audio device (WASAPI on Windows).
+    Phase 1 (in progress): the spine — a real project (Edit) on disk, audio import,
+    transport with a moving playhead, an arrange view, and recording.
 
-    The sine is routed through the actual engine graph (clip -> track -> master ->
-    device), not a bypass callback — so a working build proves the real DAW audio path.
+    Ownership: ForgeApplication owns the single te::Engine (so it outlives windows and
+    project reloads). MainComponent owns a ProjectSession (the open project) and the UI.
 
     Run modes:
-      Forge              -> opens a window; a 440 Hz sine loops audibly until you quit.
-      Forge --selftest   -> plays for a few seconds, writes a status report to
-                            %TEMP%/forge_phase0_selftest.log, then quits. Used for
-                            automated Phase 0 verification (we can't "hear" a sine in CI,
-                            but we can confirm the device opened and transport is playing).
+      Forge              -> opens/creates Documents/Forge/Untitled.tracktionedit; empty
+                            project + toolbar (New/Open/Save/Save As/Import).
+      Forge --selftest   -> drives the app headless (imports a generated tone and plays it),
+                            writes a PASS/FAIL report to %TEMP%/forge_phase0_selftest.log,
+                            then quits.
 */
 
 #include <JuceHeader.h>
+#include "services/files/ProjectSession.h"
+#include "engine/EngineHelpers.h"
 
 namespace te = tracktion;
 using namespace juce;
@@ -58,70 +57,43 @@ static File createSineWaveFile (double sampleRate, double seconds, double freque
     return file;
 }
 
+static File defaultProjectFile()
+{
+    return File::getSpecialLocation (File::userDocumentsDirectory)
+               .getChildFile ("Forge")
+               .getChildFile ("Untitled" + String (te::editFileSuffix));
+}
+
 //==============================================================================
 class MainComponent : public Component,
                       private Timer
 {
 public:
-    explicit MainComponent (bool runSelfTest)
-        : selfTest (runSelfTest)
+    MainComponent (te::Engine& e, bool runSelfTest)
+        : engine (e), session (e), selfTest (runSelfTest)
     {
-        // 1. Generate a sine and load it as a looping clip in a fresh Edit.
-        //    A 30s clip gives a long, clearly audible tone and a generous verification
-        //    window even if loop re-triggering misbehaves.
-        sineFile = createSineWaveFile (44100.0, 30.0, 440.0, 0.2f);
+        editLoaded = session.openOrCreate (defaultProjectFile());
 
-        edit = te::createEmptyEdit (engine, File{});
-        edit->ensureNumberOfAudioTracks (1);
+        setupToolbar();
 
-        if (auto* track = te::getAudioTracks (*edit)[0])
-        {
-            te::AudioFile audioFile (engine, sineFile);
-
-            if (audioFile.isValid())
-                clip = track->insertWaveClip (sineFile.getFileNameWithoutExtension(), sineFile,
-                                              { { {}, te::TimeDuration::fromSeconds (audioFile.getLength()) }, {} },
-                                              false);
-        }
-
-        // 2. Loop around the clip, then start playing. We're constructed during
-        //    initialise() — before the JUCE message loop is dispatching — and calling
-        //    play() that early doesn't engage the transport. So defer play() via
-        //    callAsync, which fires once the loop is live.
-        if (clip != nullptr)
-        {
-            auto& transport = edit->getTransport();
-            transport.setLoopRange (clip->getEditTimeRange());
-            transport.looping = true;
-            transport.ensureContextAllocated();
-            transport.setPosition (te::TimePosition());
-
-            MessageManager::callAsync ([this]
-            {
-                if (edit != nullptr)
-                    edit->getTransport().play (false);
-            });
-        }
-
-        // 3. UI.
         statusLabel.setJustificationType (Justification::centred);
         addAndMakeVisible (statusLabel);
 
-        playStopButton.onClick = [this] { togglePlay(); };
-        addAndMakeVisible (playStopButton);
+        if (selfTest)
+            importTestToneAndPlay();
 
-        setSize (520, 220);
+        setSize (760, 300);
 
         if (selfTest)
-            startTimer (3000);          // play briefly, then report + quit
+            startTimer (3000);
         else
-            startTimerHz (5);           // live status updates
+            startTimerHz (5);
     }
 
     ~MainComponent() override
     {
-        if (edit != nullptr)
-            edit->getTransport().stop (false, false);
+        if (auto* t = session.getTransport())
+            t->stop (false, false);
 
         sineFile.deleteFile();
     }
@@ -130,42 +102,128 @@ public:
     {
         g.fillAll (getLookAndFeel().findColour (ResizableWindow::backgroundColourId));
         g.setColour (Colours::white);
-        g.setFont (24.0f);
-        g.drawText ("FORGE", getLocalBounds().removeFromTop (64), Justification::centred);
+        g.setFont (22.0f);
+        g.drawText ("FORGE", getLocalBounds().removeFromTop (40).reduced (8), Justification::centredLeft);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (16);
-        r.removeFromTop (56);
-        playStopButton.setBounds (r.removeFromBottom (40).withSizeKeepingCentre (160, 36));
-        statusLabel.setBounds (r);
+        auto r = getLocalBounds();
+        r.removeFromTop (40);                              // title strip
+
+        auto toolbar = r.removeFromTop (36).reduced (4, 2);
+        const int bw = 86, gap = 4;
+        for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &importButton, &playStopButton })
+        {
+            b->setBounds (toolbar.removeFromLeft (bw));
+            toolbar.removeFromLeft (gap);
+        }
+
+        statusLabel.setBounds (r.reduced (8));
     }
 
 private:
-    te::Engine engine { "Forge" };
-    std::unique_ptr<te::Edit> edit;
-    te::WaveAudioClip::Ptr clip;
-    File sineFile;
+    te::Engine& engine;
+    ProjectSession session;
     bool selfTest = false;
+    bool editLoaded = false;
 
-    Label statusLabel { {}, "Starting audio engine..." };
-    TextButton playStopButton { "Stop" };
+    te::WaveAudioClip::Ptr clip;     // the most recently imported clip
+    File sineFile;                   // selftest tone source (temp)
+
+    TextButton newButton    { "New" },  openButton   { "Open" },
+               saveButton   { "Save" }, saveAsButton { "Save As" },
+               importButton { "Import" }, playStopButton { "Play" };
+    Label statusLabel { {}, "Empty project" };
+    std::unique_ptr<FileChooser> fileChooser;
 
     //==============================================================================
-    void togglePlay()
+    void setupToolbar()
     {
-        if (edit == nullptr)
-            return;
+        for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &importButton, &playStopButton })
+            addAndMakeVisible (b);
 
-        auto& transport = edit->getTransport();
+        newButton.onClick    = [this] { session.newProject (defaultProjectFile()); clip = nullptr; rebind(); };
+        openButton.onClick   = [this] { openDialog(); };
+        saveButton.onClick   = [this] { session.save(); };
+        saveAsButton.onClick = [this] { saveAsDialog(); };
+        importButton.onClick = [this] { importDialog(); };
+        playStopButton.onClick = [this]
+        {
+            if (auto* ed = session.getEdit())
+                EngineHelpers::togglePlay (*ed);
+        };
+    }
 
-        if (transport.isPlaying())
-            transport.stop (false, false);
-        else
-            transport.play (false);
+    void openDialog()
+    {
+        fileChooser = std::make_unique<FileChooser> ("Open project...", File(),
+                                                     "*" + String (te::editFileSuffix));
+        fileChooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                  [this] (const FileChooser& fc)
+                                  {
+                                      const auto f = fc.getResult();
+                                      if (f.existsAsFile())
+                                      {
+                                          session.openProject (f);
+                                          clip = nullptr;
+                                          rebind();
+                                      }
+                                  });
+    }
 
-        playStopButton.setButtonText (transport.isPlaying() ? "Stop" : "Play");
+    void saveAsDialog()
+    {
+        fileChooser = std::make_unique<FileChooser> ("Save project as...", File(),
+                                                     "*" + String (te::editFileSuffix));
+        fileChooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
+                                  [this] (const FileChooser& fc)
+                                  {
+                                      auto f = fc.getResult();
+                                      if (f == File())
+                                          return;
+                                      if (f.getFileExtension().isEmpty())
+                                          f = f.withFileExtension (te::editFileSuffix);
+                                      session.saveAs (f);
+                                      rebind();
+                                  });
+    }
+
+    void importDialog()
+    {
+        EngineHelpers::browseForAudioFile (engine, [this] (const File& f)
+        {
+            clip = session.importAudioFile (f, te::TimePosition());
+            session.save();
+            rebind();
+        });
+    }
+
+    void importTestToneAndPlay()
+    {
+        sineFile = createSineWaveFile (44100.0, 30.0, 440.0, 0.2f);
+        clip = session.importAudioFile (sineFile, te::TimePosition());
+
+        if (clip != nullptr)
+        {
+            auto& transport = session.getEdit()->getTransport();
+            transport.setLoopRange (clip->getEditTimeRange());
+            transport.looping = true;
+            transport.ensureContextAllocated();
+            transport.setPosition (te::TimePosition());
+
+            MessageManager::callAsync ([this]
+            {
+                if (auto* ed = session.getEdit())
+                    ed->getTransport().play (false);
+            });
+        }
+    }
+
+    /** Re-reads project state into the UI after a project swap/import. */
+    void rebind()
+    {
+        repaint();
     }
 
     String describeAudioState() const
@@ -180,12 +238,15 @@ private:
 
     void timerCallback() override
     {
-        const bool playing = edit != nullptr && edit->getTransport().isPlaying();
-        const auto cpu = engine.getDeviceManager().getCpuUsage();
+        auto* t = session.getTransport();
+        const bool playing = t != nullptr && t->isPlaying();
+        playStopButton.setButtonText (playing ? "Stop" : "Play");
 
-        statusLabel.setText (String (playing ? "Playing 440 Hz sine" : "Stopped")
+        statusLabel.setText (String ("Project: ") + session.getEditFile().getFileName()
+                                 + "   (" + String (session.getNumAudioTracks()) + " track"
+                                 + (session.getNumAudioTracks() == 1 ? "" : "s") + ")"
                                  + "\n" + describeAudioState()
-                                 + "\nCPU: " + String (roundToInt (cpu * 100.0)) + "%",
+                                 + "\n" + (playing ? "Playing" : "Stopped"),
                              dontSendNotification);
 
         if (selfTest)
@@ -198,36 +259,36 @@ private:
     void writeSelfTestReport (bool playing) const
     {
         auto* device = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
+        auto* t = session.getTransport();
 
-        double posSecs = -1.0, editLen = -1.0, loopStart = -1.0, loopEnd = -1.0;
-        bool looping = false, hasContext = false;
-        if (edit != nullptr)
+        double posSecs = -1.0;
+        bool hasContext = false;
+        if (t != nullptr)
         {
-            auto& tr = edit->getTransport();
-            posSecs    = tr.getPosition().inSeconds();
-            editLen    = edit->getLength().inSeconds();
-            looping    = tr.looping;
-            hasContext = tr.getCurrentPlaybackContext() != nullptr;
-            const auto lr = tr.getLoopRange();
-            loopStart  = lr.getStart().inSeconds();
-            loopEnd    = lr.getEnd().inSeconds();
+            posSecs    = t->getPosition().inSeconds();
+            hasContext = t->getCurrentPlaybackContext() != nullptr;
         }
 
-        // Pass = device open, clip made, and audio actually advancing (playing OR position moved).
-        const bool pass = device != nullptr && clip != nullptr && (playing || posSecs > 0.05);
+        const double clipLen = clip != nullptr ? clip->getEditTimeRange().getLength().inSeconds() : -1.0;
+
+        const bool pass = device != nullptr
+                          && session.getNumAudioTracks() >= 1
+                          && clip != nullptr
+                          && clipLen > 0.0
+                          && (playing || posSecs > 0.05);
 
         String report;
-        report << "device="      << (device != nullptr ? device->getName() : String ("none")) << newLine
-               << "sampleRate="  << (device != nullptr ? String (device->getCurrentSampleRate(), 0) : String ("0")) << newLine
-               << "bufferSize="  << (device != nullptr ? String (device->getCurrentBufferSizeSamples()) : String ("0")) << newLine
-               << "clipCreated=" << (clip != nullptr ? 1 : 0) << newLine
-               << "hasContext="  << (hasContext ? 1 : 0) << newLine
-               << "playing="     << (playing ? 1 : 0) << newLine
-               << "position="    << String (posSecs, 3) << newLine
-               << "editLength="  << String (editLen, 3) << newLine
-               << "loopRange="   << String (loopStart, 3) << ".." << String (loopEnd, 3) << newLine
-               << "looping="     << (looping ? 1 : 0) << newLine
-               << "result="      << (pass ? "PASS" : "FAIL") << newLine;
+        report << "device="        << (device != nullptr ? device->getName() : String ("none")) << newLine
+               << "sampleRate="    << (device != nullptr ? String (device->getCurrentSampleRate(), 0) : String ("0")) << newLine
+               << "editFile="      << session.getEditFile().getFullPathName() << newLine
+               << "editLoaded="    << (editLoaded ? 1 : 0) << newLine
+               << "numTracks="     << session.getNumAudioTracks() << newLine
+               << "importedClip="  << (clip != nullptr ? 1 : 0) << newLine
+               << "clipLengthSecs="<< String (clipLen, 3) << newLine
+               << "hasContext="    << (hasContext ? 1 : 0) << newLine
+               << "playing="       << (playing ? 1 : 0) << newLine
+               << "position="      << String (posSecs, 3) << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine;
 
         File::getSpecialLocation (File::tempDirectory)
             .getChildFile ("forge_phase0_selftest.log")
@@ -242,13 +303,13 @@ class ForgeApplication : public JUCEApplication
 {
 public:
     const String getApplicationName() override     { return "Forge"; }
-    const String getApplicationVersion() override  { return "0.0.1"; }
+    const String getApplicationVersion() override  { return "0.1.0"; }
     bool moreThanOneInstanceAllowed() override      { return true; }
 
     void initialise (const String& commandLine) override
     {
         const bool selfTest = commandLine.contains ("--selftest");
-        mainWindow.reset (new MainWindow ("Forge", new MainComponent (selfTest), *this));
+        mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, selfTest), *this));
     }
 
     void shutdown() override { mainWindow = nullptr; }
@@ -277,6 +338,8 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 
+    // Engine is owned by the app so it outlives windows and project reloads.
+    te::Engine engine { "Forge" };
     std::unique_ptr<MainWindow> mainWindow;
 };
 

@@ -28,7 +28,10 @@ juce_add_gui_app(Forge
 juce_generate_juce_header(Forge)
 
 target_sources(Forge PRIVATE
-    src/main.cpp)
+    src/main.cpp
+    src/services/files/ProjectSession.cpp)
+
+target_include_directories(Forge PRIVATE src)
 
 target_compile_features(Forge PRIVATE cxx_std_20)
 
