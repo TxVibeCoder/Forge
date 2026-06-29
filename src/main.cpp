@@ -1,17 +1,14 @@
 /*
     Forge — a native DAW on JUCE + Tracktion Engine.
 
-    Phase 1: the spine — a real project (Edit) on disk, audio import, a transport with a
-    moving playhead and an arrange view, and recording from a live input.
-
-    Ownership: ForgeApplication owns the single te::Engine (so it outlives windows and
-    project reloads). MainComponent owns a ProjectSession (the open project) and the UI.
+    Phase 1 spine + interface-plan shell (docs/INTERFACE.md): a single-window ForgeShell with
+    a top Control Bar, a center view-slot (Arrange now; Mixer reserved), collapsible Browser
+    and Detail-drawer regions, and a status strip. Dark, amber-accented (ForgeLookAndFeel).
 
     Run modes:
       Forge                  -> opens/creates Documents/Forge/Untitled.tracktionedit.
       Forge --selftest        -> headless playback check (import a tone, play it).
-      Forge --selftest-record -> headless recording check (arm, record ~1s, stop, verify clip).
-    Both selftests write a PASS/FAIL report to %TEMP%/forge_phase0_selftest.log then quit.
+      Forge --selftest-record -> headless recording check (arm, record ~1s, verify clip).
 */
 
 #include <JuceHeader.h>
@@ -19,12 +16,14 @@
 #include "engine/EngineHelpers.h"
 #include "engine/RecordController.h"
 #include "ui/arrange/ArrangeView.h"
-#include "ui/transport/TransportBar.h"
+#include "ui/ControlBar.h"
+#include "ui/ForgeLookAndFeel.h"
 
 namespace te = tracktion;
 using namespace juce;
 
 enum class SelfTest { none, playback, record };
+enum class ViewMode { Arrange, Mixer };
 
 //==============================================================================
 static File createSineWaveFile (double sampleRate, double seconds, double frequencyHz, float gain)
@@ -67,7 +66,6 @@ static File defaultProjectFile()
                .getChildFile ("Untitled" + String (te::editFileSuffix));
 }
 
-/** A non-existing Untitled[-N] path, so "New" never clobbers an existing project on disk. */
 static File uniqueUntitledFile()
 {
     auto dir = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("Forge");
@@ -85,28 +83,32 @@ public:
     MainComponent (te::Engine& e, SelfTest testMode)
         : engine (e), session (e), recorder (e), mode (testMode)
     {
-        // Open input channels too (not just output), so recording has wave-in devices.
-        engine.getDeviceManager().initialise();
+        engine.getDeviceManager().initialise();   // open input channels too (for recording)
 
-        editLoaded = session.openOrCreate (defaultProjectFile());
+        // Self-tests use a fresh, isolated temp project so clip/track counts are deterministic
+        // and never polluted by leftovers in the persistent Untitled project.
+        const auto projectFile = (mode == SelfTest::none) ? defaultProjectFile()
+                                                          : File::createTempFile (te::editFileSuffix);
+        editLoaded = session.openOrCreate (projectFile);
 
-        setupToolbar();
+        setupControlBar();
+        setupPlaceholders();
 
-        addAndMakeVisible (transportBar);
-        transportBar.onRecord = [this] { toggleRecordTake(); };
-
+        addAndMakeVisible (controlBar);
         addAndMakeVisible (arrangeView);
-
-        statusLabel.setJustificationType (Justification::centredLeft);
+        addAndMakeVisible (mixerPanel);
+        addAndMakeVisible (browserPanel);
+        addAndMakeVisible (drawerPanel);
         addAndMakeVisible (statusLabel);
 
         if (mode == SelfTest::playback)
             importTestToneAndPlay();
 
-        transportBar.setEdit (session.getEdit());
+        controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
+        setViewMode (ViewMode::Arrange);
 
-        setSize (980, 560);
+        setSize (1040, 620);
 
         if (mode == SelfTest::record)
         {
@@ -114,13 +116,9 @@ public:
             startTimer (1600);
         }
         else if (mode == SelfTest::playback)
-        {
             startTimer (3000);
-        }
         else
-        {
             startTimerHz (5);
-        }
     }
 
     ~MainComponent() override
@@ -133,28 +131,30 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (getLookAndFeel().findColour (ResizableWindow::backgroundColourId));
-        g.setColour (Colours::white);
-        g.setFont (22.0f);
-        g.drawText ("FORGE", getLocalBounds().removeFromTop (40).reduced (8), Justification::centredLeft);
+        g.fillAll (Colour (ForgeLookAndFeel::shellBg));
     }
 
     void resized() override
     {
         auto r = getLocalBounds();
-        r.removeFromTop (40);                                 // title strip
+        controlBar.setBounds (r.removeFromTop (46));
+        statusLabel.setBounds (r.removeFromBottom (24));
 
-        auto toolbar = r.removeFromTop (36).reduced (4, 2);
-        const int bw = 86, gap = 4;
-        for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &importButton, &audioButton })
-        {
-            b->setBounds (toolbar.removeFromLeft (bw));
-            toolbar.removeFromLeft (gap);
-        }
+        auto work = r;
 
-        transportBar.setBounds (r.removeFromTop (40));
-        statusLabel.setBounds (r.removeFromBottom (40).reduced (8, 4));
-        arrangeView.setBounds (r);
+        browserPanel.setVisible (browserVisible);
+        if (browserVisible)
+            browserPanel.setBounds (work.removeFromLeft (220));
+
+        auto centre = work;
+        drawerPanel.setVisible (drawerVisible);
+        if (drawerVisible)
+            drawerPanel.setBounds (centre.removeFromBottom (160));
+
+        arrangeView.setVisible (viewMode == ViewMode::Arrange);
+        mixerPanel.setVisible (viewMode == ViewMode::Mixer);
+        arrangeView.setBounds (centre);
+        mixerPanel.setBounds (centre);
     }
 
 private:
@@ -164,10 +164,9 @@ private:
     SelfTest mode = SelfTest::none;
     bool editLoaded = false;
 
-    te::WaveAudioClip::Ptr clip;     // most recently imported clip
-    File sineFile;                   // selftest tone source (temp)
+    te::WaveAudioClip::Ptr clip;
+    File sineFile;
 
-    // record-selftest captured state
     int  rcInputDeviceCount = 0;
     bool rcTrackArmed = false;
     bool rcRecordingStarted = false;
@@ -175,30 +174,60 @@ private:
     int  rcCurrentDeviceInputs = 0;
     String rcDiagTypes;
 
-    TextButton newButton  { "New" },  openButton   { "Open" },
-               saveButton { "Save" }, saveAsButton { "Save As" },
-               importButton { "Import" }, audioButton { "Audio" };
-    Label statusLabel { {}, "Empty project" };
-    std::unique_ptr<FileChooser> fileChooser;
-
-    TransportBar transportBar;
+    ControlBar controlBar;
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
+    Label browserPanel, drawerPanel, mixerPanel;
+    Label statusLabel;
+    std::unique_ptr<FileChooser> fileChooser;
+    TooltipWindow tooltipWindow;
+
+    ViewMode viewMode = ViewMode::Arrange;
+    bool browserVisible = false;   // lean default; toggled on demand
+    bool drawerVisible  = false;
 
     //==============================================================================
-    void setupToolbar()
+    void setupControlBar()
     {
-        for (auto* b : { &newButton, &openButton, &saveButton, &saveAsButton, &importButton, &audioButton })
-            addAndMakeVisible (b);
-
-        newButton.onClick    = [this] { swapProject ([this] { session.newProject (uniqueUntitledFile()); }); };
-        openButton.onClick   = [this] { openDialog(); };
-        saveButton.onClick   = [this] { session.save(); };
-        saveAsButton.onClick = [this] { saveAsDialog(); };
-        importButton.onClick = [this] { importDialog(); };
-        audioButton.onClick  = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
+        controlBar.onNew           = [this] { swapProject ([this] { session.newProject (uniqueUntitledFile()); }); };
+        controlBar.onOpen          = [this] { openDialog(); };
+        controlBar.onSave          = [this] { session.save(); };
+        controlBar.onSaveAs        = [this] { saveAsDialog(); };
+        controlBar.onImport        = [this] { importDialog(); };
+        controlBar.onAudioSettings = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
+        controlBar.onToggleBrowser = [this] { browserVisible = ! browserVisible; resized(); };
+        controlBar.onToggleDrawer  = [this] { drawerVisible  = ! drawerVisible;  resized(); };
+        controlBar.onViewMode      = [this] (int m) { setViewMode (m == 1 ? ViewMode::Mixer : ViewMode::Arrange); };
     }
 
+    void setupPlaceholders()
+    {
+        auto style = [] (Label& l, const String& text)
+        {
+            l.setText (text, dontSendNotification);
+            l.setJustificationType (Justification::centred);
+            l.setColour (Label::backgroundColourId, Colour (ForgeLookAndFeel::panelBg));
+            l.setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
+        };
+
+        style (browserPanel, "Browser\n(files, instruments, plug-ins) — Phase 3");
+        style (drawerPanel,  "Detail editor — double-click a clip\n(audio editor, then piano-roll) — Phase 4");
+        style (mixerPanel,   "Mixer view\n(channel strips, sends, meters) — Phase 5");
+
+        statusLabel.setColour (Label::backgroundColourId, Colour (ForgeLookAndFeel::panelBg));
+        statusLabel.setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
+        statusLabel.setJustificationType (Justification::centredLeft);
+        statusLabel.setBorderSize ({ 0, 10, 0, 10 });
+    }
+
+    void setViewMode (ViewMode m)
+    {
+        viewMode = m;
+        controlBar.setViewMode (m == ViewMode::Mixer ? 1 : 0);
+        resized();
+    }
+
+    //==============================================================================
     void openDialog()
     {
         fileChooser = std::make_unique<FileChooser> ("Open project...", File(),
@@ -261,7 +290,6 @@ private:
     }
 
     //==============================================================================
-    // Recording (used by the Rec button and the record selftest).
     void toggleRecordTake()
     {
         auto* edit = session.getEdit();
@@ -290,13 +318,11 @@ private:
         if (edit == nullptr)
             return;
 
-        // Diagnostic: what does the device layer actually expose?
         auto& jdm = engine.getDeviceManager().deviceManager;
         if (auto* type = jdm.getCurrentDeviceTypeObject())
             rcAvailableInputs = type->getDeviceNames (true).joinIntoString ("|");
         if (auto* dev = jdm.getCurrentAudioDevice())
             rcCurrentDeviceInputs = dev->getActiveInputChannels().countNumberOfSetBits();
-
         for (auto* type : jdm.getAvailableDeviceTypes())
         {
             type->scanForDevices();
@@ -345,14 +371,14 @@ private:
                << "availableInputDevices="  << (rcAvailableInputs.isEmpty() ? String ("(none)") : rcAvailableInputs) << newLine
                << "currentDeviceInputChans=" << rcCurrentDeviceInputs << newLine
                << "deviceTypesInputs="      << rcDiagTypes << newLine
-               << "inputDeviceCount="      << rcInputDeviceCount << newLine
-               << "trackArmed="            << (rcTrackArmed ? 1 : 0) << newLine
-               << "recordingStarted="      << (rcRecordingStarted ? 1 : 0) << newLine
-               << "recordedClipCount="     << recordedClips << newLine
-               << "recordedFileExists="    << (recFileExists ? 1 : 0) << newLine
-               << "recordedClipLengthSecs="<< String (recLen, 3) << newLine
-               << "recordError="           << recorder.getLastError() << newLine
-               << "result="                << (pass ? "PASS" : "FAIL") << newLine;
+               << "inputDeviceCount="       << rcInputDeviceCount << newLine
+               << "trackArmed="             << (rcTrackArmed ? 1 : 0) << newLine
+               << "recordingStarted="       << (rcRecordingStarted ? 1 : 0) << newLine
+               << "recordedClipCount="      << recordedClips << newLine
+               << "recordedFileExists="     << (recFileExists ? 1 : 0) << newLine
+               << "recordedClipLengthSecs=" << String (recLen, 3) << newLine
+               << "recordError="            << recorder.getLastError() << newLine
+               << "result="                 << (pass ? "PASS" : "FAIL") << newLine;
 
         File::getSpecialLocation (File::tempDirectory)
             .getChildFile ("forge_phase0_selftest.log")
@@ -362,12 +388,9 @@ private:
     }
 
     //==============================================================================
-    /** Detaches the UI from the current (still-alive) Edit, swaps the project, then
-        re-attaches. Detaching first avoids dereferencing a freed TransportControl when the
-        old Edit is destroyed by the swap. */
     void swapProject (std::function<void()> doSwap)
     {
-        transportBar.setEdit (nullptr);
+        controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
         doSwap();
         clip = nullptr;
@@ -376,7 +399,7 @@ private:
 
     void rebind()
     {
-        transportBar.setEdit (session.getEdit());
+        controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
         repaint();
     }
@@ -402,10 +425,11 @@ private:
         auto* t = session.getTransport();
         const bool playing = t != nullptr && t->isPlaying();
 
-        statusLabel.setText (String ("Project: ") + session.getEditFile().getFileName()
-                                 + "   (" + String (session.getNumAudioTracks()) + " track"
-                                 + (session.getNumAudioTracks() == 1 ? "" : "s") + ")"
-                                 + "   " + describeAudioState(),
+        statusLabel.setText (session.getEditFile().getFileName()
+                                 + "   ·   " + String (session.getNumAudioTracks()) + " track"
+                                 + (session.getNumAudioTracks() == 1 ? "" : "s")
+                                 + "   ·   " + describeAudioState()
+                                 + (playing ? "   ·   playing" : ""),
                              dontSendNotification);
 
         if (mode == SelfTest::playback)
@@ -450,7 +474,7 @@ private:
                << "clipLengthSecs="    << String (clipLen, 3) << newLine
                << "numClipComponents=" << numClipComps << newLine
                << "playheadX="         << playheadX << newLine
-               << "transportReadout="  << (transportBar.readoutIsNonEmpty() ? 1 : 0) << newLine
+               << "transportReadout="  << (controlBar.getTransportBar().readoutIsNonEmpty() ? 1 : 0) << newLine
                << "hasContext="        << (hasContext ? 1 : 0) << newLine
                << "playing="           << (playing ? 1 : 0) << newLine
                << "position="          << String (posSecs, 3) << newLine
@@ -474,13 +498,19 @@ public:
 
     void initialise (const String& commandLine) override
     {
+        LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+
         const auto mode = commandLine.contains ("--selftest-record") ? SelfTest::record
                         : commandLine.contains ("--selftest")        ? SelfTest::playback
                                                                      : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
     }
 
-    void shutdown() override { mainWindow = nullptr; }
+    void shutdown() override
+    {
+        mainWindow = nullptr;
+        LookAndFeel::setDefaultLookAndFeel (nullptr);
+    }
 
 private:
     class MainWindow : public DocumentWindow
@@ -495,6 +525,7 @@ private:
             setUsingNativeTitleBar (true);
             setContentOwned (c, true);
             setResizable (true, false);
+            setResizeLimits (760, 480, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }
@@ -506,6 +537,7 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 
+    ForgeLookAndFeel lookAndFeel;
     te::Engine engine { "Forge" };
     std::unique_ptr<MainWindow> mainWindow;
 };
