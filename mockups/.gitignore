@@ -1,0 +1,6 @@
+# transient render output (regenerate with: docker run … python build.py)
+src/out/
+
+# python bytecode (created when the generator runs in Docker)
+__pycache__/
+src/__pycache__/
