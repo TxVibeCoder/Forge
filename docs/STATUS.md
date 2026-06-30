@@ -1,7 +1,8 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (Phase 4 polish wave + startup-latency hardening:
-output-only engine construction, lazy recording-input open).*
+*Living status document. Last updated 2026-06-30 (recording verified end-to-end on real hardware +
+`--selftest-record` harness fix; MIDI tracks + piano-roll design complete & source-verified).*
+*For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
 [../tests/SELFTEST.md](../tests/SELFTEST.md) (verification contract).*
