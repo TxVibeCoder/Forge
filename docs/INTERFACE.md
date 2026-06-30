@@ -111,5 +111,8 @@ hard-coded colors) so theming/high-contrast is one centralized pass.
 4. Keyboard scheme: single-letter toggles (B/I/E, Shift+Tab) + F9/F11 view-switch — OK on Windows?
 5. Multi-monitor / tear-off priority, plugin-window strategy, saved layouts — defer to P7?
 
-> **Note (current code):** Forge is **audio-only today** (only `WaveAudioClip` on track 0),
-> so the **piano-roll** editor (P4) is a later add; the audio clip editor comes first.
+> **Note (current code):** the **Detail Drawer (P4) is built for both clip types** — the audio clip
+> inspector (`DetailView`) AND the **MIDI piano-roll** (`PianoRollView`: draw/move/resize/delete +
+> velocity lane, multi-select, copy/paste), routed by clip type. MIDI tracks are live (a `te::AudioTrack`
+> hosts MIDI clips audible via a default 4OSC). See [STATUS.md §2](STATUS.md) + [devlog/midi-build.md](devlog/midi-build.md).
+> Still to come on the drawer: automation lanes, and device-chain (Device mode).
