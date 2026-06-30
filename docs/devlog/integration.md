@@ -8,7 +8,7 @@ device · shell · hygiene). Companion to the per-area devlogs in this folder.*
 - **Builds green** (`cmake --build build --config Debug`) — all five agents' changes compiled
   and linked together on the **first** integration build. The exclusive-file-ownership +
   additive-only-interface discipline held; no cross-agent collisions.
-- **Playback self-test PASS** (`Forge.exe --selftest`): `device=Headphones (Bose QC35 II)`,
+- **Playback self-test PASS** (`Forge.exe --selftest`): `device=<the saved Bluetooth output>`,
   `numClipComponents=1`, `playing=1`, `result=PASS`.
 - **Record self-test FAIL** (`--selftest-record`) — *honest, hardware-gated, unchanged from
   before this work*: this dev box exposes no capture endpoint (`availableInputDevices=(none)`),
@@ -28,10 +28,10 @@ device · shell · hygiene). Companion to the per-area devlogs in this folder.*
 ## Device-override fix — VERIFIED
 
 The headline STATUS blocker. Before: `engine.getDeviceManager().initialise()` re-selected the
-default device and clobbered the saved output (Bose → Realtek). After: the shell calls
-`EngineHelpers::initialiseAudioForRecording(engine)`, which preserves the saved output. The
-playback self-test now reports `device=Headphones (Bose QC35 II)` — i.e. the saved Bose output
-survived startup. ✅
+default device and clobbered the saved output (Bluetooth headset → onboard device). After: the shell
+calls `EngineHelpers::initialiseAudioForRecording(engine)`, which preserves the saved output. The
+playback self-test now keeps the saved Bluetooth output device — i.e. that output survived
+startup. ✅
 
 ## Integration the orchestrator wired
 
@@ -140,10 +140,10 @@ Refuted (verified NOT bugs): a claimed key-truncation collision (`juce_wchar` is
 Windows, no truncation); "interactive arm never enables inputs" (wave inputs default to enabled);
 and a dangling-callback UAF (the `onClipSelected`/`onTrackSelected` consumers are unwired, so inert).
 
-**Environment note (not a code bug):** when the Bluetooth output device (Bose QC35 II) disconnects
-and the default device changes, app startup gets slow — `initialiseAudioForRecording` scans device
-types and opens a default input, which took ~26 s to settle once (then playback PASS, device =
-Realtek). It is *latency*, not a hang (the committed baseline shows the same). A future hardening:
+**Environment note (not a code bug):** when the Bluetooth output device disconnects and the default
+device changes, app startup gets slow — `initialiseAudioForRecording` scans device types and opens a
+default input, which took ~26 s to settle once (then playback PASS on the onboard device). It is
+*latency*, not a hang (the committed baseline shows the same). A future hardening:
 open inputs lazily / off the message thread so a slow capture-device open can't stall startup.
 
 ## Housekeeping notes
@@ -183,8 +183,8 @@ button + `onExport` to ControlBar and an `exportDialog()` (SafePointer-guarded, 
 the shell.
 
 **Runtime verification status:** the build is definitive, but the headless playback self-test could
-NOT be cleanly run afterward because the audio environment is degraded — the Bose QC35 II
-disconnected (default → Realtek) and repeated launch/kill cycles during diagnosis left the WASAPI
+NOT be cleanly run afterward because the audio environment is degraded — the Bluetooth headset
+disconnected (default → onboard device) and repeated launch/kill cycles during diagnosis left the WASAPI
 device contended, so `initialiseAudioForRecording` startup negotiation ballooned to 26–77 s and one
 run came back `playing=0` (device couldn't sustain playback). This is environmental, affects the
 committed baseline identically, and is unrelated to this wave's code (all new code is UI/service and

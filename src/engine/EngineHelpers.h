@@ -103,7 +103,7 @@ namespace EngineHelpers
 
     //==============================================================================
     /** Returns the list of wave INPUT device names advertised by the currently-selected
-        audio device type (e.g. "Microphone (Realtek)", "Line In", ...). This queries the
+        audio device type (e.g. "Microphone (Built-in)", "Line In", ...). This queries the
         JUCE driver layer directly (AudioIODeviceType::getDeviceNames(true)), so it reflects
         the OS-visible capture endpoints regardless of whether one is currently open. Handy
         for diagnostics/UI ("why is recording greyed out?").

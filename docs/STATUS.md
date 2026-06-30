@@ -66,8 +66,8 @@ warnings)**, plus an adversarial-review wave that found + fixed 5 real bugs:
 Delivered by five file-disjoint agents, integrated in one green build. Per-area writeups live in
 `docs/devlog/` (arrange · session · device-recording · shell · hygiene · integration).
 - **Device-override FIXED + verified.** `EngineHelpers::initialiseAudioForRecording()` opens input
-  channels while preserving the saved output device; the playback selftest now reports
-  `device=Bose QC35 II` (saved output survives startup, no Bose→Realtek stomp).
+  channels while preserving the saved output device; the playback selftest now keeps the saved
+  Bluetooth output (it survives startup, with no stomp to the onboard device).
 - **Arrange polish** (`ArrangeView`): bars|beats ruler, clip/track **selection** (accent outline),
   per-lane **M/S/R** buttons + **colour swatch**, **right-click context menus** (clip:
   rename/delete/colour; lane: add/delete/rename track), `xToTime` span guard, looped-clip waveform
@@ -158,7 +158,7 @@ tests/  SELFTEST.md
   doesn't advance under synthetic `processBlock` driving (`posAtFinish=0`, no take captured). Full
   investigation + next steps in `docs/devlog/integration.md`. Wiring was reverted; helper kept.
 - [x] **Device-override.** FIXED — `initialiseAudioForRecording()` preserves the saved output
-  (verified: playback selftest keeps Bose). The startup `initialise()` stomp is gone.
+  (verified: playback selftest keeps the saved Bluetooth output). The startup `initialise()` stomp is gone.
 - [x] **Draggable resizer bars.** DONE — custom `ResizerBar` drags the Browser width + drawer
   height (clamped); collapse/expand buttons still work. (Sizes not persisted across launches yet.)
 - [x] **Keyboard shortcuts.** DONE — B/E region toggles, F9/F11 view-switch, Space play/stop, R
