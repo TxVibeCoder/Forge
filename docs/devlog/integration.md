@@ -229,3 +229,82 @@ plugin editors and the inspector never outlive their Edit. `setupPlaceholders` b
 Three placeholder regions (Browser, Detail-drawer, Mixer) are now all real. Remaining roadmap
 headliners after this: external VST3/AU **scanning** UI (the host can already load what's in the
 known list), MIDI tracks + piano roll, automation, and metering on the master output node.
+
+## Build wave 4 — Phase 4 polish: snap grid · stem export · plugin scan · mixer bypass/reorder + master meter
+
+A fourth 4-agent file-disjoint wave, then a dedicated adversarial-review wave, committed as
+**`ad7d885`**. **Integration build: 0 warnings, 0 errors on the first try; playback `--selftest`
+PASS** (both before and after the review fixes). Per-feature detail lives in the agents' reports;
+this section is the orchestrator's record + the review outcome + where things stand.
+
+### What each agent delivered
+
+| Area | Files | Highlights |
+|---|---|---|
+| snap | `ui/arrange/ArrangeView.{h,cpp}` | snap-division selector (Off/Bar/½/¼/⅛/1⁄16) in the ruler corner; clip drag-to-move snaps to the chosen division; legacy `setSnapEnabled`/`isSnapEnabled` preserved as a wrapper over the division model |
+| stems | `services/export/Exporter.{h,cpp}` | `renderStems` — each non-empty audio track → its own 24-bit WAV in a chosen folder; additive (whole-edit `renderEditToWav` unchanged). Per-track render bitset built by hand because the engine's `toBitSet` helper sets a bit for *every* track on single-track input |
+| scan | `engine/PluginScanner.{h,cpp}` (new) | JUCE `PluginListComponent` scan dialog bound to the engine's `pluginFormatManager` + `knownPluginList`; persists automatically (PluginManager change-listener → property storage); newly-found plugins surface in `PluginHost::getAvailablePluginNames` |
+| mixer | `ui/mixer/MixerView.cpp` | per-insert **bypass** dot (`te::Plugin::setEnabled`) + ▲/▼ **reorder** within the chain (volume/meter tail preserved); **master meter** |
+
+### Orchestrator integration (the files only the orchestrator owns)
+
+- **CMakeLists.txt** — added `src/engine/PluginScanner.cpp` to `target_sources`.
+- **ControlBar.{h,cpp}** — new **Plugins** button → `onScanPlugins`; the **Export** button now opens
+  a popup (`showExportMenu`: *Mixdown (WAV)* → `onExport`, *Stems* → `onExportStems`) rather than
+  exporting directly, so no extra top-bar button is needed for stems.
+- **main.cpp** — `#include "engine/PluginScanner.h"`; `onScanPlugins → PluginScanner::showScanDialog
+  (engine)`; `onExportStems → exportStemsDialog()` — a new directory chooser (SafePointer-guarded,
+  own `stemsChooser` member) that calls `Exporter::renderStems`.
+- Snap (A) and mixer (D) are **self-contained** — reached through the existing `setEdit` path, no
+  wiring added.
+
+### Adversarial-review wave — 4 candidates → 3 confirmed real, 1 refuted
+
+5 reviewers (one per feature + the integration wiring), each candidate finding independently
+skeptic-verified against the real engine headers (default stance: *refuted unless proven*). Stems,
+scan, and integration came back clean. The 3 confirmed bugs were all fixed (rebuild green, selftest
+PASS):
+
+1. **(major · snap) Snap grid wrong in non-4/4 time signatures.** `gridStepInBeats` hardcoded
+   quarter = 1.0 / eighth = 0.5 / sixteenth = 0.25 *engine beats*, but under Tracktion's default
+   `LengthOfOneBeat::dependsOnTimeSignature` one engine beat is one *denominator*-note, not always a
+   quarter (`tracktion_EngineBehaviour.h:200`; `tracktion_Tempo.h:586` → `secondsPerBeat =
+   240/(bpm·denominator)`). So in 6/8, "1/4" snapped to eighth boundaries, etc. Latent (the app only
+   ever creates 4/4) but reachable by opening an authored non-4/4 `.tracktionedit`. **Fix:** scale
+   the musical divisions by `denominator/4`, reading the denominator from
+   `tempoSequence.getTimeSigAt(t)`; the 4/4 path is unchanged.
+2. **(major · mixer) Opening the mixer mutated a clean Edit.** `ensureMasterLevelMeter()` inserted a
+   `LevelMeterPlugin` into the *persisted* `MASTERPLUGINS` list via `insertPlugin(...,
+   getUndoManager())` — so merely opening the Mixer dirtied a clean project, wrote a spurious plugin
+   to disk, and pushed an undo transaction. **Fix:** removed the insertion entirely; the master meter
+   now binds to `EditPlaybackContext::masterLevels` (the engine's own master-output measurer, the
+   same one control surfaces read), re-bound each poll because the playback context comes and goes
+   with the transport graph. **Zero Edit mutation.**
+3. **(minor · mixer) Master meter read pre-fader.** The master plugin list is rendered *before* the
+   master volume plugin (`tracktion_EditNodeBuilder.cpp:1772-1780`), so an inserted meter measured
+   pre-fader — inconsistent with the post-fader track meters. **Fix:** subsumed by #2 —
+   `masterLevels` is measured at the master output, i.e. post-fader.
+
+**Refuted** (verified NOT a bug): the Export-menu `showMenuAsync` lambda captures `[this]`
+(ControlBar) with no `withDeletionCheck` — but ControlBar's lifetime equals the window's (it is a
+plain `MainComponent` member, never reconstructed on project swap), so the action callback can never
+fire after `this` is destroyed. Matches the `[this]` idiom of every other ControlBar button.
+
+### Where things stand
+
+Phases 0–3 plus this Phase-4 polish are committed and build clean. The arrange surface has a working
+**snap-division grid**; **export** does mixdown *and* per-track stems; external **plugins are
+scannable** from the toolbar and flow into the insert menu; the **mixer** has per-insert bypass +
+reorder and a correct, non-mutating, **post-fader master meter**.
+
+**Verification gap (honest, per project doctrine):** the clean build + playback selftest confirm
+everything *constructs and plays*. The new *interactive* paths — stem-export output files, the scan
+dialog, mixer bypass/reorder, and the snap selector UI — are **not** covered headlessly. Manual or
+computer-use verification is recommended before relying on them. The snap fix only changes behaviour
+for non-4/4 projects (which the app never creates itself), so it is correctness-grounded against the
+engine headers but not exercised by the 4/4 selftest.
+
+**Standing items unchanged by this wave** (see STATUS.md §4): **startup-latency hardening** (open
+audio inputs lazily / off the message thread — still the highest-leverage reliability fix);
+**async export + progress** (both mixdown and stems block the message thread); and the big remaining
+capability, **MIDI tracks + piano-roll**.
