@@ -260,8 +260,10 @@ public:
 
         if (mode == SelfTest::record)
         {
+            // Event-driven so it mirrors the real app: open the input, then YIELD to the message
+            // loop (timer below) so Tracktion's async wave-device-list rebuild actually delivers
+            // before we arm. A single blocking callback would never let that async run.
             MessageManager::callAsync ([this] { beginSelfTestRecording(); });
-            startTimer (1600);
         }
         else if (mode == SelfTest::playback)
             startTimer (3000);
@@ -333,9 +335,11 @@ private:
     int  rcInputDeviceCount = 0;
     bool rcTrackArmed = false;
     bool rcRecordingStarted = false;
-    String rcAvailableInputs;
-    int  rcCurrentDeviceInputs = 0;
-    String rcDiagTypes;
+    String rcAvailableInputs;  // OS-visible capture endpoint names (diagnostic)
+    String rcOpenError;        // setAudioDeviceSetup() error from ensureRecordingInputOpen()
+    String rcDeviceAfter;      // open audio device name AFTER the lazy input-open attempt
+    int  rcInputChansAfter = 0;// active input channels on that device AFTER the attempt
+    int  recordPhase = 0;      // record-selftest state machine: 1 = input opened, 2 = recording
 
     ControlBar controlBar;
     TimelineView timelineView;
@@ -631,25 +635,40 @@ private:
         }
     }
 
+    // Phase 1: open the capture input lazily (exactly as the real arm path does), enable inputs,
+    // then hand back to the message loop. The wave-device-list rebuild Tracktion schedules here is
+    // asynchronous, so we must NOT arm in this same callback — we yield (timer) and arm in phase 2.
     void beginSelfTestRecording()
     {
-        auto* edit = session.getEdit();
-        if (edit == nullptr)
+        if (session.getEdit() == nullptr)
             return;
 
         auto& jdm = engine.getDeviceManager().deviceManager;
         if (auto* type = jdm.getCurrentDeviceTypeObject())
             rcAvailableInputs = type->getDeviceNames (true).joinIntoString ("|");
+
+        rcOpenError = EngineHelpers::ensureRecordingInputOpen (engine);   // record selftest opens input lazily too
+        recorder.enableInputs();
+
         if (auto* dev = jdm.getCurrentAudioDevice())
-            rcCurrentDeviceInputs = dev->getActiveInputChannels().countNumberOfSetBits();
-        for (auto* type : jdm.getAvailableDeviceTypes())
         {
-            type->scanForDevices();
-            rcDiagTypes += type->getTypeName() + "=" + String (type->getDeviceNames (true).size()) + "in ";
+            rcDeviceAfter     = dev->getName();
+            rcInputChansAfter = dev->getActiveInputChannels().countNumberOfSetBits();
         }
 
-        EngineHelpers::ensureRecordingInputOpen (engine);   // record selftest also opens input lazily
-        recorder.enableInputs();
+        // Yield so the posted wave-device-list rebuild is delivered before we read the input count.
+        recordPhase = 1;
+        startTimer (200);
+    }
+
+    // Phase 2: by now the async wave-device-list rebuild has run, so the engine exposes the wave
+    // inputs. Arm track 0 and roll. Phase 3 (the capture window) is started by the caller's timer.
+    void armAndStartRecording()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr)
+            return;
+
         rcInputDeviceCount = recorder.getInputDeviceCount();
 
         if (auto* track = te::getAudioTracks (*edit)[0])
@@ -662,6 +681,30 @@ private:
         }
     }
 
+    // Peak absolute sample value across all channels of an audio file, or -1 if it can't be read.
+    // Used only by the record selftest to confirm whether real signal flowed through the capture path.
+    float readPeakMagnitude (const File& file) const
+    {
+        if (! file.existsAsFile())
+            return -1.0f;
+
+        auto& fmtManager = engine.getAudioFileFormatManager().readFormatManager;
+        std::unique_ptr<AudioFormatReader> reader (fmtManager.createReaderFor (file));
+
+        if (reader == nullptr || reader->lengthInSamples <= 0)
+            return -1.0f;
+
+        const int numChans = jmax (1, (int) reader->numChannels);
+        HeapBlock<Range<float>> ranges (numChans);
+        reader->readMaxLevels (0, reader->lengthInSamples, ranges.get(), numChans);
+
+        float peak = 0.0f;
+        for (int ch = 0; ch < numChans; ++ch)
+            peak = jmax (peak, jmax (std::abs (ranges[ch].getStart()), std::abs (ranges[ch].getEnd())));
+
+        return peak;
+    }
+
     void finishSelfTestRecording()
     {
         if (auto* t = session.getTransport())
@@ -672,6 +715,7 @@ private:
         int recordedClips = 0;
         bool recFileExists = false;
         double recLen = -1.0;
+        float recPeak = -1.0f;   // peak sample magnitude of the captured file (informational)
 
         if (auto* edit = session.getEdit())
             if (auto* track = te::getAudioTracks (*edit)[0])
@@ -679,24 +723,31 @@ private:
                     if (auto* wc = dynamic_cast<te::WaveAudioClip*> (c))
                     {
                         ++recordedClips;
-                        recFileExists = wc->getSourceFileReference().getFile().existsAsFile();
+                        const auto recFile = wc->getSourceFileReference().getFile();
+                        recFileExists = recFile.existsAsFile();
                         recLen = wc->getEditTimeRange().getLength().inSeconds();
+                        recPeak = readPeakMagnitude (recFile);
                     }
 
+        // PASS proves the record PATH end-to-end (device opened, track armed, transport rolled, a
+        // clip of non-zero length was written). recPeak is reported but NOT gated on, because the
+        // default capture endpoint on a given box may legitimately be silent.
         const bool pass = rcInputDeviceCount > 0 && rcTrackArmed && rcRecordingStarted
                           && recordedClips >= 1 && recFileExists && recLen > 0.0;
 
         String report;
         report << "mode=record" << newLine
                << "availableInputDevices="  << (rcAvailableInputs.isEmpty() ? String ("(none)") : rcAvailableInputs) << newLine
-               << "currentDeviceInputChans=" << rcCurrentDeviceInputs << newLine
-               << "deviceTypesInputs="      << rcDiagTypes << newLine
+               << "openInputError="         << (rcOpenError.isEmpty() ? String ("(none)") : rcOpenError) << newLine
+               << "deviceAfterOpen="        << (rcDeviceAfter.isEmpty() ? String ("(no device open)") : rcDeviceAfter) << newLine
+               << "inputChansAfterOpen="    << rcInputChansAfter << newLine
                << "inputDeviceCount="       << rcInputDeviceCount << newLine
                << "trackArmed="             << (rcTrackArmed ? 1 : 0) << newLine
                << "recordingStarted="       << (rcRecordingStarted ? 1 : 0) << newLine
                << "recordedClipCount="      << recordedClips << newLine
                << "recordedFileExists="     << (recFileExists ? 1 : 0) << newLine
                << "recordedClipLengthSecs=" << String (recLen, 3) << newLine
+               << "recordedPeakMagnitude="  << String (recPeak, 5) << newLine
                << "recordError="            << recorder.getLastError() << newLine
                << "result="                 << (pass ? "PASS" : "FAIL") << newLine;
 
@@ -751,7 +802,17 @@ private:
     {
         if (mode == SelfTest::record)
         {
-            finishSelfTestRecording();
+            stopTimer();
+            if (recordPhase == 1)
+            {
+                recordPhase = 2;
+                armAndStartRecording();
+                startTimer (1500);   // capture window, then phase 3 finishes + verifies
+            }
+            else
+            {
+                finishSelfTestRecording();
+            }
             return;
         }
 

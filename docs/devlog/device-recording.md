@@ -4,6 +4,36 @@ Area: audio-device initialisation for recording, RecordController robustness, an
 hardware-free record self-test. Owner files: `src/engine/EngineHelpers.h`,
 `src/engine/RecordController.h`, `src/engine/RecordController.cpp`.
 
+> **Update — recording VERIFIED on real hardware + `--selftest-record` harness fix (2026-06-30).**
+> Recording now works end-to-end on a real box and is proven by `--selftest-record`, which captures
+> a real take: `inputDeviceCount=8, trackArmed=1, recordingStarted=1, recordedClipCount=1,
+> recordedFileExists=1, recordedClipLengthSecs≈1.44, recordedPeakMagnitude≈0.0014` (non-zero ⇒
+> actual samples flowed through the capture pipeline to disk), `result=PASS`, stable across runs.
+>
+> The earlier `--selftest-record` FAIL was a **harness bug, not a product bug**. The old harness did
+> open → enable → arm → record all **synchronously inside one blocking `MessageManager::callAsync`
+> callback**. Tracktion rebuilds its wave-input list in `DeviceManager::handleAsyncUpdate`, which is
+> driven by an **async message** (`triggerAsyncUpdate` → `postMessageToSystemQueue`). While the
+> single callback blocked the message thread that post could not be delivered (observed:
+> `AsyncUpdater::post()` returning false app-wide → `cancelPendingUpdate()` → the rebuild silently
+> dropped), so `getNumWaveInDevices()` stayed 0 and `armFirstInputToTrack` bailed with "an input
+> device exists but no input channels are open". The real app never hit this: it arms on a UI click
+> and the message loop keeps pumping, so `enableInputs()`'s `dispatchPendingUpdates()` force-runs the
+> (successfully-posted, still-pending) rebuild synchronously before the arm. The fix makes the
+> selftest **event-driven** — phase 1 opens the input and yields to the loop; phase 2 (200 ms later)
+> arms + records; phase 3 (1.5 s later) stops + verifies — exactly mirroring the real arm path. This
+> also closes the roadmap gap "recording can't be verified headlessly", and supersedes the
+> synthetic-input (`installSyntheticInputForSelftest`) plan in "Integration required" below, which is
+> no longer needed (real-hardware selftest passes; the helper remains for hardware-free CI if wanted).
+>
+> Device-selection nuance: `ensureRecordingInputOpen()` keeps the working OUTPUT device and adds the
+> current type's DEFAULT capture input. On a box where the WASAPI output (e.g. "Speakers (Realtek)")
+> and the listed mic ("Microphone Array (Intel)") are different endpoints, JUCE opens a combined
+> device that reports under the output's name with that endpoint's input channels — so the captured
+> signal comes from the default pairing, not necessarily the named mic. To record a specific mic, the
+> user picks it in the Audio Settings dialog (which the meter/`getInputDeviceCount()` confirms). The
+> record PATH is verified regardless; precise default-mic selection is a separate refinement.
+
 > **Update — startup-latency hardening (2026-06-30, supersedes the startup model below).**
 > `initialiseAudioForRecording()` was **removed**. Startup is now **output-only**: the engine is
 > constructed with a `ForgeEngineBehaviour` whose `shouldOpenAudioInputByDefault()` returns false,

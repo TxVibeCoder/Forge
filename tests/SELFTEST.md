@@ -24,19 +24,27 @@ Imports a generated 440 Hz tone onto track 1, plays it, then samples state at ~3
 
 ## `Forge --selftest-record` (recording path)
 
-Arms track 1 to the first wave input, records ~1s, stops (keeping the take), verifies a clip.
+**Event-driven** (mirrors the real arm path, which must NOT block the message loop): phase 1 opens
+the capture input lazily (`ensureRecordingInputOpen`) and yields; phase 2 (≈200 ms later, after
+Tracktion's async wave-input-list rebuild has delivered) arms track 1 + records; phase 3 (≈1.5 s
+later) stops keeping the take, then verifies a clip on disk. Doing this synchronously in one callback
+silently starves the async rebuild (`getNumWaveInDevices()` stays 0) — that was the old harness's
+false FAIL; see `docs/devlog/device-recording.md`.
 
 | field | meaning | PASS requires |
 |---|---|---|
-| `availableInputDevices` / `currentDeviceInputChans` / `deviceTypesInputs` | device diagnostics | — |
+| `availableInputDevices` | OS-visible capture endpoint names | — (diagnostic) |
+| `openInputError` / `deviceAfterOpen` / `inputChansAfterOpen` | lazy-open diagnostics | — |
 | `inputDeviceCount` | engine wave-in devices | > 0 |
 | `trackArmed` | input assigned + armed to track 1 | 1 |
 | `recordingStarted` | transport entered record | 1 |
 | `recordedClipCount` | clips on track 1 after stop | ≥ 1 |
 | `recordedFileExists` | the take's source file exists | 1 |
 | `recordedClipLengthSecs` | take length | > 0 |
+| `recordedPeakMagnitude` | peak |sample| of the captured file | — (informational; > 0 ⇒ real signal flowed) |
 | `recordError` | last setTarget/arm error, if any | empty |
 
-> Note: on a machine whose active audio config exposes no input (e.g. a Bluetooth A2DP
-> output headset), `inputDeviceCount=0` and this test FAILs by design — that is an
-> environment limitation, not a Forge bug. Select an input via the **Audio** dialog.
+> Note: on a machine whose active audio config exposes no capture endpoint at all (e.g. a Bluetooth
+> A2DP output headset with no mic), `inputDeviceCount=0` and this test FAILs — that is an environment
+> limitation, not a Forge bug. Select an input via the **Audio** dialog. On a box with a working input
+> this test PASSes and captures a real take (verified 2026-06-30: clip + file + length + non-zero peak).

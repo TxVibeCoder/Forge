@@ -152,8 +152,13 @@ namespace EngineHelpers
 
         Message-thread only. May block for several seconds on the FIRST call if the OS audio stack
         is slow to open the capture device — acceptable because it is user-initiated and off the
-        startup path. */
-    inline void ensureRecordingInputOpen (te::Engine& engine)
+        startup path.
+
+        Returns the device-open error string for diagnostics: empty on success OR on the early-out
+        no-op (an input is already open); a "(no capture endpoint ...)" sentinel when no input
+        device exists; otherwise the exact juce::AudioDeviceManager::setAudioDeviceSetup() error.
+        Callers may ignore the return (it is purely informational). */
+    inline juce::String ensureRecordingInputOpen (te::Engine& engine)
     {
         auto& dm  = engine.getDeviceManager();
         auto& adm = dm.deviceManager;   // the underlying juce::AudioDeviceManager
@@ -162,7 +167,7 @@ namespace EngineHelpers
 
         // 1. Already have an input (explicit choice, or wave inputs already open) -> no-op.
         if (current.inputDeviceName.isNotEmpty() || dm.getNumWaveInDevices() > 0)
-            return;
+            return {};
 
         auto setup = current;
 
@@ -180,7 +185,7 @@ namespace EngineHelpers
         }
 
         if (setup.inputDeviceName.isEmpty())
-            return;   // no capture endpoint exists -> leave the working output untouched
+            return "(no capture endpoint advertised by the current device type)";
 
         // 3. Request EXPLICIT input channels (NOT useDefaultInputChannels — see the note above),
         //    keeping the working output device.
@@ -200,6 +205,8 @@ namespace EngineHelpers
 
         // 5. Rebuild Tracktion's wave-in list from whatever input channels are now open.
         dm.rescanWaveDeviceList();
+
+        return err;
     }
 
     /** Hardware-free SYNTHETIC input for `--selftest-record`. Installs a Tracktion

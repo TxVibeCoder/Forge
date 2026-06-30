@@ -47,8 +47,8 @@ warnings)**, plus an adversarial-review wave that found + fixed 5 real bugs:
   waveforms**, and a **moving playhead** (30 Hz, click/drag scrub).
 - **Transport bar** (`src/ui/transport/`): play/stop/record/loop + timecode/bars|beats.
 - **Recording** (`src/engine/RecordController.cpp`): the verified Tracktion recipe (enable
-  wave inputs → `ensureContextAllocated` → `setTarget`/arm → `record`/`stop`). *Wired but
-  input-gated — see §4.*
+  wave inputs → `ensureContextAllocated` → `setTarget`/arm → `record`/`stop`). *Verified end-to-end
+  on real hardware via `--selftest-record` (captures a real take) — see §2 "Verified" + §4.*
 - **Audio Settings** dialog; toolbar (New/Open/Save/Save As/Import/Audio).
 - **Adversarial review** (4-dimension fan-out): fixed a real use-after-free on project
   switch, a waveform speed-ratio bug, and a tautological selftest check.
@@ -132,7 +132,13 @@ input-negotiation startup balloon (25–77 s when the default device changed) is
 now output-only (see "Startup latency hardening" below), and measured headless startup dropped ~17 s
 → ~8 s. A genuinely contended OUTPUT device can still be slow to open or return `playing=0`; that is
 environmental (affects the committed baseline identically), not a code regression.
-`mode=record`: `inputDeviceCount=0` → **FAIL** (honest: no input device available on this box).
+`mode=record`: **result=PASS** — recording is now **verified end-to-end on real hardware**. The
+event-driven harness opens the input lazily, yields to the message loop, then arms + records a real
+take: `inputDeviceCount=8 · trackArmed=1 · recordingStarted=1 · recordedClipCount=1 ·
+recordedFileExists=1 · recordedClipLengthSecs≈1.44 · recordedPeakMagnitude≈0.0014` (non-zero ⇒ real
+samples reached disk). The prior `FAIL` was a **harness bug** (everything ran synchronously in one
+blocking message callback, starving Tracktion's async wave-input-list rebuild), not a product bug —
+full root cause in `docs/devlog/device-recording.md`.
 
 ---
 
@@ -167,17 +173,17 @@ tests/  SELFTEST.md
 ## 4. Pending action items
 
 ### Rough edges / near-term
-- [ ] **Recording verification (blocker, partially advanced).** Real-hardware capture is still
-  unverified end-to-end: this dev box exposes no capture endpoint (`inputDeviceCount=0`,
-  `deviceTypesInputs` empty), so a take can only be confirmed once an input is picked via
-  **Audio** (steps in `docs/devlog/device-recording.md`). Root cause was diagnosed: the saved
-  device opened output-only (empty input name), now addressed by `EngineHelpers::ensureRecordingInputOpen()`
-  (opens a default capture input lazily on the first arm/record, requesting explicit channels).
-- [ ] **Synthetic-input record self-test (new, future work).** `installSyntheticInputForSelftest`
-  exists (hosted `HostedAudioDeviceInterface`) but wiring it into `--selftest-record` did not yet
-  land: with just-in-time install the hosted input arms and recording starts, but the transport
-  doesn't advance under synthetic `processBlock` driving (`posAtFinish=0`, no take captured). Full
-  investigation + next steps in `docs/devlog/integration.md`. Wiring was reverted; helper kept.
+- [x] **Recording verification (blocker) — DONE.** Real-hardware capture is now **verified
+  end-to-end**: `--selftest-record` records a real take to disk (clip + file + length + non-zero
+  peak, `result=PASS`, stable across runs). The blocker turned out to be a **harness bug**, not a
+  product bug — the old selftest ran open→arm→record synchronously in one blocking message callback,
+  starving Tracktion's async wave-input-list rebuild (`handleAsyncUpdate`, driven by a posted
+  message). Now event-driven (open → yield → arm/record → yield → verify), mirroring the real arm
+  path. Root cause + the device-pairing nuance (lazy-open keeps the existing output; the captured
+  endpoint may be the default pairing, not the named mic) in `docs/devlog/device-recording.md`.
+- [x] **Synthetic-input record self-test — no longer needed.** The real-hardware `--selftest-record`
+  now passes, so the hosted-`HostedAudioDeviceInterface` synthetic path isn't required for
+  verification. `installSyntheticInputForSelftest` is kept for optional hardware-free CI.
 - [x] **Device-override.** FIXED — the saved output is preserved (verified: playback selftest keeps
   the saved Bluetooth output; the startup `initialise()` stomp is gone). The preserve-output logic now
   lives in the engine's output-only construction + `ensureRecordingInputOpen()` (keeps the output when
@@ -249,7 +255,7 @@ tests/  SELFTEST.md
 | Phase | Goal | State |
 |---|---|---|
 | 0 — Toolchain | Build + first sound | ✅ done |
-| 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; recording still input-gated for real HW) |
+| 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
 | 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; MIDI/automation to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
@@ -271,10 +277,10 @@ Phases 0–4 + startup-latency hardening are done: the spine, arrange surface (i
 grid), mixer (incl. insert bypass/reorder + post-fader master meter), plugin hosting + scan UI,
 browser, inspector, export (mixdown + stems), and output-only startup with lazy record-input open.
 Practical next sequence:
-1. **Recording verification on real hardware** — pick an input via the Audio dialog and confirm a
-   take. The path is wired and the input now opens lazily; it just needs a box with a mic. This is the
-   one capability that is wired-but-unverified end-to-end (`--selftest-record` FAILs here:
-   `inputDeviceCount=0`).
+1. ✅ **Recording verification on real hardware — DONE.** `--selftest-record` captures a real take
+   (`result=PASS`, non-zero peak); the prior FAIL was a harness bug, now fixed (event-driven harness).
+   Remaining refinement: default-mic *selection* (lazy-open keeps the existing output, so the captured
+   endpoint is the default pairing, not necessarily the listed mic) — see device-recording.md.
 2. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth. Best
    run as its own multi-wave effort with a shared MIDI-clip contract.
 3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
