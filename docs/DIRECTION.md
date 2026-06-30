@@ -25,15 +25,20 @@ controller.** The linear arrangement timeline is a *secondary* view, not the pri
 > plugin hosting are all building blocks that now live *inside* slots and scenes. What changes is the
 > **primary surface and identity**, and the addition of a **control-surface layer**.
 
-## The two build pillars
+## The build pillars (and their order)
 
-1. **Session-grid UI** — a new `SessionView` (tracks × scenes of clip slots) as the primary `ViewMode`,
-   with launch / queue / stop states, scene launching, and per-slot clip editing (reusing the piano-roll).
-2. **Device-agnostic control-surface + MIDI-input layer** — drivers for grid controllers, plus melodic note
+1. **Session-grid UI — the near-term build.** A new `SessionView` (tracks × scenes of clip slots) as the
+   primary `ViewMode`, with launch / queue / stop states, scene launching, and per-slot clip editing (reusing
+   the piano-roll). **Fully usable with mouse + keyboard — no hardware required.**
+2. **Control-surface + MIDI-input layer — the goal it's designed toward ("one day").** Integration with
+   **external physical hardware**: drivers that talk MIDI to/from *real* grid controllers, plus melodic note
    input, MIDI-learn, and clock/Link sync.
 
-These are parallel workstreams. The **same clip pad-colour/state model drives both** the on-screen grid and
-the hardware LEDs (one source of truth).
+> **The controllers are real-world hardware** (a Launchpad, an APC40 on your desk) that Forge *connects to
+> over MIDI* — **Forge does NOT render an on-screen controller.** The only on-screen surface is the
+> `SessionView` grid. Build the grid first, **designed around the same pad-colour/state model the hardware
+> will use**, so connecting a controller later is "add a driver," not a rework. Hardware integration is a
+> hoped-for future capability, **not a gate on the MVP**.
 
 ## Primary surface — the Session clip grid
 
@@ -45,10 +50,14 @@ the hardware LEDs (one source of truth).
   slot — distinct from the linear `AudioTrack`-member insert used in the MIDI MVP.
 - **Mockup:** `mockups/00-session-clip-grid-primary.dxf` (first pass).
 
-## Control surfaces — a class of devices, not one
+## Control surfaces — external hardware Forge connects to (not an on-screen surface)
 
-Forge supports the **class** of Ableton-style performance controllers via a **device-agnostic layer** with a
-**driver per controller**. Adding a controller = adding a driver, never a rearchitecture.
+These are **real, physical controllers on your desk** — Forge integrates with them over **MIDI**; it never
+draws a controller on screen (the only on-screen surface is the `SessionView` grid). Forge supports the
+**class** of Ableton-style performance controllers via a **device-agnostic layer** with a **driver per
+controller**. Adding a controller = adding a driver, never a rearchitecture. *This is a "hope to one day
+connect" capability — design for it now, build it when ready; the grid is fully playable without any
+hardware. The `mockups/09` sheet is a **hardware-mapping reference**, not an app screen to build.*
 
 - **Reference devices:**
   - **Novation Launchpad** — 8×8 RGB pad grid + arrow nav + scene-launch column + mode row. Uses the
@@ -90,7 +99,7 @@ view (compose in Session → arrange / bounce linearly).
 | Pillar | Work |
 |---|---|
 | **Session UI** | `SessionView` grid (slots/scenes, launch/queue/stop states) as the primary `ViewMode`; scene management; per-slot clip editing via the piano-roll; the `ViewMode` switch becomes `Session ∣ Arrange ∣ Mix` (Session default). |
-| **Control surfaces** | Device-agnostic control-surface layer on the `ControlSurface` seam; **Launchpad** driver, then **APC40 mkII** driver; shared pad-colour/state model with the on-screen grid. |
+| **Control surfaces** *(later — "one day")* | Integration with **external hardware** on the `ControlSurface` seam — **Launchpad** driver, then **APC40 mkII** driver; shared pad-colour/state model with the on-screen grid. The grid is fully usable without it. |
 | **MIDI input** | Note input + record-into-clip (W7); MIDI-learn param mapping; MIDI-clock + Ableton Link sync. |
 | **Vision artifacts** | Reflow the mockup set Session-first (Session = sheet 01, Arrange demoted) + a controller-mapping sheet (Launchpad + APC40 over the grid, with the pad-colour legend); realign ARCHITECTURE/INTERFACE/STATUS. |
 
