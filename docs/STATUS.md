@@ -19,7 +19,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
 | **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
-| **Code size** | ~5,280 lines of Forge source (engine/JUCE excluded) across 25 files |
+| **Code size** | ~6,110 lines of Forge source (engine/JUCE excluded) across 27 files |
 
 ---
 
@@ -68,7 +68,9 @@ Delivered by five file-disjoint agents, integrated in one green build. Per-area 
 `docs/devlog/` (arrange · session · device-recording · shell · hygiene · integration).
 - **Device-override FIXED + verified.** `EngineHelpers::initialiseAudioForRecording()` opens input
   channels while preserving the saved output device; the playback selftest now keeps the saved
-  Bluetooth output (it survives startup, with no stomp to the onboard device).
+  Bluetooth output (it survives startup, with no stomp to the onboard device). *(Later refactored:
+  startup-latency hardening removed this function — startup is now output-only and the input opens
+  lazily via `ensureRecordingInputOpen()`. See §4 + `integration.md` Wave 5.)*
 - **Arrange polish** (`ArrangeView`): bars|beats ruler, clip/track **selection** (accent outline),
   per-lane **M/S/R** buttons + **colour swatch**, **right-click context menus** (clip:
   rename/delete/colour; lane: add/delete/rename track), `xToTime` span guard, looped-clip waveform
@@ -125,11 +127,11 @@ fixed 3 real correctness bugs. Build clean (0 warnings); playback selftest PASS.
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** when the
-audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal — if the active
-output device changes mid-session (e.g. a Bluetooth headset disconnects) the default-device
-negotiation in `initialiseAudioForRecording` can balloon startup to 25–77 s and a contended device
-may return `playing=0`; this is environmental (affects the committed baseline identically), not a
-code regression. See the hardening item in §4 and `docs/devlog/integration.md`.
+audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal. The old
+input-negotiation startup balloon (25–77 s when the default device changed) is **fixed** — startup is
+now output-only (see "Startup latency hardening" below), and measured headless startup dropped ~17 s
+→ ~8 s. A genuinely contended OUTPUT device can still be slow to open or return `playing=0`; that is
+environmental (affects the committed baseline identically), not a code regression.
 `mode=record`: `inputDeviceCount=0` → **FAIL** (honest: no input device available on this box).
 
 ---
@@ -141,17 +143,18 @@ src/
 ├── main.cpp                       ForgeApplication (owns Engine + LookAndFeel) + MainComponent (the shell)
 ├── services/
 │   ├── files/ProjectSession       owns the Edit; create/open/save/import; isModified
-│   └── export/Exporter            render the Edit → 24-bit WAV (engine renderer)
+│   └── export/Exporter            render the Edit → 24-bit WAV (whole-edit mixdown + per-track stems)
 ├── engine/
-│   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, audio init, track vol/pan
+│   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, lazy record-input open, track vol/pan
 │   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed
-│   └── PluginHost                 list/add/remove built-in + external plugins on a track
+│   ├── PluginHost                 list/add/remove built-in + external plugins on a track
+│   └── PluginScanner              VST3/AU scan dialog → engine known-plugin list (auto-persist)
 └── ui/
     ├── ForgeLookAndFeel.h         dark amber theme (colour IDs)
-    ├── ControlBar                 merged top strip + view-switch + region toggles
+    ├── ControlBar                 merged top strip + view-switch + region toggles + Plugins/Export menu
     ├── transport/TransportBar     play/stop/rec/loop + timecode/bars|beats
-    ├── arrange/ArrangeView        ruler, lanes (M/S/R + colour), clips (waveform, drag, snap), selection, playhead
-    ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots, master strip, peak meters
+    ├── arrange/ArrangeView        ruler + snap-division selector, lanes (M/S/R + colour), clips (waveform, drag, snap), selection, playhead
+    ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots (bypass + reorder), master strip + post-fader meter
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
     └── detail/DetailView          bottom-drawer clip inspector (name/gain/fades/waveform)
@@ -168,14 +171,17 @@ tests/  SELFTEST.md
   unverified end-to-end: this dev box exposes no capture endpoint (`inputDeviceCount=0`,
   `deviceTypesInputs` empty), so a take can only be confirmed once an input is picked via
   **Audio** (steps in `docs/devlog/device-recording.md`). Root cause was diagnosed: the saved
-  device opened output-only (empty input name), now addressed by `initialiseAudioForRecording`.
+  device opened output-only (empty input name), now addressed by `EngineHelpers::ensureRecordingInputOpen()`
+  (opens a default capture input lazily on the first arm/record, requesting explicit channels).
 - [ ] **Synthetic-input record self-test (new, future work).** `installSyntheticInputForSelftest`
   exists (hosted `HostedAudioDeviceInterface`) but wiring it into `--selftest-record` did not yet
   land: with just-in-time install the hosted input arms and recording starts, but the transport
   doesn't advance under synthetic `processBlock` driving (`posAtFinish=0`, no take captured). Full
   investigation + next steps in `docs/devlog/integration.md`. Wiring was reverted; helper kept.
-- [x] **Device-override.** FIXED — `initialiseAudioForRecording()` preserves the saved output
-  (verified: playback selftest keeps the saved Bluetooth output). The startup `initialise()` stomp is gone.
+- [x] **Device-override.** FIXED — the saved output is preserved (verified: playback selftest keeps
+  the saved Bluetooth output; the startup `initialise()` stomp is gone). The preserve-output logic now
+  lives in the engine's output-only construction + `ensureRecordingInputOpen()` (keeps the output when
+  it lazily adds an input). `initialiseAudioForRecording` was removed in startup-latency hardening.
 - [x] **Draggable resizer bars.** DONE — custom `ResizerBar` drags the Browser width + drawer
   height (clamped); collapse/expand buttons still work. (Sizes not persisted across launches yet.)
 - [x] **Keyboard shortcuts.** DONE — B/E region toggles, F9/F11 view-switch, Space play/stop, R
@@ -244,32 +250,36 @@ tests/  SELFTEST.md
 |---|---|---|
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; recording still input-gated for real HW) |
-| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + plugin hosting + floating windows done; buses/sends + external scan UI to do) |
+| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
 | 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; MIDI/automation to do) |
-| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV export + bar snap done; LUFS/stems/markers/comping to do) |
+| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
 ### Interface build order (from INTERFACE.md)
 | Phase | Items | State |
 |---|---|---|
 | 1 — Shell refactor | ForgeShell, Control Bar, LookAndFeel, view-slot, collapsible regions, tooltips | ✅ done |
-| 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection, clip drag + bar snap + info hint ✅; **snap-division selector** to do | ✅ done |
+| 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection, clip drag + snap + info hint ✅; snap-division selector (Off/Bar/½/¼/⅛/1⁄16, denominator-aware) ✅ | ✅ done |
 | 3 — Browser/Inspector | left-column file Browser (double-click import) ✅; clip Inspector (props) ✅; drag-onto-track + value popups to do | ✅ mostly |
 | 4 — Detail Drawer | clip inspector (name/gain/fades/waveform) ✅; piano-roll → automation later | ✅ (audio clip stage) |
-| 5 — Mixer + devices + plugins | Mixer view-switch ✅; channel strips + inserts + master + meters ✅; floating plugin windows ✅; device chain reorder/bypass to do | ✅ done |
+| 5 — Mixer + devices + plugins | Mixer view-switch ✅; channel strips + inserts + master + meters ✅; floating plugin windows ✅; device chain reorder + per-insert bypass ✅ | ✅ done |
 | 6 — Config + delivery | tabbed Preferences (folds in Audio settings); Export/Render | ⏳ |
 | 7 — Power-user + Session | tear-off panels, saved layouts; SessionView when wanted | ⏳ |
 
 ### How they interleave (recommended path)
-Phases 0–3 are done: the spine, arrange surface, mixer, plugin hosting, browser, inspector, export.
+Phases 0–4 + startup-latency hardening are done: the spine, arrange surface (incl. snap-division
+grid), mixer (incl. insert bypass/reorder + post-fader master meter), plugin hosting + scan UI,
+browser, inspector, export (mixdown + stems), and output-only startup with lazy record-input open.
 Practical next sequence:
-1. **Startup-latency hardening** (open inputs lazily/off-thread) + finish **recording verification**
-   once a real input is selected — unblocks tracking and makes selftests reliable on any device.
-2. **External plugin scanning UI** (VST3/AU scan in Audio settings) — the host already loads what's
-   in the known list; scanning makes it discoverable.
-3. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth.
-4. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
-5. **Polish** — master metering (LUFS), markers, comping, stem export, snap-division selector.
+1. **Recording verification on real hardware** — pick an input via the Audio dialog and confirm a
+   take. The path is wired and the input now opens lazily; it just needs a box with a mic. This is the
+   one capability that is wired-but-unverified end-to-end (`--selftest-record` FAILs here:
+   `inputDeviceCount=0`).
+2. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth. Best
+   run as its own multi-wave effort with a shared MIDI-clip contract.
+3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
+4. **Polish** — async export + progress; LUFS metering; markers; comping; off-thread record-input
+   open (so even the first arm never briefly blocks the message thread).
 
 ---
 

@@ -4,6 +4,20 @@ Area: audio-device initialisation for recording, RecordController robustness, an
 hardware-free record self-test. Owner files: `src/engine/EngineHelpers.h`,
 `src/engine/RecordController.h`, `src/engine/RecordController.cpp`.
 
+> **Update — startup-latency hardening (2026-06-30, supersedes the startup model below).**
+> `initialiseAudioForRecording()` was **removed**. Startup is now **output-only**: the engine is
+> constructed with a `ForgeEngineBehaviour` whose `shouldOpenAudioInputByDefault()` returns false,
+> so no capture device is opened on the message thread at launch (that open could stall 25–77 s when
+> the default device changed). The input-fix logic documented here — detect an empty input name →
+> pick the type's default capture device → re-apply preserving the output with
+> `treatAsChosenDevice=false` — now lives in **`EngineHelpers::ensureRecordingInputOpen()`**, called
+> lazily on the first arm/record (`onArmToggled` / `toggleRecordTake` / `beginSelfTestRecording`),
+> with two fixes from the startup-latency review: it requests **explicit** input channels (the
+> 0-input startup would otherwise open the mic with an empty channel mask → silent capture), and it
+> **restores the working output-only setup if the combined in+out open fails** (so a failed arm can't
+> kill playback). The root-cause analysis (§"Root-cause analysis") and the "Verifying a real take"
+> steps below remain valid. Full writeup: `integration.md` → Wave 5.
+
 ## What changed
 
 ### `EngineHelpers.h` (additive only — all existing inline fns untouched)
