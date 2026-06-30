@@ -58,10 +58,22 @@ facts, not prose — the integration build was **clean on the first try**.
 - **Latent (out of scope, offset always 0 in the MVP):** `beatToX`/`xToBeat` anchor content-beat-0 at
   the clip start and ignore clip offset; relevant only if MIDI clips later gain a non-zero offset.
 
+## W6 — velocity + selection/clipboard polish  (`bb5b6bf`; single-owner agent + verify)
+
+Post-MVP editing, all within `src/ui/pianoroll/` (one cohesive owner, so a single authoring agent rather
+than a fan-out). **Multi-select** (click / Shift-Ctrl-click / marquee rubber-band — a plain click still
+draws a note) · **Delete key** + delete-selection · **multi-note move** (whole selection by one delta,
+**group-clamped** against the selection's headroom so chord intervals survive the beat-0 / pitch edges) ·
+**copy/paste** (Ctrl+C/V, pasted at the snapped playhead, auto-selected) · **velocity** via a new
+`VelocityLane.{h,cpp}` bottom strip (draggable bar per note, top = loud, 1..127) + velocity shading on the
+grid notes. The roll grabs keyboard focus on any interaction and `keyPressed` returns `false` for keys it
+doesn't consume, so the shell shortcuts (Space/R/Ctrl+S) still work; the four shell-facing symbols are
+unchanged (only CMake gains `VelocityLane.cpp`). Build clean; both selftests **PASS**. The verify wave (2
+skeptics) returned `correct` on velocity/layout and caught two real low-severity issues, both **fixed**:
+the multi-move group-clamp above, and a missing keyboard-focus grab on velocity-lane clicks.
+
 ## Not yet done (post-MVP)
 
-- **W6 — velocity + polish:** velocity lane, multi-select/marquee, copy/paste, keyboard nav (incl. the
-  Delete-key shortcut), horizontal auto-scroll to the clip.
 - **W7 — MIDI-input recording:** the higher-risk wave — its own MIDI enable sequence
   (`getMidiInDevices()` + `setEnabled` + `setMonitorMode` + `rescanMidiDeviceList()`) **before**
   `ensureContextAllocated()`, a different device-type filter, and a **runtime test with a physical MIDI

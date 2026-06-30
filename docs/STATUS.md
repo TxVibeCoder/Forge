@@ -1,7 +1,8 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (**MIDI tracks + piano-roll MVP built** — W1–W5,
-draw a clip and hear it via a default 4OSC; clean build, both selftests PASS, adversarial verify clean).*
+*Living status document. Last updated 2026-06-30 (**MIDI tracks + piano-roll** — MVP (W1–W5: draw a clip
+and hear it via a default 4OSC) **+ W6 polish** (velocity lane, multi-select, copy/paste); clean build,
+both selftests PASS, adversarial verify clean).*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
@@ -20,7 +21,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
 | **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
-| **Code size** | ~5,900 lines of Forge source (engine/JUCE excluded) across 31 files |
+| **Code size** | ~6,460 lines of Forge source (engine/JUCE excluded) across 33 files |
 
 ---
 
@@ -145,6 +146,11 @@ a `te::MidiClip` is created on that track, **born audible** via an auto-inserted
   **live** `getSequence()` (never the looped copy) with the Edit's UndoManager. Content-relative beats.
 - **Integration** (`main.cpp`): selection routes a `MidiClip`→piano-roll, any other clip→DetailView, via
   a `bottomMode` drawer that swaps editors; project-swap drops the held clip safely.
+- **W6 polish** (`bb5b6bf`, all in `src/ui/pianoroll/`): multi-select (click / Shift-Ctrl-click /
+  marquee), Delete-key, multi-note move (group-clamped so chords keep their shape at the edges),
+  copy/paste (Ctrl+C/V at the playhead), and a **velocity lane** (`VelocityLane`, draggable bar per note)
+  + velocity shading on notes. The roll grabs keyboard focus but lets unconsumed keys propagate, so the
+  shell shortcuts still work. Details in [devlog/midi-build.md](devlog/midi-build.md).
 - **Verified:** clean first-try integration build; `--selftest` + `--selftest-record` both **PASS** (no
   regression); a 3-agent adversarial verify wave (W3/W4/W5, default-refuted) returned **`correct` with
   zero blocker/major/minor findings** — incl. tracing `MidiNote&` lifetime safety and instrument-at-0
@@ -262,10 +268,11 @@ tests/  SELFTEST.md
   (manual-rebuild model); a value changed on another surface updates on re-select, not live.
 
 ### Later / feature-gated
-- [x] **MIDI tracks + piano-roll — MVP DONE** (`9a24989`). Draw a MIDI clip and hear it via a default
-  4OSC; clips render polymorphically (`ClipComponent` base). **Post-MVP remaining:** W6 velocity lane +
-  multi-select/copy-paste/Delete-key/horizontal auto-scroll; **W7 MIDI-input recording** (its own enable
-  sequence + a runtime test with a physical controller). Live GUI draw→play path needs a manual smoke pass.
+- [x] **MIDI tracks + piano-roll — MVP + W6 polish DONE** (`9a24989`, `bb5b6bf`). Draw a MIDI clip and
+  hear it via a default 4OSC; clips render polymorphically (`ClipComponent` base); piano-roll has
+  velocity lane + multi-select + copy/paste. **Post-MVP remaining:** **W7 MIDI-input recording** (its own
+  enable sequence + a runtime test with a physical controller); horizontal auto-scroll-to-clip. Live GUI
+  draw→play path still needs a manual smoke pass.
 - [ ] ASIO (needs Steinberg SDK + `JUCE_ASIO=1`); MP3 import (`JUCE_USE_MP3AUDIOFORMAT=1`).
 - [ ] `rtcheck` RT-safety tool is macOS/Linux only — N/A on the Windows dev box.
 - [ ] AGPLv3 obligations when distributing builds (share source — trivial for this repo).
@@ -286,7 +293,7 @@ tests/  SELFTEST.md
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll → `docs/devlog/midi-build.md`; W6 velocity/polish + W7 MIDI-input record + automation to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; W7 MIDI-input record + automation to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
@@ -310,10 +317,10 @@ Practical next sequence:
    (`result=PASS`, non-zero peak); the prior FAIL was a harness bug, now fixed (event-driven harness).
    Remaining refinement: default-mic *selection* (lazy-open keeps the existing output, so the captured
    endpoint is the default pairing, not necessarily the listed mic) — see device-recording.md.
-2. **MIDI tracks + piano-roll** (engine Phase 3) — **MVP DONE** (W1–W5: draw a clip + hear it via 4OSC;
-   `docs/devlog/midi-build.md`). Remaining: **W6** velocity lane + multi-select/copy-paste/Delete-key/
-   horizontal auto-scroll; **W7** MIDI-input recording (own enable sequence + a physical-controller runtime
-   test — see midi-design.md §5). First do a **manual GUI smoke pass** of the draw→play path.
+2. **MIDI tracks + piano-roll** (engine Phase 3) — **MVP + W6 polish DONE** (W1–W6: draw a clip + hear it
+   via 4OSC; velocity lane, multi-select, copy/paste; `docs/devlog/midi-build.md`). Remaining: **W7**
+   MIDI-input recording (own enable sequence + a physical-controller runtime test — see midi-design.md §5);
+   horizontal auto-scroll-to-clip. First do a **manual GUI smoke pass** of the draw→play path.
 3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
 4. **Polish** — async export + progress; LUFS metering; markers; comping; off-thread record-input
    open (so even the first arm never briefly blocks the message thread).

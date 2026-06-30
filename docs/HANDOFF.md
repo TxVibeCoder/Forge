@@ -1,7 +1,7 @@
 # Forge — Session Handoff
 
 > Living handoff for picking the project back up cold. Pairs with [STATUS.md](STATUS.md) (the living
-> roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP build"** session.
+> roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP + W6 polish"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
 branch `main` · MIDI MVP commit `9a24989` · **ahead of `origin/main` — NOT pushed** (this session's MIDI
@@ -9,9 +9,10 @@ MVP + docs, atop the earlier recording/design commits; `git status` for the exac
 ~5,900 lines / 31 source files · last build **clean** · both self-tests **PASS** · verify wave **clean**.
 
 Forge is an arrangement-first DAW on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
-startup-latency hardening + the **MIDI MVP** are done and live: project/arrange/transport/mixer/plugins/
-browser/inspector/export, output-only startup with lazy record-input open, and **drawable, audible MIDI
-clips**. See [STATUS.md §2](STATUS.md) for the full feature list.
+startup-latency hardening + the **MIDI MVP + W6 piano-roll polish** are done and live: project/arrange/
+transport/mixer/plugins/browser/inspector/export, output-only startup with lazy record-input open, and
+**drawable, audible MIDI clips with a velocity lane, multi-select, and copy/paste**. See
+[STATUS.md §2](STATUS.md) for the full feature list.
 
 ---
 
@@ -65,6 +66,19 @@ visual-only (Delete-key + multi-select are W6).
   **instrument-at-0:** the detection loop can't false-positive on the vol/meter tail, so a real 4OSC is
   always inserted and re-create can't stack synths.
 
+### W6 — piano-roll polish ✅ (`bb5b6bf`)
+
+Post-MVP editing, all inside `src/ui/pianoroll/` (one cohesive owner → a single authoring agent, not a
+fan-out): **multi-select** (click / Shift-Ctrl-click / marquee — a plain click still draws a note),
+**Delete key**, **multi-note move** (whole selection by one delta, **group-clamped** so chords keep their
+shape at the beat-0 / pitch edges), **copy/paste** (Ctrl+C/V at the playhead, auto-selected), and a
+**velocity lane** (new `VelocityLane.{h,cpp}` — draggable bar per note, top = loud) + velocity shading on
+notes. The roll grabs keyboard focus on any interaction but `keyPressed` returns `false` for keys it
+doesn't consume, so the shell shortcuts (Space/R/Ctrl+S) still work; the four shell-facing symbols are
+unchanged (only CMake gained `VelocityLane.cpp`). Build clean; both selftests **PASS**. The verify wave (2
+skeptics) returned `correct` on velocity/layout and caught two real low-severity issues, **both fixed** (the
+multi-move group-clamp; a velocity-lane focus grab).
+
 ---
 
 ## ⚠️ The one thing not yet verified
@@ -76,7 +90,9 @@ adversarial trace), but the very first manual action should be a **GUI smoke tes
 1. Run `Forge.exe`. Right-click the empty area of a track lane → **New MIDI Clip**.
 2. The piano-roll should open in the bottom drawer. Click the grid to draw a few notes; drag to move/resize;
    right-click a note to delete.
-3. Press **Space** → the notes should sound through the 4OSC. Save, reopen, confirm the clip persists.
+3. **W6:** Shift/Ctrl-click or marquee-drag to multi-select; drag the velocity-lane bars (bottom strip);
+   **Ctrl+C / Ctrl+V**; **Delete** the selection. Confirm **Space** still plays while the roll has focus.
+4. Press **Space** → the notes should sound through the 4OSC. Save, reopen, confirm the clip persists.
 
 If anything is off, the per-wave detail is in [devlog/midi-build.md](devlog/midi-build.md) and the
 coordinate math + interaction logic live entirely in `src/ui/pianoroll/`.
@@ -114,19 +130,19 @@ PASS on this box.
   gain a non-zero offset. **Always edit `getSequence()`, never `getSequenceLooped()`** (its edits are dropped).
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake.
 - **Submodules are clean.** Don't be surprised by a clean `git submodule status`.
-- **Not pushed:** `main` is ahead of `origin/main` (this session's MIDI MVP `9a24989` + docs, atop the
-  earlier recording/design commits). `git push` when ready; `git status` shows the exact count.
+- **Not pushed:** `main` is ahead of `origin/main` (this session's MIDI MVP `9a24989` + W6 `bb5b6bf` +
+  docs, atop the earlier recording/design commits). `git push` when ready; `git status` shows the count.
 
 ---
 
 ## What's next (prioritized)
 
-1. **GUI smoke test of the MIDI MVP** (above) — the one unverified path. Do this before building on it.
-2. **MIDI post-MVP:** **W6** velocity lane + multi-select/marquee + copy/paste + **Delete-key** + horizontal
-   auto-scroll to the clip (all inside `src/ui/pianoroll/*`, disjoint from engine files). **W7** MIDI-input
-   recording — the higher-risk wave: its own enable sequence (`getMidiInDevices()` + `setEnabled` +
-   `setMonitorMode` + `rescanMidiDeviceList()`) **before** `ensureContextAllocated()`, a different device-type
-   filter, and a **runtime test with a physical MIDI controller**. See [midi-design.md §5](devlog/midi-design.md).
+1. **GUI smoke test of the MIDI MVP + W6** (above) — the one unverified path. Do this before building on it.
+2. **MIDI post-MVP — W7 MIDI-input recording** (W6 is done): the higher-risk wave — its own enable sequence
+   (`getMidiInDevices()` + `setEnabled` + `setMonitorMode` + `rescanMidiDeviceList()`) **before**
+   `ensureContextAllocated()`, a different device-type filter, and a **runtime test with a physical MIDI
+   controller**. See [midi-design.md §5](devlog/midi-design.md). Smaller follow-on: horizontal
+   auto-scroll-to-clip in the piano-roll (W6 deferred it; would adjust the shared `TimelineView` window).
 3. **Automation** (vol/pan/plugin-param lanes) + **buses/sends** in the mixer (engine Phase 3 + 2 remainder).
 4. **Polish** — async export + progress (mixdown & stems both block the message thread); LUFS metering;
    markers; comping; off-thread record-input open.
