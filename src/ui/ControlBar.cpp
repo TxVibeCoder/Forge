@@ -5,7 +5,7 @@ using namespace juce;
 
 ControlBar::ControlBar()
 {
-    for (auto* b : { &browserBtn, &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn,
+    for (auto* b : { &browserBtn, &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn,
                      &audioBtn, &arrangeBtn, &mixBtn, &drawerBtn })
         addAndMakeVisible (b);
 
@@ -19,6 +19,7 @@ ControlBar::ControlBar()
     saveBtn.onClick    = [this] { if (onSave) onSave(); };
     saveAsBtn.onClick  = [this] { if (onSaveAs) onSaveAs(); };
     importBtn.onClick  = [this] { if (onImport) onImport(); };
+    exportBtn.onClick  = [this] { if (onExport) onExport(); };
     audioBtn.onClick   = [this] { if (onAudioSettings) onAudioSettings(); };
 
     arrangeBtn.onClick = [this] { setViewMode (0); if (onViewMode) onViewMode (0); };
@@ -50,7 +51,7 @@ void ControlBar::resized()
 
     browserBtn.setBounds (r.removeFromLeft (66));
     r.removeFromLeft (8);
-    for (auto* b : { &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &audioBtn })
+    for (auto* b : { &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn, &audioBtn })
     {
         b->setBounds (r.removeFromLeft (60));
         r.removeFromLeft (3);

@@ -41,11 +41,13 @@ survived startup. ✅
   firing this, so the shell only needs to save.
 - **`arrangeView.onArmToggled`** → real per-track record arm/disarm. The lane **R** button flips
   its visual state optimistically, then the shell calls `RecordController::armFirstInputToTrack`
-  (true) or the new **`RecordController::disarmTrack`** (false). If the record path rejects the
-  request (e.g. no capture device on this box), the shell pushes the true state back via the new
-  **`ArrangeView::setTrackArmState`** (reverting the optimistic toggle) and shows
-  `recorder.getLastError()` in the status strip. `disarmTrack` clears `setRecordingEnabled` and
-  `removeTarget` for every wave `InputDeviceInstance` targeting the track, then `restartPlayback`.
+  (true) or `RecordController::disarmTrack` (false). Afterwards it calls
+  **`ArrangeView::refreshArmStates()`**, which re-derives EVERY lane's R indicator from engine
+  truth via the `isTrackArmed` query — so a rejected arm snaps back, and a lane whose single
+  physical input was stolen by arming another track clears too. Arm state is the engine
+  (`InputDeviceInstance` targets), never a transient UI flag — see the validation pass below.
+  `disarmTrack` clears `setRecordingEnabled` and `removeTarget` for every wave instance (called
+  unconditionally so a disabled device can't leave a stale target), then `restartPlayback`.
 
 ## Seams deliberately left UNWIRED (documented, no code needed yet)
 
@@ -105,6 +107,45 @@ Likely next steps (for a future session):
 Real-hardware recording is still verified manually per `device-recording.md` (§"Verifying a real
 take ..."): pick an input in the Audio dialog, then the existing `toggleRecordTake()` path records.
 
+## Post-merge validation pass (adversarial review of aa0982c)
+
+A 5-dimension adversarial review (lifetime · record · API · arrange · shell), each candidate
+finding independently skepticism-verified against the real engine headers, surfaced **8
+candidates → 5 confirmed real, 3 refuted**. All 5 were fixed (build stays warning-clean; playback
+self-test PASS):
+
+1. **(high) Arm indicator desynced from the engine after every `rebuild()`.** The lane's `armed`
+   was a transient bool; mute/solo were read from the track but arm wasn't, so any structural edit
+   (add/delete/rename track, delete clip, import) brought an actually-armed track back showing
+   disarmed. **Fix:** arm is now derived from engine truth — `RecordController::isTrackArmed()`
+   scans the wave `InputDeviceInstance` targets; `ArrangeView` exposes an `isTrackArmed` query
+   that `refreshControlStates()` consults on every rebuild, exactly like mute/solo. The transient
+   single-lane setters (`setArmed`/`setTrackArmState`) were removed to enforce one source of truth.
+2. **(low) `disarmTrack` left a stale target when the input device was disabled.** `getTargets()`
+   returns empty for a disabled device, so the old membership gate skipped cleanup, and a later
+   re-enable could phantom-re-arm the track. **Fix:** call `removeTarget` unconditionally for every
+   wave instance (it iterates persisted destinations directly); use `getTargets()` only to decide
+   whether a *live* target was removed (whether to `restartPlayback`).
+3. **(low) Arming a 2nd track silently stole the single input but left the 1st lane lit.**
+   `setTarget(move=true)` drops all prior targets. **Fix:** `onArmToggled` now calls
+   `refreshArmStates()` (re-derives ALL lanes from the engine), so the stolen lane clears.
+4. **(low) Arm/disarm failure message wiped within 200 ms by the status-bar timer.** **Fix:**
+   `setStatusMessage()` + a `statusHoldUntilMs` guard the periodic refresh respects (~4 s hold).
+5. **(low) Bar-line detection dropped/spurious markers for non-exact tempos.** `getWholeBeats()==0`
+   on a value round-tripped through `toTime()/toBarsAndBeats()` misfires by an epsilon. **Fix:**
+   detect bar starts by a change in the integer `bars` field (robust); the first visible beat uses
+   a tolerance fallback. (Also avoided round-tripping a negative beat, which is best avoided.)
+
+Refuted (verified NOT bugs): a claimed key-truncation collision (`juce_wchar` is 32-bit on
+Windows, no truncation); "interactive arm never enables inputs" (wave inputs default to enabled);
+and a dangling-callback UAF (the `onClipSelected`/`onTrackSelected` consumers are unwired, so inert).
+
+**Environment note (not a code bug):** when the Bluetooth output device (Bose QC35 II) disconnects
+and the default device changes, app startup gets slow — `initialiseAudioForRecording` scans device
+types and opens a default input, which took ~26 s to settle once (then playback PASS, device =
+Realtek). It is *latency*, not a hang (the committed baseline shows the same). A future hardening:
+open inputs lazily / off the message thread so a slow capture-device open can't stall startup.
+
 ## Housekeeping notes
 
 - **`.gitattributes`** (`* text=auto`) is in place to silence CRLF/LF warnings. The optional
@@ -116,3 +157,75 @@ take ..."): pick an input in the Audio dialog, then the existing `toggleRecordTa
   arrange view and renders a clip without crashing), but their interactive behaviour is not
   covered by the headless self-test. Manual or computer-use verification recommended before
   relying on them.
+
+## Build wave 2 — Mixer view · volume/pan · clip drag+snap · WAV export
+
+A second 4-agent file-disjoint wave (per-area devlogs: `mixer.md`, `engine-mix.md`,
+`arrange-drag.md`, `export.md`). **Integration build: 0 warnings, 0 errors on the first try.**
+
+- **MixerView** (`src/ui/mixer/MixerView.{h,cpp}`, new) — a real Mixer view: one channel strip per
+  audio track (dB volume fader, rotary pan, M/S, colour swatch) in a horizontal Viewport,
+  replacing the placeholder Label. Volume/pan are pushed live to the engine via the new
+  `EngineHelpers::get/setTrackVolumeDb` + `get/setTrackPan` (which drive each track's
+  `VolumeAndPanPlugin`). Manual-rebuild model like ArrangeView (`setEdit`).
+- **Clip drag-to-move + bar snap + info hint** (`ArrangeView`) — horizontal clip drag commits via
+  `Clip::setStart(...)` and fires `onEditMutated`; snap-to-bar (default on, Ctrl bypasses);
+  one-line hint strip. The arrange agent also fixed a *latent pre-existing bug*: the full-width
+  `PlayheadComponent` (intercepts mouse) shadowed every clip, so clips received no mouse events —
+  fixed with a `hitTest` that only grabs the ±5px playhead band; empty-area clicks still scrub.
+- **WAV export** (`src/services/export/Exporter.{h,cpp}`, new) — `Exporter::renderEditToWav` renders
+  the whole edit to a 24-bit stereo WAV via the engine renderer. Wired to a new ControlBar
+  **Export** button → save-chooser → render, status via the `setStatusMessage` hold.
+
+Orchestrator integration: added both new `.cpp` to CMakeLists; swapped the `mixerPanel` Label for a
+`MixerView` in the view-slot with `setEdit` wired at ctor/rebind/swapProject; added the Export
+button + `onExport` to ControlBar and an `exportDialog()` (SafePointer-guarded, own FileChooser) to
+the shell.
+
+**Runtime verification status:** the build is definitive, but the headless playback self-test could
+NOT be cleanly run afterward because the audio environment is degraded — the Bose QC35 II
+disconnected (default → Realtek) and repeated launch/kill cycles during diagnosis left the WASAPI
+device contended, so `initialiseAudioForRecording` startup negotiation ballooned to 26–77 s and one
+run came back `playing=0` (device couldn't sustain playback). This is environmental, affects the
+committed baseline identically, and is unrelated to this wave's code (all new code is UI/service and
+never touches device init — `importedClip=1`/`numClipComponents=1` confirm the non-device path is
+fine). Re-run the self-test after reconnecting a stable audio device (or a reboot to clear the
+WASAPI lock); it passed at 26 s earlier this session on equivalent code. This re-confirms the
+standing hardening item: **open audio inputs lazily / off the message thread** so a slow capture
+device can't stall startup.
+
+## Build wave 3 — plugin hosting · mixer inserts/meters/master · file browser · clip inspector
+
+A third 4-agent file-disjoint wave (per-area devlogs: `plugins.md`, `mixer-fx.md`, `browser.md`,
+`detail.md`). **Integration build: 0 warnings, 0 errors on the first try** — including the complex
+plugin-hosting engine integration. Headless smoke test: the full shell + all four new components
+construct without crashing (`importedClip=1`, `numClipComponents=1`, `exit=0`); `playing=0` remains
+the degraded-device environmental issue above, not a code fault.
+
+- **Plugin hosting** (`src/engine/PluginHost.{h,cpp}` + `src/ui/plugins/PluginWindow.{h,cpp}`, new) —
+  `getAvailablePluginNames` (built-in effects: EQ, Compressor, Reverb, Delay, Chorus, Phaser, … +
+  any scanned externals), `addPluginToTrack` (inserts before the volume/level tail), `getTrackInserts`,
+  `removePlugin`. `PluginWindow::show` opens a floating editor — the external plugin's native editor,
+  or a generated parameter panel for built-ins (which have no native UI); windows auto-close when
+  their plugin/Edit goes away (`closeAll`).
+- **Mixer inserts + master + meters** (`MixerView`) — per-strip insert list (+ to add via the plugin
+  menu, click to open editor, remove), a fixed master strip on `edit.getMasterVolumePlugin()`, and
+  ~28 Hz peak meters reading each track's `LevelMeterPlugin` measurer (master-meter data hookup is
+  best-effort — only fed if the master chain already has a `LevelMeterPlugin`).
+- **Browser** (`src/ui/browser/BrowserView.{h,cpp}`, new) — a `FileTreeComponent` file browser for
+  the left region; double-click an audio file → `onImportFile` → import.
+- **Clip inspector** (`src/ui/detail/DetailView.{h,cpp}`, new) — the bottom drawer now shows the
+  selected clip (name, gain, mute, fades, position, larger waveform); holds the clip as a
+  `te::Clip::Ptr` so it can't dangle. Selecting a clip auto-opens the drawer.
+
+Orchestrator integration: registered the 4 new `.cpp` in CMakeLists; replaced the Browser + Detail
+placeholder Labels with the real `BrowserView`/`DetailView` (kept the `browserPanel` member name to
+reuse layout call-sites; `drawerPanel` → `detailView`); wired `onImportFile`, `onClipSelected →
+detailView.setClip` (auto-opens the drawer), and `detailView.onEditMutated → save`; and added
+`PluginWindow::closeAll()` to the dtor + `swapProject` (with `detailView.setClip(nullptr)`) so
+plugin editors and the inspector never outlive their Edit. `setupPlaceholders` became
+`setupStatusStrip` (no placeholders left to style).
+
+Three placeholder regions (Browser, Detail-drawer, Mixer) are now all real. Remaining roadmap
+headliners after this: external VST3/AU **scanning** UI (the host can already load what's in the
+known list), MIDI tracks + piano roll, automation, and metering on the master output node.

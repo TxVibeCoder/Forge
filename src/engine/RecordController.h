@@ -37,6 +37,11 @@ public:
         getLastError() describing why. */
     bool disarmTrack (te::Edit&, te::AudioTrack&);
 
+    /** True iff some (enabled) wave InputDeviceInstance currently targets `track` for recording.
+        This is the authoritative arm state held in the Edit, so the UI can re-derive a lane's
+        arm indicator after any rebuild instead of trusting a stale local flag. */
+    bool isTrackArmed (te::Edit&, te::AudioTrack&) const;
+
     /** Names of the engine-level wave input devices currently known (one per mono channel /
         stereo pair). Rescans first. Useful for diagnostics/logging/UI; empty means no capture
         channels are open (see getLastError() after an arm attempt for the likely reason). */

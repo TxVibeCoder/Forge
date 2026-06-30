@@ -30,9 +30,15 @@ juce_generate_juce_header(Forge)
 target_sources(Forge PRIVATE
     src/main.cpp
     src/services/files/ProjectSession.cpp
+    src/services/export/Exporter.cpp
     src/engine/RecordController.cpp
+    src/engine/PluginHost.cpp
     src/ui/transport/TransportBar.cpp
     src/ui/arrange/ArrangeView.cpp
+    src/ui/mixer/MixerView.cpp
+    src/ui/plugins/PluginWindow.cpp
+    src/ui/browser/BrowserView.cpp
+    src/ui/detail/DetailView.cpp
     src/ui/ControlBar.cpp)
 
 target_include_directories(Forge PRIVATE src)

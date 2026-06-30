@@ -25,7 +25,7 @@ public:
     void paint (juce::Graphics&) override;
 
     // Intent callbacks, wired by the shell.
-    std::function<void()> onNew, onOpen, onSave, onSaveAs, onImport, onAudioSettings;
+    std::function<void()> onNew, onOpen, onSave, onSaveAs, onImport, onExport, onAudioSettings;
     std::function<void()> onToggleBrowser, onToggleDrawer;
     std::function<void (int)> onViewMode;
 
@@ -37,7 +37,8 @@ private:
 
     juce::TextButton browserBtn { "Browser" };
     juce::TextButton newBtn { "New" }, openBtn { "Open" }, saveBtn { "Save" },
-                     saveAsBtn { "Save As" }, importBtn { "Import" }, audioBtn { "Audio" };
+                     saveAsBtn { "Save As" }, importBtn { "Import" }, exportBtn { "Export" },
+                     audioBtn { "Audio" };
     TransportBar transportBar;
     juce::TextButton arrangeBtn { "Arrange" }, mixBtn { "Mix" };
     juce::TextButton drawerBtn { "Editor" };

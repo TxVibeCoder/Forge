@@ -133,12 +133,11 @@ bool RecordController::disarmTrack (te::Edit& edit, te::AudioTrack& track)
 {
     lastError = {};
 
-    bool removedAny = false;
+    bool removedActive = false;
     juce::String lastRemoveError;
 
     // No need to allocate the context here: if it isn't allocated there are no input instances
-    // and therefore nothing armed, so the track is already disarmed. We only touch instances that
-    // actually target this track (mirrors the wave-only filtering in armFirstInputToTrack).
+    // and therefore nothing armed, so the track is already disarmed.
     for (auto* instance : edit.getAllInputDevices())
     {
         if (instance == nullptr)
@@ -147,22 +146,27 @@ bool RecordController::disarmTrack (te::Edit& edit, te::AudioTrack& track)
         if (instance->getInputDevice().getDeviceType() != te::InputDevice::waveDevice)
             continue;
 
-        if (! instance->getTargets().contains (track.itemID))
-            continue;
+        // IMPORTANT: do NOT gate the removal on getTargets().contains(...). getTargets() returns
+        // EMPTY for a currently-disabled input device even when a destination still targets this
+        // track, so gating on it would leave a stale target + recordEnabled flag behind that would
+        // silently re-arm the track if the device is later re-enabled. removeTarget() iterates the
+        // persisted destinations directly and is a safe no-op when nothing matches, so we call it
+        // unconditionally for every wave instance. getTargets() is used ONLY to decide whether a
+        // *live* (enabled) target was actually removed, i.e. whether the playback graph needs a
+        // restart — a disabled device is not in the active graph, so skipping the restart is fine.
+        const bool wasActiveTarget = instance->getTargets().contains (track.itemID);
 
-        // Clear record-enable first (while the target still exists), then drop the target so the
-        // lane is fully disconnected from the input.
         instance->setRecordingEnabled (track.itemID, false);
 
         auto result = instance->removeTarget (track.itemID, &edit.getUndoManager());
 
-        if (result.wasOk())
-            removedAny = true;
-        else
+        if (! result.wasOk())
             lastRemoveError = result.getErrorMessage();
+        else if (wasActiveTarget)
+            removedActive = true;
     }
 
-    if (removedAny)
+    if (removedActive)
         edit.restartPlayback();
 
     if (lastRemoveError.isNotEmpty())
@@ -172,4 +176,15 @@ bool RecordController::disarmTrack (te::Edit& edit, te::AudioTrack& track)
     }
 
     return true;
+}
+
+bool RecordController::isTrackArmed (te::Edit& edit, te::AudioTrack& track) const
+{
+    for (auto* instance : edit.getAllInputDevices())
+        if (instance != nullptr
+            && instance->getInputDevice().getDeviceType() == te::InputDevice::waveDevice
+            && instance->getTargets().contains (track.itemID))
+            return true;
+
+    return false;
 }

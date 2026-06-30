@@ -27,6 +27,7 @@ namespace ArrangeLayout
     constexpr int laneH   = 76;    // track lane height
     constexpr int gap     = 4;     // vertical gap between lanes
     constexpr int rulerH  = 22;    // bars|beats ruler strip height (top of clip area)
+    constexpr int hintH   = 20;    // one-line info/help strip across the very bottom
 }
 
 //==============================================================================
@@ -81,6 +82,8 @@ public:
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp   (const juce::MouseEvent&) override;
 
     te::Clip& getClip() { return clip; }
 
@@ -92,11 +95,33 @@ public:
     /** Invoked on right-click; param is the screen-space event for menu placement. */
     std::function<void (AudioClipComponent&, const juce::MouseEvent&)> onRightClicked;
 
+    /** Invoked at the START of a horizontal drag-to-move (after the move threshold is crossed),
+        so the owner can select this clip and surface the drag hint. */
+    std::function<void (AudioClipComponent&)> onDragStarted;
+    /** Invoked once on mouseUp after a drag committed a new start time to the engine clip; the
+        owner persists (onEditMutated) and re-lays-out. Not fired for a plain click. */
+    std::function<void (AudioClipComponent&)> onDragCommitted;
+    /** Maps a candidate clip-start time to a snapped time. Set by the owner; returns the input
+        unchanged when snapping is disabled. Only consulted when the drag is NOT bypassing snap.
+        Returns a time >= 0 (the owner clamps); never round-trips a negative time. */
+    std::function<te::TimePosition (te::TimePosition)> snapStartTime;
+
 private:
+    /** Width in px of the clip area this clip is positioned within (parent width minus the track
+        header). Falls back to the parent width when no parent is attached. */
+    int clipAreaWidth() const;
+
     TimelineView& view;
     te::Clip& clip;
     std::unique_ptr<te::SmartThumbnail> thumbnail;
     bool selected = false;
+
+    // Drag-to-move state. dragging stays false until the pointer moves past a small threshold so a
+    // plain click never nudges the clip. dragOriginStart is the clip's start at mouseDown; the live
+    // bounds are recomputed from it + the pixel delta each mouseDrag.
+    bool dragging = false;
+    int  dragAnchorX = 0;                                  // mouseDown x in PARENT (lane) space (stable as we move)
+    te::TimePosition dragOriginStart {};                  // clip start captured at mouseDown
 
     void drawWaveformWindow (juce::Graphics&, juce::Rectangle<int> area,
                              double sourceStartSecs, double sourceLenSecs, double speed);
@@ -125,21 +150,31 @@ public:
     /** Sets the track-selected visual highlight on the header. */
     void setTrackSelected (bool shouldBeSelected);
 
-    /** Sets the visual arm state (e.g. to revert an optimistic toggle when real arming failed). */
-    void setArmed (bool shouldBeArmed);
-
     void refreshControlStates();
 
     //==============================================================================
     // Callbacks bubbled up to ArrangeView (set during rebuild()).
     std::function<void (AudioClipComponent&)> onClipClicked;
     std::function<void (AudioClipComponent&, const juce::MouseEvent&)> onClipRightClicked;
+    /** A clip on this lane began a drag-to-move. */
+    std::function<void (AudioClipComponent&)> onClipDragStarted;
+    /** A clip on this lane committed a new start time (drag finished). */
+    std::function<void (AudioClipComponent&)> onClipDragCommitted;
+    /** Snap a candidate clip-start time (set by ArrangeView; identity when snap is off). */
+    std::function<te::TimePosition (te::TimePosition)> snapStartTime;
     std::function<void (TrackLaneComponent&)> onHeaderClicked;
     /** Left-click on the empty clip area of this lane (not a clip, not the header). */
     std::function<void (TrackLaneComponent&)> onLaneAreaClicked;
+    /** Left-click on the empty clip area, with the clip-area-relative x in px and the area width, so
+        the owner can scrub the transport there. Lets the lanes sit ABOVE the playhead overlay (so
+        clips are clickable/draggable) while empty-area clicks still move the playhead. */
+    std::function<void (int clipAreaX, int clipAreaWidth)> onLaneAreaScrub;
     std::function<void (TrackLaneComponent&, const juce::MouseEvent&)> onHeaderRightClicked;
     /** Reflects/toggles the visual arm state; real input arming wired by the record path. */
     std::function<void (te::AudioTrack&, bool)> onArmToggled;
+    /** Authoritative arm state for this track, queried from the engine on every refresh so the
+        R button never relies on a stale local flag (set by ArrangeView during rebuild). */
+    std::function<bool (te::AudioTrack&)> queryArmed;
     /** Invoked after a control (mute/solo/colour) mutates the Edit, so the shell can save. */
     std::function<void()> onEditMutated;
 
@@ -167,6 +202,11 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp   (const juce::MouseEvent&) override;
+
+    /** Only the thin band around the playhead line grabs the mouse, so clicks/drags elsewhere in
+        the clip area fall through to the clips (drag-to-move) and lanes (click-to-scrub) beneath.
+        Without this the full-width overlay shadowed every clip and clips could never be dragged. */
+    bool hitTest (int x, int y) override;
 
     int getCurrentX() const { return lastX; }
 
@@ -199,9 +239,15 @@ public:
     int getNumClipComponentsOnTrack0() const;
     int getPlayheadX() const { return playhead != nullptr ? playhead->getCurrentX() : -1; }
 
-    /** Pushes the real arm state for a track's lane back into the view (e.g. after the record
-        path accepts or rejects an arm request). No-op if the track has no lane. */
-    void setTrackArmState (te::AudioTrack& track, bool armed);
+    /** Enables/disables bar-snap for clip drag-to-move. Default ON. The shell can wire this to a
+        toolbar toggle (see devlog); holding Ctrl/Cmd during a drag always bypasses snap regardless. */
+    void setSnapEnabled (bool shouldSnap);
+    bool isSnapEnabled() const { return snapEnabled; }
+
+    /** Re-derives every lane's control state (incl. the R arm indicator) from the engine via the
+        queryArmed callback. Call after any arm/disarm so a stolen single input clears the other
+        lane's indicator, and after rebuild() so arm survives structural edits. */
+    void refreshArmStates();
 
     //==============================================================================
     // Optional callbacks the shell can set to drive Inspector / persistence.
@@ -212,6 +258,9 @@ public:
     std::function<void()> onEditMutated;
     /** Reflects/toggles a lane's visual arm state; real input arming wired by record path. */
     std::function<void (te::AudioTrack&, bool)> onArmToggled;
+    /** Authoritative per-track arm query (engine truth), set by the shell. Used to re-derive every
+        lane's R indicator on rebuild() and after each arm/disarm. */
+    std::function<bool (te::AudioTrack&)> isTrackArmed;
 
 private:
     void selectClip (AudioClipComponent*);
@@ -229,6 +278,14 @@ private:
 
     void notifyEditMutated();
 
+    /** Snaps a candidate clip-start time to the nearest bar via edit->tempoSequence. Returns the
+        input unchanged when snapping is off or there is no Edit. Clamps to >= 0 and never round-trips
+        a negative time (which can trip engine asserts). */
+    te::TimePosition snapToBar (te::TimePosition) const;
+
+    /** Sets the one-line hint text and repaints the hint strip. */
+    void setHint (const juce::String&);
+
     TimelineView& view;
     te::Edit* edit = nullptr;
     juce::OwnedArray<TrackLaneComponent> lanes;
@@ -237,6 +294,9 @@ private:
 
     te::Clip* selectedClip = nullptr;
     te::Track* selectedTrack = nullptr;
+
+    bool snapEnabled = true;                 // bar-snap default ON; shell-toggleable seam
+    juce::String hintText;                   // current one-line hint shown in the bottom strip
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ArrangeView)
 };

@@ -13,9 +13,14 @@
 
 #include <JuceHeader.h>
 #include "services/files/ProjectSession.h"
+#include "services/export/Exporter.h"
 #include "engine/EngineHelpers.h"
 #include "engine/RecordController.h"
 #include "ui/arrange/ArrangeView.h"
+#include "ui/mixer/MixerView.h"
+#include "ui/plugins/PluginWindow.h"
+#include "ui/browser/BrowserView.h"
+#include "ui/detail/DetailView.h"
 #include "ui/ControlBar.h"
 #include "ui/ForgeLookAndFeel.h"
 
@@ -157,13 +162,13 @@ public:
         editLoaded = session.openOrCreate (projectFile);
 
         setupControlBar();
-        setupPlaceholders();
+        setupStatusStrip();
 
         addAndMakeVisible (controlBar);
         addAndMakeVisible (arrangeView);
-        addAndMakeVisible (mixerPanel);
+        addAndMakeVisible (mixerView);
         addAndMakeVisible (browserPanel);
-        addAndMakeVisible (drawerPanel);
+        addAndMakeVisible (detailView);
         addAndMakeVisible (browserResizer);
         addAndMakeVisible (drawerResizer);
         addAndMakeVisible (statusLabel);
@@ -178,7 +183,9 @@ public:
             importTestToneAndPlay();
 
         controlBar.setEdit (session.getEdit());
-        arrangeView.setEdit (session.getEdit());
+
+        // Wire the arrange-view callbacks BEFORE setEdit, so the first rebuild() can already query
+        // engine arm state when it builds the lanes.
 
         // Persist structural edits made via the arrange view's context menus / lane controls
         // (add/delete/rename track, delete clip, colour, mute/solo). ArrangeView fires this after
@@ -186,26 +193,56 @@ public:
         // -> Inspector are left unwired until that feature exists — see docs/devlog/integration.md.)
         arrangeView.onEditMutated = [this] { session.save(); };
 
-        // The lane R button toggles its visual state optimistically, then asks us to arm/disarm
-        // the real input. If the record path rejects it (e.g. no capture device on this box), push
-        // the true state back so the lane doesn't show a misleading "armed" tint, and report why.
-        arrangeView.onArmToggled = [this] (te::AudioTrack& track, bool arm)
+        // Authoritative arm state lives in the engine (the InputDeviceInstance targets), so the
+        // lanes re-derive their R indicator from this on every rebuild and after each arm/disarm
+        // rather than trusting a transient local flag that resets on rebuild.
+        arrangeView.isTrackArmed = [this] (te::AudioTrack& t)
         {
             auto* ed = session.getEdit();
-            if (ed == nullptr)
-                return;
+            return ed != nullptr && recorder.isTrackArmed (*ed, t);
+        };
 
-            const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
-                                : recorder.disarmTrack (*ed, track);
-
-            if (! ok)
+        // The lane R button toggles optimistically, then asks us to arm/disarm the real input.
+        // Afterwards we re-derive EVERY lane's indicator from engine truth: that corrects a
+        // rejected toggle (e.g. no capture device on this box), and clears a previously-armed lane
+        // whose single physical input was just stolen by arming another track.
+        arrangeView.onArmToggled = [this] (te::AudioTrack& track, bool arm)
+        {
+            if (auto* ed = session.getEdit())
             {
-                arrangeView.setTrackArmState (track, ! arm);   // revert the optimistic toggle
-                statusLabel.setText ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError(),
-                                     dontSendNotification);
+                const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
+                                    : recorder.disarmTrack (*ed, track);
+
+                if (! ok)
+                    setStatusMessage ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+
+                arrangeView.refreshArmStates();
             }
         };
 
+        // Selecting a clip in the arrange view drives the bottom Detail-drawer inspector and pops
+        // the drawer open; edits made there are persisted.
+        arrangeView.onClipSelected = [this] (te::Clip* c)
+        {
+            detailView.setClip (c);
+            if (c != nullptr && ! drawerVisible)
+            {
+                drawerVisible = true;
+                resized();
+            }
+        };
+        detailView.onEditMutated = [this] { session.save(); };
+
+        // Double-clicking an audio file in the Browser imports it onto the project.
+        browserPanel.onImportFile = [this] (const File& f)
+        {
+            clip = session.importAudioFile (f, te::TimePosition());
+            session.save();
+            rebind();
+        };
+
+        arrangeView.setEdit (session.getEdit());
+        mixerView.setEdit (session.getEdit());
         setViewMode (ViewMode::Arrange);
 
         setSize (1040, 620);
@@ -223,6 +260,8 @@ public:
 
     ~MainComponent() override
     {
+        PluginWindow::closeAll();   // close any floating plugin editors before the Edit tears down
+
         if (auto* t = session.getTransport())
             t->stop (false, false);
 
@@ -255,19 +294,19 @@ public:
         auto centre = work;
 
         // Detail-drawer (bottom): resizer hugging its top edge, then the panel below it.
-        drawerPanel.setVisible (drawerVisible);
+        detailView.setVisible (drawerVisible);
         drawerResizer.setVisible (drawerVisible);
         if (drawerVisible)
         {
             const int h = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
-            drawerPanel.setBounds (centre.removeFromBottom (h));
+            detailView.setBounds (centre.removeFromBottom (h));
             drawerResizer.setBounds (centre.removeFromBottom (resizerThickness));
         }
 
         arrangeView.setVisible (viewMode == ViewMode::Arrange);
-        mixerPanel.setVisible (viewMode == ViewMode::Mixer);
+        mixerView.setVisible (viewMode == ViewMode::Mixer);
         arrangeView.setBounds (centre);
-        mixerPanel.setBounds (centre);
+        mixerView.setBounds (centre);
     }
 
 private:
@@ -290,12 +329,15 @@ private:
     ControlBar controlBar;
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
-    Label browserPanel, drawerPanel, mixerPanel;
+    MixerView mixerView;
+    BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
+    DetailView  detailView;     // bottom drawer: clip inspector
     Label statusLabel;
+    juce::uint32 statusHoldUntilMs = 0;   // transient status messages survive the 5Hz refresh until this time
 
-    // Each async file dialog owns its own FileChooser so open/save-as can't stomp each other.
+    // Each async file dialog owns its own FileChooser so open/save-as/export can't stomp each other.
     // (Import uses EngineHelpers::browseForAudioFile, which manages its own shared chooser.)
-    std::unique_ptr<FileChooser> openChooser, saveChooser;
+    std::unique_ptr<FileChooser> openChooser, saveChooser, exportChooser;
     TooltipWindow tooltipWindow;
 
     ViewMode viewMode = ViewMode::Arrange;
@@ -318,26 +360,17 @@ private:
         controlBar.onSave          = [this] { session.save(); };
         controlBar.onSaveAs        = [this] { saveAsDialog(); };
         controlBar.onImport        = [this] { importDialog(); };
+        controlBar.onExport        = [this] { exportDialog(); };
         controlBar.onAudioSettings = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         controlBar.onToggleBrowser = [this] { browserVisible = ! browserVisible; resized(); };
         controlBar.onToggleDrawer  = [this] { drawerVisible  = ! drawerVisible;  resized(); };
         controlBar.onViewMode      = [this] (int m) { setViewMode (m == 1 ? ViewMode::Mixer : ViewMode::Arrange); };
     }
 
-    void setupPlaceholders()
+    void setupStatusStrip()
     {
-        auto style = [] (Label& l, const String& text)
-        {
-            l.setText (text, dontSendNotification);
-            l.setJustificationType (Justification::centred);
-            l.setColour (Label::backgroundColourId, Colour (ForgeLookAndFeel::panelBg));
-            l.setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
-        };
-
-        style (browserPanel, "Browser\n(files, instruments, plug-ins) — Phase 3");
-        style (drawerPanel,  "Detail editor — double-click a clip\n(audio editor, then piano-roll) — Phase 4");
-        style (mixerPanel,   "Mixer view\n(channel strips, sends, meters) — Phase 5");
-
+        // browserPanel (BrowserView), detailView (DetailView) and mixerView are real components now
+        // and paint their own empty state — no placeholder styling needed.
         statusLabel.setColour (Label::backgroundColourId, Colour (ForgeLookAndFeel::panelBg));
         statusLabel.setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
         statusLabel.setJustificationType (Justification::centredLeft);
@@ -446,8 +479,7 @@ private:
                                       if (self->session.saveAs (f))
                                           self->rebind();
                                       else
-                                          self->statusLabel.setText ("Save As failed: " + f.getFullPathName(),
-                                                                     dontSendNotification);
+                                          self->setStatusMessage ("Save As failed: " + f.getFullPathName());
                                   });
     }
 
@@ -466,6 +498,43 @@ private:
             self->session.save();
             self->rebind();
         });
+    }
+
+    void exportDialog()
+    {
+        if (session.getEdit() == nullptr)
+            return;
+
+        const auto suggested = File::getSpecialLocation (File::userMusicDirectory)
+                                   .getChildFile (session.getEditFile().getFileNameWithoutExtension() + ".wav");
+
+        exportChooser = std::make_unique<FileChooser> ("Export to WAV...", suggested, "*.wav");
+        Component::SafePointer<MainComponent> safeThis (this);
+        exportChooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
+                                    [safeThis] (const FileChooser& fc)
+                                    {
+                                        auto* self = safeThis.getComponent();
+                                        if (self == nullptr)
+                                            return;
+
+                                        auto f = fc.getResult();
+                                        if (f == File())
+                                            return;
+                                        if (f.getFileExtension().isEmpty())
+                                            f = f.withFileExtension ("wav");
+
+                                        auto* edit = self->session.getEdit();
+                                        if (edit == nullptr)
+                                            return;
+
+                                        self->setStatusMessage ("Exporting " + f.getFileName() + "...");
+
+                                        String err;
+                                        const bool ok = Exporter::renderEditToWav (*edit, f, err);
+
+                                        self->setStatusMessage (ok ? "Exported " + f.getFileName()
+                                                                   : "Export failed: " + err);
+                                    });
     }
 
     void importTestToneAndPlay()
@@ -590,8 +659,11 @@ private:
     //==============================================================================
     void swapProject (std::function<void()> doSwap)
     {
+        PluginWindow::closeAll();    // plugin editors belong to the outgoing Edit
+        detailView.setClip (nullptr);
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
+        mixerView.setEdit (nullptr);
         doSwap();
         clip = nullptr;
         rebind();
@@ -601,6 +673,7 @@ private:
     {
         controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
+        mixerView.setEdit (session.getEdit());
         repaint();
     }
 
@@ -614,6 +687,15 @@ private:
         return "No audio device open";
     }
 
+    // Show a transient message in the status strip and shield it from the periodic 5Hz refresh
+    // for a few seconds, so arm/disarm/save errors are actually readable instead of being wiped
+    // within one 200ms tick.
+    void setStatusMessage (const String& message)
+    {
+        statusLabel.setText (message, dontSendNotification);
+        statusHoldUntilMs = Time::getMillisecondCounter() + 4000;
+    }
+
     void timerCallback() override
     {
         if (mode == SelfTest::record)
@@ -625,12 +707,14 @@ private:
         auto* t = session.getTransport();
         const bool playing = t != nullptr && t->isPlaying();
 
-        statusLabel.setText (session.getEditFile().getFileName()
-                                 + "   ·   " + String (session.getNumAudioTracks()) + " track"
-                                 + (session.getNumAudioTracks() == 1 ? "" : "s")
-                                 + "   ·   " + describeAudioState()
-                                 + (playing ? "   ·   playing" : ""),
-                             dontSendNotification);
+        // Don't clobber a recently-set transient message (e.g. "Arm failed: ...").
+        if (Time::getMillisecondCounter() >= statusHoldUntilMs)
+            statusLabel.setText (session.getEditFile().getFileName()
+                                     + "   ·   " + String (session.getNumAudioTracks()) + " track"
+                                     + (session.getNumAudioTracks() == 1 ? "" : "s")
+                                     + "   ·   " + describeAudioState()
+                                     + (playing ? "   ·   playing" : ""),
+                                 dontSendNotification);
 
         if (mode == SelfTest::playback)
         {

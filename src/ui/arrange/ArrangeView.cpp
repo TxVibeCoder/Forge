@@ -63,16 +63,35 @@ void TimeRulerComponent::paint (Graphics& g)
 
     g.setFont (Font (FontOptions (11.0f)));
 
+    // Detect bar starts by a change in the integer `bars` field, NOT by getWholeBeats()==0 on a
+    // value round-tripped through toTime()/toBarsAndBeats(). toTime uses secondsPerBeat while
+    // toBarsAndBeats uses the separately-stored beatsPerSecond reciprocal, so for non-exact tempos
+    // a true bar boundary can come back as N-epsilon, making getWholeBeats() return numerator-1
+    // and dropping the bar line/number. `bars` = floor(beatsSinceFirstBar / numerator) is robust
+    // because the epsilon never crosses an integer boundary there. A sentinel seed means the very
+    // first visible beat is classified on its own merits below (we never round-trip a negative
+    // beat/time, which can trip engine asserts).
+    bool havePrev = false;
+    int  prevBars = 0;
+
     for (int beat = firstBeat; beat <= lastBeat; ++beat)
     {
-        const auto t = seq.toTime (te::BeatPosition::fromBeats ((double) beat));
+        const auto t  = seq.toTime (te::BeatPosition::fromBeats ((double) beat));
+        const auto bb = seq.toBarsAndBeats (t);
+
+        // Bar start = the integer bar index changed from the previous beat. For the first beat we
+        // examine (no previous bar yet) fall back to the position-within-bar being at the start,
+        // with a small tolerance to absorb the round-trip epsilon.
+        const bool isBarStart = havePrev
+                                  ? (bb.bars != prevBars)
+                                  : (bb.getWholeBeats() == 0 || bb.getFractionalBeats().inBeats() > 0.999);
+        prevBars = bb.bars;
+        havePrev = true;
+
         const int x = view.timeToX (t, w);
 
         if (x < 0 || x > w)
             continue;
-
-        const auto bb = seq.toBarsAndBeats (t);
-        const bool isBarStart = bb.getWholeBeats() == 0;
 
         if (isBarStart)
         {
@@ -113,18 +132,110 @@ void AudioClipComponent::setSelected (bool shouldBeSelected)
     }
 }
 
+int AudioClipComponent::clipAreaWidth() const
+{
+    // The clip is a child of TrackLaneComponent; the clip area is the parent width minus the fixed
+    // track-header strip on the left. (resized() positions clips with exactly this width.)
+    if (auto* parent = getParentComponent())
+        return jmax (0, parent->getWidth() - ArrangeLayout::headerW);
+
+    return jmax (0, getWidth());
+}
+
 void AudioClipComponent::mouseDown (const MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
     {
         if (onRightClicked != nullptr)
             onRightClicked (*this, e);
+
+        return;
     }
-    else
+
+    // Left button: select immediately, and arm a potential drag-to-move. dragging only becomes
+    // true once the pointer crosses the move threshold in mouseDrag, so a plain click never nudges.
+    // The drag anchor is captured in PARENT (lane) coordinates: because the live drag moves this
+    // component, an anchor in this component's own space would shift under us each frame and the
+    // delta would jitter. The parent doesn't move, so a parent-relative anchor stays stable.
+    if (onClicked != nullptr)
+        onClicked (*this);
+
+    dragging        = false;
+    dragAnchorX     = (getParentComponent() != nullptr) ? e.getEventRelativeTo (getParentComponent()).x : e.x;
+    dragOriginStart = clip.getPosition().getStart();
+}
+
+void AudioClipComponent::mouseDrag (const MouseEvent& e)
+{
+    if (e.mods.isPopupMenu())
+        return;
+
+    // Parent-relative pointer x (stable as this component moves during the drag).
+    const int pointerX = (getParentComponent() != nullptr) ? e.getEventRelativeTo (getParentComponent()).x : e.x;
+
+    if (! dragging)
     {
-        if (onClicked != nullptr)
-            onClicked (*this);
+        // Require a small horizontal movement before treating this as a move (mirrors standard
+        // DAW behaviour and avoids accidental nudges on a click).
+        if (std::abs (pointerX - dragAnchorX) < 3)
+            return;
+
+        dragging = true;
+
+        if (onDragStarted != nullptr)
+            onDragStarted (*this);
     }
+
+    const int areaW = clipAreaWidth();
+    if (areaW <= 0)
+        return;
+
+    // Pixel delta -> time delta via the shared TimelineView, then derive a candidate start.
+    const int dxPixels = pointerX - dragAnchorX;
+    const auto delta   = view.xToTime (dxPixels, areaW) - view.xToTime (0, areaW);
+    auto candidateStart = dragOriginStart + delta;
+
+    // Snap the live position too (unless Ctrl/Cmd bypasses it) so the clip lands visibly on bars.
+    if (! e.mods.isCommandDown() && snapStartTime != nullptr)
+        candidateStart = snapStartTime (candidateStart);
+
+    if (candidateStart < te::TimePosition())
+        candidateStart = te::TimePosition();
+
+    // Move the component live (horizontal only). Bounds are recomputed from the candidate start so
+    // the live preview matches exactly where the commit will land.
+    const int newLeft = ArrangeLayout::headerW + view.timeToX (candidateStart, areaW);
+    setTopLeftPosition (newLeft, getY());
+}
+
+void AudioClipComponent::mouseUp (const MouseEvent& e)
+{
+    if (! dragging)
+        return;
+
+    dragging = false;
+
+    const int areaW = clipAreaWidth();
+    if (areaW <= 0)
+        return;
+
+    const int pointerX = (getParentComponent() != nullptr) ? e.getEventRelativeTo (getParentComponent()).x : e.x;
+    const int dxPixels = pointerX - dragAnchorX;
+    const auto delta   = view.xToTime (dxPixels, areaW) - view.xToTime (0, areaW);
+    auto newStart      = dragOriginStart + delta;
+
+    if (! e.mods.isCommandDown() && snapStartTime != nullptr)
+        newStart = snapStartTime (newStart);
+
+    if (newStart < te::TimePosition())
+        newStart = te::TimePosition();
+
+    // Commit to the engine clip: keepLength=true moves the clip horizontally without resizing it;
+    // preserveSync=false matches a plain timeline move (source material shifts with the clip).
+    clip.setStart (newStart, false, true);
+
+    if (onDragCommitted != nullptr)
+        onDragCommitted (*this);
 }
 
 void AudioClipComponent::drawWaveformWindow (Graphics& g, Rectangle<int> area,
@@ -265,16 +376,16 @@ TrackLaneComponent::TrackLaneComponent (TimelineView& v, te::AudioTrack& t)
 
 void TrackLaneComponent::refreshControlStates()
 {
+    // Derive ALL three indicators from engine truth so they survive a rebuild. Arm is queried
+    // from the engine (queryArmed) exactly like mute/solo are read from the track — without this,
+    // arm was a transient local bool that reset to false on every rebuild() while the input stayed
+    // armed, desyncing the UI from the engine.
+    if (queryArmed != nullptr)
+        armed = queryArmed (track);
+
     muteButton.setToggleState (track.isMuted (false), dontSendNotification);
     soloButton.setToggleState (track.isSolo (false),  dontSendNotification);
     armButton.setToggleState  (armed,                 dontSendNotification);
-}
-
-void TrackLaneComponent::setArmed (bool shouldBeArmed)
-{
-    armed = shouldBeArmed;
-    armButton.setToggleState (armed, dontSendNotification);
-    repaint();
 }
 
 void TrackLaneComponent::setSelectedClip (te::Clip* clip)
@@ -312,6 +423,24 @@ void TrackLaneComponent::rebuildClips()
                 onClipRightClicked (clicked, e);
         };
 
+        cc->onDragStarted = [this] (AudioClipComponent& dragged)
+        {
+            if (onClipDragStarted != nullptr)
+                onClipDragStarted (dragged);
+        };
+
+        cc->onDragCommitted = [this] (AudioClipComponent& dragged)
+        {
+            if (onClipDragCommitted != nullptr)
+                onClipDragCommitted (dragged);
+        };
+
+        // Forward to ArrangeView's snap helper (identity when snapping is off).
+        cc->snapStartTime = [this] (te::TimePosition t)
+        {
+            return snapStartTime != nullptr ? snapStartTime (t) : t;
+        };
+
         addAndMakeVisible (cc);
     }
 
@@ -340,9 +469,14 @@ void TrackLaneComponent::mouseDown (const MouseEvent& e)
     else
     {
         // Click in the empty clip area (a child clip would have consumed the event) clears
-        // the current selection.
+        // the current selection, then scrubs the transport to the clicked time (preserving the
+        // old playhead-overlay scrub behaviour now that lanes sit above the playhead so clips
+        // remain clickable/draggable).
         if (onLaneAreaClicked != nullptr)
             onLaneAreaClicked (*this);
+
+        if (onLaneAreaScrub != nullptr)
+            onLaneAreaScrub (e.x - headerW, jmax (0, getWidth() - headerW));
     }
 }
 
@@ -441,6 +575,15 @@ void PlayheadComponent::timerCallback()
     }
 }
 
+bool PlayheadComponent::hitTest (int x, int)
+{
+    // Grab the mouse only within a few px of the current playhead line. Everywhere else the overlay
+    // is transparent to clicks so the clips (drag-to-move) and lanes (click-to-scrub) underneath
+    // receive the event. ~5px each side gives a comfortable grab target without shadowing clips.
+    const int playheadX = view.timeToX (transport.getPosition(), getWidth());
+    return std::abs (x - playheadX) <= 5;
+}
+
 void PlayheadComponent::mouseDown (const MouseEvent& e)
 {
     transport.setUserDragging (true);
@@ -504,6 +647,28 @@ void ArrangeView::rebuild()
                 showClipContextMenu (cc, e);
             };
 
+            lane->onClipDragStarted = [this] (AudioClipComponent& cc)
+            {
+                selectClip (&cc);
+                setHint (snapEnabled ? "Moving clip - snapping to bars - hold Ctrl to bypass snap"
+                                     : "Moving clip - snap off");
+            };
+
+            lane->onClipDragCommitted = [this] (AudioClipComponent&)
+            {
+                // The clip's start was committed to the engine; persist, then re-lay-out every lane
+                // DIRECTLY so each clip's bounds are re-derived from the authoritative engine
+                // position. (ArrangeView::resized() would skip lanes whose own bounds are unchanged,
+                // which is the case here, so call the lane resized() ourselves.)
+                notifyEditMutated();
+                for (auto* l : lanes)
+                    l->resized();
+                setHint ("Drag a clip to move it - hold Ctrl to bypass snap");
+            };
+
+            // Per-lane snap seam -> ArrangeView's bar-snap helper (honours snapEnabled).
+            lane->snapStartTime = [this] (te::TimePosition t) { return snapToBar (t); };
+
             lane->onHeaderClicked = [this] (TrackLaneComponent& l)
             {
                 selectTrack (&l);
@@ -512,6 +677,14 @@ void ArrangeView::rebuild()
             lane->onLaneAreaClicked = [this] (TrackLaneComponent&)
             {
                 clearSelection();
+            };
+
+            // Empty-area click scrubs the transport (the lanes sit above the playhead overlay so
+            // clips stay clickable/draggable; this keeps the old click-to-scrub behaviour).
+            lane->onLaneAreaScrub = [this] (int clipAreaX, int clipAreaW)
+            {
+                if (edit != nullptr && clipAreaW > 0)
+                    edit->getTransport().setPosition (view.xToTime (clipAreaX, clipAreaW));
             };
 
             lane->onHeaderRightClicked = [this] (TrackLaneComponent& l, const MouseEvent& e)
@@ -526,14 +699,23 @@ void ArrangeView::rebuild()
                     onArmToggled (t, shouldArm);
             };
 
+            lane->queryArmed = isTrackArmed;   // engine-truth arm state, applied below + on refresh
+
             lane->onEditMutated = [this] { notifyEditMutated(); };
 
             addAndMakeVisible (lane);
+
+            // The lane ctor ran refreshControlStates() before queryArmed was wired; re-derive now
+            // so a track that is still armed in the engine shows armed immediately after rebuild().
+            lane->refreshControlStates();
         }
 
         playhead = std::make_unique<PlayheadComponent> (view, edit->getTransport());
         addAndMakeVisible (*playhead);
     }
+
+    hintText = lanes.isEmpty() ? juce::String()
+                               : juce::String ("Drag a clip to move it - hold Ctrl to bypass snap");
 
     resized();
 }
@@ -545,6 +727,9 @@ void ArrangeView::resized()
     if (ruler != nullptr)
         ruler->setBounds (headerW, 0, jmax (0, getWidth() - headerW), rulerH);
 
+    // Reserve a one-line hint strip across the very bottom; the playhead overlay stops above it.
+    const int laneAreaBottom = jmax (rulerH, getHeight() - hintH);
+
     int y = rulerH;
     for (auto* lane : lanes)
     {
@@ -555,18 +740,32 @@ void ArrangeView::resized()
     if (playhead != nullptr)
         playhead->setBounds (headerW, rulerH,
                              jmax (0, getWidth() - headerW),
-                             jmax (y - rulerH, getHeight() - rulerH));
+                             jmax (y - rulerH, laneAreaBottom - rulerH));
 }
 
 void ArrangeView::paint (Graphics& g)
 {
+    using namespace ArrangeLayout;
+
     g.fillAll (Colour (ForgeLookAndFeel::shellBg));
 
     if (lanes.isEmpty())
     {
         g.setColour (Colour (ForgeLookAndFeel::textSec));
-        g.drawText ("No tracks — import audio to begin", getLocalBounds(), Justification::centred);
+        g.drawText ("No tracks — import audio to begin",
+                    getLocalBounds().withTrimmedBottom (hintH), Justification::centred);
     }
+
+    // Info/help strip across the very bottom: a themed one-line hint about clip interactions.
+    auto hint = getLocalBounds().removeFromBottom (hintH);
+    g.setColour (Colour (ForgeLookAndFeel::panelBg));
+    g.fillRect (hint);
+    g.setColour (Colour (ForgeLookAndFeel::hairline));
+    g.fillRect (hint.getX(), hint.getY(), hint.getWidth(), 1);
+
+    g.setColour (Colour (ForgeLookAndFeel::textSec));
+    g.setFont (Font (FontOptions (12.0f)));
+    g.drawText (hintText, hint.withTrimmedLeft (8), Justification::centredLeft, true);
 }
 
 int ArrangeView::getNumClipComponentsOnTrack0() const
@@ -574,14 +773,10 @@ int ArrangeView::getNumClipComponentsOnTrack0() const
     return lanes.isEmpty() ? 0 : lanes.getFirst()->getNumClipComponents();
 }
 
-void ArrangeView::setTrackArmState (te::AudioTrack& track, bool armed)
+void ArrangeView::refreshArmStates()
 {
     for (auto* lane : lanes)
-        if (&lane->getTrack() == &track)
-        {
-            lane->setArmed (armed);
-            return;
-        }
+        lane->refreshControlStates();
 }
 
 //==============================================================================
@@ -634,6 +829,52 @@ void ArrangeView::notifyEditMutated()
 {
     if (onEditMutated != nullptr)
         onEditMutated();
+}
+
+void ArrangeView::setSnapEnabled (bool shouldSnap)
+{
+    snapEnabled = shouldSnap;
+}
+
+void ArrangeView::setHint (const String& text)
+{
+    if (hintText != text)
+    {
+        hintText = text;
+        repaint (getLocalBounds().removeFromBottom (ArrangeLayout::hintH));
+    }
+}
+
+te::TimePosition ArrangeView::snapToBar (te::TimePosition t) const
+{
+    // Snap a candidate clip-start to the nearest BAR. Mirrors the ruler's robust idiom: ask the
+    // TempoSequence which bar/beat the time lands on, round to the nearest whole bar by the
+    // fraction of the bar already elapsed, then convert that bar back to a time. We never
+    // round-trip a negative time/beat (which can trip engine asserts) — negatives are clamped to 0.
+    if (! snapEnabled || edit == nullptr)
+        return t;
+
+    if (t <= te::TimePosition())
+        return te::TimePosition();
+
+    auto& seq = edit->tempoSequence;
+    const auto bb = seq.toBarsAndBeats (t);
+
+    // bb.beats is the TOTAL beats elapsed into the current bar (whole + fractional combined), and
+    // numerator is that bar's beats-per-bar. fractionOfBar in [0, 1) tells us whether to round down
+    // to this bar or up to the next.
+    const int    numerator     = jmax (1, bb.numerator);
+    const double fractionOfBar = bb.beats.inBeats() / (double) numerator;
+
+    int nearestBar = bb.bars + (int) std::lround (fractionOfBar);
+    if (nearestBar < 0)
+        nearestBar = 0;
+
+    // BarsAndBeats with zero beats -> the exact start of `nearestBar` (toTime reads tempo sections,
+    // so the numerator field is not consulted here; bars + zero beats is sufficient).
+    const auto snapped = seq.toTime (te::tempo::BarsAndBeats { nearestBar, te::BeatDuration() });
+
+    return snapped < te::TimePosition() ? te::TimePosition() : snapped;
 }
 
 //==============================================================================

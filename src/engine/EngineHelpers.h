@@ -246,4 +246,58 @@ namespace EngineHelpers
         return engine.getDeviceManager().isHostedAudioDeviceInterfaceInUse() ? &hostedInterface
                                                                              : nullptr;
     }
+
+    //==============================================================================
+    // Track volume / pan helpers
+    //
+    // Each te::AudioTrack carries a built-in te::VolumeAndPanPlugin on its plugin chain,
+    // reachable via AudioTrack::getVolumePlugin() (declared in tracktion_AudioTrack.h:59,
+    // returns VolumeAndPanPlugin* which may be null if the track has no vol/pan plugin).
+    //
+    // Volume uses the plugin's direct dB API:
+    //     float VolumeAndPanPlugin::getVolumeDb() const;   // tracktion_VolumeAndPan.h:34
+    //     void  VolumeAndPanPlugin::setVolumeDb (float);    // tracktion_VolumeAndPan.h:36
+    // Internally these convert through volumeFaderPositionToDB / decibelsToVolumeFaderPosition
+    // (tracktion_AudioUtilities.cpp:138-146); the engine's dB floor is -100 dB (silence) and
+    // the fader curve reaches +6 dB at slider position 1.0. We clamp to [-100, +12] per the
+    // mixer contract — the floor matches the engine's own silence value.
+    //
+    // Pan uses the plugin's getPan()/setPan() which are already in the -1..+1 range
+    // (tracktion_VolumeAndPan.h:39-40), -1 = hard left, 0 = centre, +1 = hard right.
+    //
+    // All four guard a null plugin (return 0.0f / no-op) so they are safe on any track.
+    //
+    // Message-thread only.
+
+    /** Current track volume in dB, or 0.0f (unity) if the track has no volume plugin. */
+    inline float getTrackVolumeDb (te::AudioTrack& track)
+    {
+        if (auto* vp = track.getVolumePlugin())
+            return vp->getVolumeDb();
+
+        return 0.0f;
+    }
+
+    /** Sets the track volume in dB, clamped to [-100, +12]. No-op if no volume plugin. */
+    inline void setTrackVolumeDb (te::AudioTrack& track, float db)
+    {
+        if (auto* vp = track.getVolumePlugin())
+            vp->setVolumeDb (juce::jlimit (-100.0f, 12.0f, db));
+    }
+
+    /** Current track pan in -1..+1 (-1 = left, 0 = centre, +1 = right), or 0.0f if no plugin. */
+    inline float getTrackPan (te::AudioTrack& track)
+    {
+        if (auto* vp = track.getVolumePlugin())
+            return vp->getPan();
+
+        return 0.0f;
+    }
+
+    /** Sets the track pan, clamped to [-1, +1]. No-op if no volume plugin. */
+    inline void setTrackPan (te::AudioTrack& track, float pan)
+    {
+        if (auto* vp = track.getVolumePlugin())
+            vp->setPan (juce::jlimit (-1.0f, 1.0f, pan));
+    }
 }
