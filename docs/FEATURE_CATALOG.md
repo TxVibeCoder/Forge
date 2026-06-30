@@ -291,8 +291,9 @@ No DAW has all of the above — they pick an identity and go deep there:
 - **FL Studio** — pattern/step-sequencing workflow, beloved for beats.
 - **Studio One** — drag-and-drop modern workflow, mastering built in.
 
-**The takeaway for Forge:** "feature-rich" is a direction, not a checklist. Given the use
-case — recording instruments and arranging songs — a **recording + arrangement** identity
-(strong tracking, comping, MIDI, mixing, a good built-in instrument set) is the likely center
-of gravity, and live clip-launching, video/post, scoring, and cloud collab can wait until
-much later, if ever.
+**The takeaway for Forge (updated 2026-06-30):** "feature-rich" is a direction, not a checklist. Forge's
+center of gravity is **live clip-launching** — a **sample / scene-based Session grid** played from grid
+controllers (Launchpad / APC40 mkII); strong MIDI, a good built-in instrument set, and the mixer support
+it, with the **linear arrangement view secondary**. *(Earlier this doc framed it as "recording +
+arrangement first … live clip-launching can wait" — that has been **reversed**; see
+[DIRECTION.md](DIRECTION.md).)* Video/post, scoring, and cloud collab can still wait.

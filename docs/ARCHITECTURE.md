@@ -2,6 +2,10 @@
 *Working title: **Forge** (rename whenever you like)*
 *Status: Draft v1 — for review. Persisted into the repo as the source of truth.*
 
+> **Product direction (2026-06-30):** Forge is a **sample / scene-based, controller-driven DAW** (Session
+> clip grid primary, Arrange secondary). The authoritative brief is **[DIRECTION.md](DIRECTION.md)**. This
+> engine plan is largely direction-agnostic, but where it implies arrangement-first, DIRECTION.md wins.
+
 > **Phase 0 research addenda (2026-06):** Two claims in this doc were corrected during
 > toolchain research — see the **Addenda** section at the bottom before relying on
 > `rtcheck` or ASIO. Everything else verified current.

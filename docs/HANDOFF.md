@@ -3,12 +3,22 @@
 > Living handoff for picking the project back up cold. Pairs with [STATUS.md](STATUS.md) (the living
 > roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP + W6 polish"** session.
 
+> ## ⚠ READ FIRST — direction reset (2026-06-30)
+> Forge's primary identity changed: it is a **sample / scene-based DAW** — an Ableton-style **Session clip
+> grid** as the **primary** surface, **played from grid controllers** (Novation Launchpad / Akai APC40 mkII),
+> with the linear **Arrange** view **secondary**. Plus full MIDI input (note-in/record, MIDI-learn,
+> clock/Ableton Link). **Everything below this banner was built arrangement-first** and is still valid as
+> reusable building blocks, but the *primary surface* is now the Session grid + a control-surface layer.
+> **The authoritative brief is [DIRECTION.md](DIRECTION.md) — read it before planning new work.** The next
+> build is the Session grid (`SessionView` + Tracktion `ClipSlot`/scenes) and the device-agnostic
+> control-surface layer (on Tracktion's `ControlSurface` seam), not more linear-timeline features.
+
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
 branch `main` · MIDI MVP commit `9a24989` · **ahead of `origin/main` — NOT pushed** (this session's MIDI
 MVP + docs, atop the earlier recording/design commits; `git status` for the exact count) ·
 ~5,900 lines / 31 source files · last build **clean** · both self-tests **PASS** · verify wave **clean**.
 
-Forge is an arrangement-first DAW on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
+Forge is a **scene-based DAW** (Session clip grid primary, controller-driven — see [DIRECTION.md](DIRECTION.md)) on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
 startup-latency hardening + the **MIDI MVP + W6 piano-roll polish** are done and live: project/arrange/
 transport/mixer/plugins/browser/inspector/export, output-only startup with lazy record-input open, and
 **drawable, audible MIDI clips with a velocity lane, multi-select, and copy/paste**. See

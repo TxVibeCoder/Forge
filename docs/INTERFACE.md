@@ -6,18 +6,19 @@ Pro Tools, Cubase, and Reaper interfaces.*
 
 ## Direction
 
-Adopt **Ableton Live's look + interaction model** on an **arrangement-first** DAW. The
-**Session clip-grid stays deferred** — what makes Ableton feel clean for recording/arranging
-is the single-window discipline, the collapsible regional skeleton, the "one bottom panel,
-many modes" detail view, keyboard-driven collapse, hover help, and color as a first-class
-attribute — none of which require the clip grid.
+> **⚠ Direction reset (2026-06-30):** Forge is a **sample / scene-based DAW** — the **Session clip grid
+> is the PRIMARY surface**, played from Ableton-style grid controllers (Launchpad / APC40 mkII), with
+> **Arrange a secondary view**. The authoritative brief is **[DIRECTION.md](DIRECTION.md)**; it supersedes
+> the older "arrangement-first / Session deferred" framing that parts of this plan below still reflect
+> (being reworked Session-first).
 
-**Forward-compatible seam (design now, don't build):** the center is a *view slot* driven by
-a `ViewMode` enum — today `{Arrange, Mixer}`, later `{Session, Arrange, Mixer}`. Views render
-the same Edit, so a future Session view is "add a third center view + a scenes column"
-(Tracktion already ships a clip-launcher), not a re-architecture. Reserve a view-switch
-control + hotkeys (e.g. F9 Arrange / F10 *reserved* Session / F11 Mix) rather than overloading
-one Tab key.
+Adopt **Ableton Live's look + interaction model** — single-window discipline, the collapsible regional
+skeleton, the "one bottom panel, many modes" detail view, keyboard-driven collapse, hover help, and colour
+as a first-class attribute. The center is a *view slot* driven by a `ViewMode` enum — now
+**`{Session, Arrange, Mixer}` with Session the default/primary** (was `{Arrange, Mixer}`). Views render the
+same Edit. The **Session grid** maps to Tracktion's clip-launcher (`ClipSlot` / scenes / `LaunchHandle`) and
+is driven both on-screen and from hardware grid controllers by the **same pad-colour/state model** — the
+control surface is a first-class input, not an afterthought (see [DIRECTION.md](DIRECTION.md)).
 
 ## Window layout — `ForgeShell` (evolves from today's `MainComponent`)
 
@@ -104,7 +105,7 @@ hard-coded colors) so theming/high-contrast is one centralized pass.
 
 ## Open questions (to confirm)
 
-1. Session view stays deferred (build arrangement-first, reserve only the seam)? *(plan assumes yes)*
+1. ~~Session view stays deferred (build arrangement-first, reserve only the seam)?~~ **RESOLVED 2026-06-30 — NO.** The Session clip grid is the **primary** surface; Arrange is secondary (see [DIRECTION.md](DIRECTION.md)).
 2. Mixer placement: a center view-switch (full-window, Logic/Cubase-style) vs a docked
    bottom/right mixer that coexists with the arrange timeline?
 3. Accent color: warm amber, or a distinct Forge brand hue? Dark-only for now?

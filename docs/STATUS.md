@@ -3,6 +3,8 @@
 *Living status document. Last updated 2026-06-30 (**MIDI tracks + piano-roll** — MVP (W1–W5: draw a clip
 and hear it via a default 4OSC) **+ W6 polish** (velocity lane, multi-select, copy/paste); clean build,
 both selftests PASS, adversarial verify clean).*
+*Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
+it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
@@ -19,8 +21,8 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 |---|---|
 | **Engine** | Tracktion Engine, pinned to **v3.2.0** (submodule under `libs/`, bundles JUCE) |
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
-| **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
-| **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
+| **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
+| **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
 | **Code size** | ~6,460 lines of Forge source (engine/JUCE excluded) across 33 files |
 
 ---
@@ -284,8 +286,10 @@ tests/  SELFTEST.md
 ### Locked decisions
 1. Build **on** Tracktion Engine (don't hand-roll the audio graph).
 2. **Audio thread is sacred** · the Edit is the single source of truth · the UI observes.
-3. UI: **Ableton look/feel, arrangement-first**; Session deferred (seam reserved via
-   `ViewMode`); mixer = a **full-window view-switch**; **warm amber** accent on dark.
+3. UI: **Ableton look/feel; the Session clip grid is the PRIMARY surface**, Arrange a secondary view via
+   `ViewMode`; **controller-driven** (Launchpad / APC-class grids); mixer = a full-window view-switch;
+   **warm amber** accent on dark. *(Reverses the old "arrangement-first, Session deferred" decision —
+   2026-06-30; see [DIRECTION.md](DIRECTION.md).)*
 
 ### Engine roadmap (from ARCHITECTURE.md §11)
 | Phase | Goal | State |
