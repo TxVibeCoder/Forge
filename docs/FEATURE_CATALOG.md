@@ -166,13 +166,18 @@ means *deep where it counts for your use*, not "all of it."
 
 ## 9. Clip Launching & Live Performance
 
+> **This is now Forge's PRIMARY identity** (direction reset 2026-06-30 — see [DIRECTION.md](DIRECTION.md)).
+> The Session clip grid is the *primary* surface, played from grid controllers (Launchpad / APC40 mkII).
+> The tiers below are updated accordingly.
+
 | Feature | Tier | Note |
 |---|---|---|
-| Session / clip-launch view | Pro | Ableton's nonlinear grid. |
-| Scenes | Pro | Fire a row of clips together. |
-| Follow actions | Pro | Clips trigger the next automatically. |
+| Session / clip-launch view | **Core (PRIMARY surface)** | Ableton's nonlinear grid — *the* main surface (`SessionView`). |
+| Scenes | **Core** | Fire a row of clips together. |
+| Grid-controller (Launchpad / APC40) integration | **Core (later — "one day")** | External hardware over MIDI on the `ControlSurface` seam; on-screen grid works without it. |
+| Key / MIDI mapping for live control | **Core** | MIDI-learn (`MidiLearn`) + MIDI-clock / Ableton Link sync. |
+| Follow actions | Standard | Clips trigger the next automatically. |
 | Live looping | Pro | |
-| Key/MIDI mapping for live control | Standard | |
 | Crossfader | Pro | DJ-style blending. |
 
 > *Decide early if Forge wants this. It's a whole second workflow — powerful for

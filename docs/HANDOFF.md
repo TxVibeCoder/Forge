@@ -11,7 +11,8 @@
 > reusable building blocks, but the *primary surface* is now the Session grid + a control-surface layer.
 > **The authoritative brief is [DIRECTION.md](DIRECTION.md) — read it before planning new work.** The next
 > build is the Session grid (`SessionView` + Tracktion `ClipSlot`/scenes) and the device-agnostic
-> control-surface layer (on Tracktion's `ControlSurface` seam), not more linear-timeline features.
+> control-surface layer (on Tracktion's `ControlSurface` seam), not more linear-timeline features. A
+> to-scale, Session-first UI mockup set is in [`mockups/`](../mockups/) (open `preview/forge-ui-storyboard.png`).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
 branch `main` · MIDI MVP commit `9a24989` · **ahead of `origin/main` — NOT pushed** (this session's MIDI
@@ -147,16 +148,25 @@ PASS on this box.
 
 ## What's next (prioritized)
 
-1. **GUI smoke test of the MIDI MVP + W6** (above) — the one unverified path. Do this before building on it.
-2. **MIDI post-MVP — W7 MIDI-input recording** (W6 is done): the higher-risk wave — its own enable sequence
-   (`getMidiInDevices()` + `setEnabled` + `setMonitorMode` + `rescanMidiDeviceList()`) **before**
-   `ensureContextAllocated()`, a different device-type filter, and a **runtime test with a physical MIDI
-   controller**. See [midi-design.md §5](devlog/midi-design.md). Smaller follow-on: horizontal
-   auto-scroll-to-clip in the piano-roll (W6 deferred it; would adjust the shared `TimelineView` window).
-3. **Automation** (vol/pan/plugin-param lanes) + **buses/sends** in the mixer (engine Phase 3 + 2 remainder).
-4. **Polish** — async export + progress (mixdown & stems both block the message thread); LUFS metering;
-   markers; comping; off-thread record-input open.
-5. **macOS build** (only Windows verified) and interactive-UI verification of the Phase-4 surfaces.
+> **Direction reset this session** (see the banner + [DIRECTION.md](DIRECTION.md)). The next build is the
+> **Session clip grid**, not more linear-timeline features.
+
+1. **Session-grid build — the pivot.** A new `SessionView` clip grid as the **primary** `ViewMode`
+   (`Session ∣ Arrange ∣ Mix`, Session default), on Tracktion's `ClipSlot` / `getClipSlotList()` / scenes /
+   `LaunchHandle`. Fully playable with mouse + keyboard. Start from [DIRECTION.md](DIRECTION.md); the
+   [mockups](../mockups/) sheet **00** shows the target. The shipped clips / 4OSC / piano-roll / mixer ride
+   inside slots and scenes.
+2. **Control-surface layer ("one day").** A device-agnostic driver layer on Tracktion's `ControlSurface`
+   seam so **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state
+   model feeds the on-screen grid and the hardware LEDs. **Not an MVP gate** — the controllers are external
+   hardware (mockups sheet **09** is the mapping reference, not an app screen).
+3. **MIDI input roles.** Note-record into clips (**W7** — its own MIDI enable sequence + a
+   physical-controller runtime test, see [midi-design.md §5](devlog/midi-design.md)); MIDI-learn param
+   mapping (`MidiLearn`); MIDI-clock / Ableton Link sync.
+4. **GUI smoke test of the MIDI MVP + W6** — the one statically-verified-but-unclicked path (draw → play →
+   hear; multi-select / velocity / copy-paste). Worth a manual pass before building atop it.
+5. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends in the mixer; async export +
+   progress; LUFS; markers; comping; off-thread record-input open; macOS build; interactive-UI verification.
 
 ---
 

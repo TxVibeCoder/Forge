@@ -4,47 +4,46 @@ A native desktop DAW (Digital Audio Workstation), built on **JUCE** + **Tracktio
 in **C++20**. Targets Windows + macOS. Non-commercial; open-source under **AGPLv3**
 (JUCE AGPLv3 + Tracktion Engine GPLv3 ⇒ Forge is AGPLv3).
 
-> **Status: Phase 1 (the spine) — substantially complete.** Forge opens/creates a real
-> project on disk, imports audio onto a track, shows it on a timeline with a waveform and a
-> moving playhead, plays it through the transport, and saves/reloads the project. Recording
-> from a live input is wired (the verified Tracktion recipe) and works once an input device
-> is selected via **Audio** settings.
->
-> **Full status, accomplishments, pending items, and roadmap → [`docs/STATUS.md`](docs/STATUS.md).**
-> Design: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · UI plan:
-> [`docs/INTERFACE.md`](docs/INTERFACE.md) · features:
-> [`docs/FEATURE_CATALOG.md`](docs/FEATURE_CATALOG.md).
+**Forge is a sample / scene-based DAW** — an Ableton-style **Session clip grid** (tracks ×
+scenes of launchable clips) as the *primary* surface, meant to be played from grid controllers
+(Novation Launchpad, Akai APC40 mkII). A linear **Arrange** timeline is a secondary view.
 
-## Using Forge
+> **Read the product direction first → [`docs/DIRECTION.md`](docs/DIRECTION.md).** It is the
+> authoritative brief; the older docs are being realigned to it.
 
-Launch the app (see Building). The toolbar: **New / Open / Save / Save As / Import / Audio**.
-A transport bar (play · stop · record · loop + timecode/bars|beats) sits above the arrange
-view (track lanes, clip waveforms, a draggable yellow playhead).
+## Status
 
-- **Import** a WAV/AIFF/FLAC/OGG → it lands as a clip on track 1; press **Play** to hear it
-  and watch the playhead sweep. Drag the playhead to scrub.
-- **Save / Open** round-trips the project (`.tracktionedit`).
-- **Record**: click **Audio** and select an input device first (a microphone / line-in /
-  interface), then arm with **Rec**. Without a selected input the engine sees no input
-  device (e.g. when output is a Bluetooth A2DP headset, which exposes no mic).
+Built **arrangement-first** through Phases 0–4 + startup-latency hardening + a **MIDI MVP +
+piano-roll polish** — all shipped, building clean, both headless self-tests **PASS** on Windows.
+That work becomes the building blocks of the scene-based product (clips, instruments, the
+piano-roll, the mixer all live inside slots/scenes). The project is now **pivoting to the
+Session-grid build** (see DIRECTION.md). Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 
-## Layout
+**What works today:**
+- **Project** save/load — a real `.tracktionedit` on disk (create / open / save / save-as).
+- **Audio** import (WAV/AIFF/FLAC/OGG) onto tracks; a timeline with **waveform thumbnails**,
+  a moving **playhead** (drag to scrub), clip **drag-to-move** + selectable **snap grid**.
+- **Transport** — play / stop / record / loop + timecode and bars|beats.
+- **Recording** — the verified Tracktion recipe; **verified end-to-end on real hardware**
+  (`--selftest-record` captures a real take). Output-only startup; the capture input opens
+  lazily on first arm.
+- **MIDI** — MIDI clips on any track, **born audible** via a default **4OSC** synth at the head
+  of the chain; a **piano-roll** editor (draw / move / resize / delete, **velocity lane**,
+  **multi-select**, **copy/paste**). Draw a clip and hear it.
+- **Mixer** — channel strips (dB fader, pan, mute/solo, colour), per-track **plugin inserts**
+  (bypass + reorder), a master strip with a post-fader meter.
+- **Plugins** — built-in effects + **VST3/AU** scanning & hosting, with floating editor windows.
+- **Browser** (file tree, double-click to import) and a **clip Inspector** (name/gain/fades/waveform).
+- **Export** — WAV mixdown + per-track **stems**.
 
-```
-forge/
-├── CMakeLists.txt              # top-level build
-├── libs/
-│   └── tracktion_engine/       # git submodule, pinned to v3.2.0 (bundles JUCE)
-├── src/
-│   ├── main.cpp                # ForgeApplication (owns the Engine) + MainComponent (UI host)
-│   ├── services/files/         # ProjectSession — owns the Edit; create/open/save/import
-│   ├── engine/                 # EngineHelpers (tracks/transport/import); RecordController
-│   └── ui/
-│       ├── transport/          # TransportBar
-│       └── arrange/            # ArrangeView (lanes, clips, waveforms, playhead)
-├── docs/                       # architecture + feature catalog
-└── tests/                      # SELFTEST.md — the --selftest field contract
-```
+**Coming next (per DIRECTION.md):** the on-screen **`SessionView`** clip grid as the primary
+`ViewMode` (Tracktion `ClipSlot` / scenes / `LaunchHandle`); then a device-agnostic
+**control-surface layer** so real grid controllers drive the grid (a "one day" hardware goal —
+the grid is fully playable with mouse + keyboard without it). Plus richer MIDI input
+(note-record into clips, MIDI-learn, MIDI-clock / Ableton Link).
+
+A to-scale **UI mockup set** of the envisioned product lives in [`mockups/`](mockups/) (open
+`mockups/preview/forge-ui-storyboard.png`).
 
 ## Building (Windows)
 
@@ -58,19 +57,45 @@ cmake --build build --config Debug
 ```
 
 ### Headless self-tests
-- `Forge --selftest` — imports a generated tone, plays it, verifies device + clip + arrange
-  + playhead, writes a PASS/FAIL report to `%TEMP%\forge_phase0_selftest.log`, quits.
-- `Forge --selftest-record` — arms + records ~1s, verifies a take was captured (requires an
-  input device; reports a device diagnostic otherwise).
+- `Forge --selftest` — imports a generated tone, plays it, verifies device + clip + arrange +
+  playhead, writes a PASS/FAIL report to `%TEMP%\forge_phase0_selftest.log`, quits.
+- `Forge --selftest-record` — opens the input lazily, arms + records ~1 s, verifies a real take
+  was captured to disk (reports a device diagnostic if the box exposes no capture endpoint).
+
+See [`tests/SELFTEST.md`](tests/SELFTEST.md) for the full field contract.
+
+## Layout
+
+```
+forge/
+├── CMakeLists.txt              # top-level build
+├── libs/tracktion_engine/      # git submodule, pinned to v3.2.0 (bundles JUCE)
+├── src/
+│   ├── main.cpp                # ForgeApplication (owns the Engine) + MainComponent (shell)
+│   ├── services/
+│   │   ├── files/              # ProjectSession — owns the Edit; create/open/save/import; createMidiClip
+│   │   └── export/             # Exporter — WAV mixdown + per-track stems
+│   ├── engine/                 # EngineHelpers · RecordController · PluginHost (incl. 4OSC seam) · PluginScanner
+│   └── ui/
+│       ├── ForgeLookAndFeel.h  # dark amber theme (all colours via colour IDs)
+│       ├── ControlBar · transport/ · arrange/ · mixer/ · plugins/ · browser/ · detail/
+│       └── pianoroll/          # PianoRollView + MidiNoteComponent + VelocityLane
+├── docs/                       # DIRECTION (the brief) · STATUS · ARCHITECTURE · INTERFACE · FEATURE_CATALOG · devlog/
+├── mockups/                    # to-scale DXF/CAD UI mockups (Session-first) + generator
+└── tests/                      # SELFTEST.md — the --selftest field contract
+```
 
 ## Toolchain notes
 - C++20 is mandatory (Tracktion Engine); MSVC v143 / VS2022 required (v142 / VS2019 too old).
 - Early phases use **WASAPI** (no extra SDK). ASIO is a later add (Steinberg SDK + `JUCE_ASIO=1`).
 - `rtcheck` (RT-safety checker) is macOS/Linux only — not available on Windows.
+- A running `Forge.exe` holds the build output (`LNK1168`) and the WASAPI device — stop it
+  (`Get-Process Forge | Stop-Process -Force`) before rebuilding or runtime-testing.
 
-## Deferred / known limitations (tracked for later phases)
-- Recording end-to-end is unverified on the dev machine (Bluetooth output → no input device);
-  the code path follows the verified recipe and needs an input selected.
-- Waveform draw assumes non-looped clips (correct for imported/recorded clips; looped-clip
-  rendering is a later add). Timeline view window is fixed at 0–60s until zoom/scroll lands.
-- File dialogs capture `this`; hardened paths (SafePointer guards) are a later polish item.
+## Known limitations
+- **macOS not yet built** (only Windows verified). VST3 + AU hosting is macOS-relevant.
+- **Interactive UI not headlessly verified** — the full shell builds and constructs in the
+  selftest, but menus / drag / the MIDI draw→play path need a manual pass (the dev-built window
+  can't be GUI-driven headlessly).
+- Export (mixdown + stems) currently blocks the message thread (fine for short edits).
+- Beat-based looped-clip waveform rendering and timeline zoom/scroll are later adds.

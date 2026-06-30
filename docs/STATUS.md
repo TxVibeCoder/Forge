@@ -316,18 +316,21 @@ tests/  SELFTEST.md
 Phases 0–4 + startup-latency hardening are done: the spine, arrange surface (incl. snap-division
 grid), mixer (incl. insert bypass/reorder + post-fader master meter), plugin hosting + scan UI,
 browser, inspector, export (mixdown + stems), and output-only startup with lazy record-input open.
-Practical next sequence:
-1. ✅ **Recording verification on real hardware — DONE.** `--selftest-record` captures a real take
-   (`result=PASS`, non-zero peak); the prior FAIL was a harness bug, now fixed (event-driven harness).
-   Remaining refinement: default-mic *selection* (lazy-open keeps the existing output, so the captured
-   endpoint is the default pairing, not necessarily the listed mic) — see device-recording.md.
-2. **MIDI tracks + piano-roll** (engine Phase 3) — **MVP + W6 polish DONE** (W1–W6: draw a clip + hear it
-   via 4OSC; velocity lane, multi-select, copy/paste; `docs/devlog/midi-build.md`). Remaining: **W7**
-   MIDI-input recording (own enable sequence + a physical-controller runtime test — see midi-design.md §5);
-   horizontal auto-scroll-to-clip. First do a **manual GUI smoke pass** of the draw→play path.
-3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
-4. **Polish** — async export + progress; LUFS metering; markers; comping; off-thread record-input
-   open (so even the first arm never briefly blocks the message thread).
+Practical next sequence — **direction reset 2026-06-30** (see [DIRECTION.md](DIRECTION.md)): the primary
+surface is becoming the **Session clip grid**, so the sequence is reordered around that.
+1. **Session-grid build — the pivot.** A new `SessionView` clip grid as the **primary** `ViewMode`
+   (`Session ∣ Arrange ∣ Mix`, Session default) on Tracktion's `ClipSlot` / `getClipSlotList()` / scenes /
+   `LaunchHandle`. Fully playable with mouse + keyboard. Target shown in the [mockups](../mockups/) (sheet 00).
+2. **Control-surface layer ("one day").** Device-agnostic drivers on Tracktion's `ControlSurface` seam so
+   **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state model
+   feeds the on-screen grid and the hardware LEDs. The grid works without any hardware (not an MVP gate).
+3. **MIDI input roles.** Note-record into clips (**W7** — own MIDI enable sequence + a physical-controller
+   runtime test, see midi-design.md §5); MIDI-learn param mapping; MIDI-clock / Ableton Link sync.
+4. **Done this slice (now reusable inside slots/scenes):** ✅ recording verified on real hardware; ✅ MIDI
+   MVP + W6 piano-roll polish (draw + hear, velocity / multi-select / copy-paste). A **manual GUI smoke
+   pass** of the draw→play path is still worth doing.
+5. **Carried-over polish.** Automation (volume/pan/plugin-param lanes) + **buses/sends** in the mixer;
+   async export + progress; LUFS metering; markers; comping; off-thread record-input open.
 
 ---
 
