@@ -16,6 +16,7 @@
 #include "services/export/Exporter.h"
 #include "engine/EngineHelpers.h"
 #include "engine/RecordController.h"
+#include "engine/PluginScanner.h"
 #include "ui/arrange/ArrangeView.h"
 #include "ui/mixer/MixerView.h"
 #include "ui/plugins/PluginWindow.h"
@@ -337,7 +338,7 @@ private:
 
     // Each async file dialog owns its own FileChooser so open/save-as/export can't stomp each other.
     // (Import uses EngineHelpers::browseForAudioFile, which manages its own shared chooser.)
-    std::unique_ptr<FileChooser> openChooser, saveChooser, exportChooser;
+    std::unique_ptr<FileChooser> openChooser, saveChooser, exportChooser, stemsChooser;
     TooltipWindow tooltipWindow;
 
     ViewMode viewMode = ViewMode::Arrange;
@@ -361,6 +362,8 @@ private:
         controlBar.onSaveAs        = [this] { saveAsDialog(); };
         controlBar.onImport        = [this] { importDialog(); };
         controlBar.onExport        = [this] { exportDialog(); };
+        controlBar.onExportStems   = [this] { exportStemsDialog(); };
+        controlBar.onScanPlugins   = [this] { PluginScanner::showScanDialog (engine); };
         controlBar.onAudioSettings = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         controlBar.onToggleBrowser = [this] { browserVisible = ! browserVisible; resized(); };
         controlBar.onToggleDrawer  = [this] { drawerVisible  = ! drawerVisible;  resized(); };
@@ -535,6 +538,42 @@ private:
                                         self->setStatusMessage (ok ? "Exported " + f.getFileName()
                                                                    : "Export failed: " + err);
                                     });
+    }
+
+    void exportStemsDialog()
+    {
+        if (session.getEdit() == nullptr)
+            return;
+
+        const auto suggested = File::getSpecialLocation (File::userMusicDirectory)
+                                   .getChildFile (session.getEditFile().getFileNameWithoutExtension() + " Stems");
+
+        stemsChooser = std::make_unique<FileChooser> ("Choose a folder for stems...", suggested);
+        Component::SafePointer<MainComponent> safeThis (this);
+        stemsChooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                                   [safeThis] (const FileChooser& fc)
+                                   {
+                                       auto* self = safeThis.getComponent();
+                                       if (self == nullptr)
+                                           return;
+
+                                       const auto dir = fc.getResult();
+                                       if (dir == File())
+                                           return;
+
+                                       auto* edit = self->session.getEdit();
+                                       if (edit == nullptr)
+                                           return;
+
+                                       self->setStatusMessage ("Exporting stems to " + dir.getFileName() + "...");
+
+                                       String err;
+                                       const bool ok = Exporter::renderStems (*edit, dir, err);
+
+                                       self->setStatusMessage (ok ? (err.isEmpty() ? "Exported stems to " + dir.getFileName()
+                                                                                    : "Exported stems (some failed): " + err)
+                                                                  : "Stem export failed: " + err);
+                                   });
     }
 
     void importTestToneAndPlay()

@@ -25,7 +25,8 @@ public:
     void paint (juce::Graphics&) override;
 
     // Intent callbacks, wired by the shell.
-    std::function<void()> onNew, onOpen, onSave, onSaveAs, onImport, onExport, onAudioSettings;
+    std::function<void()> onNew, onOpen, onSave, onSaveAs, onImport, onExport, onExportStems,
+                          onScanPlugins, onAudioSettings;
     std::function<void()> onToggleBrowser, onToggleDrawer;
     std::function<void (int)> onViewMode;
 
@@ -34,11 +35,12 @@ public:
 
 private:
     void updateViewButtons();
+    void showExportMenu();   // Export button -> popup: Mixdown (whole edit) / Stems (per track)
 
     juce::TextButton browserBtn { "Browser" };
     juce::TextButton newBtn { "New" }, openBtn { "Open" }, saveBtn { "Save" },
                      saveAsBtn { "Save As" }, importBtn { "Import" }, exportBtn { "Export" },
-                     audioBtn { "Audio" };
+                     scanBtn { "Plugins" }, audioBtn { "Audio" };
     TransportBar transportBar;
     juce::TextButton arrangeBtn { "Arrange" }, mixBtn { "Mix" };
     juce::TextButton drawerBtn { "Editor" };

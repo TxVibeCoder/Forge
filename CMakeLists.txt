@@ -33,6 +33,7 @@ target_sources(Forge PRIVATE
     src/services/export/Exporter.cpp
     src/engine/RecordController.cpp
     src/engine/PluginHost.cpp
+    src/engine/PluginScanner.cpp
     src/ui/transport/TransportBar.cpp
     src/ui/arrange/ArrangeView.cpp
     src/ui/mixer/MixerView.cpp

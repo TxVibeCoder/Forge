@@ -142,15 +142,23 @@ private:
 
 //==============================================================================
 /*  InsertPanel — the list of a track's insert plugins plus a "+" add button. Each existing
-    insert is a row button: left-click opens its editor window (PluginWindow::show), right-click
-    or the trailing "x" removes it (PluginHost::removePlugin). "+" pops a menu of available
-    plugin names (PluginHost::getAvailablePluginNames) and adds the chosen one
-    (PluginHost::addPluginToTrack). After any add/remove it calls onChanged() so the owning
-    strip rebuilds its rows and the layout re-flows.
+    insert is a row: left-click the name opens its editor window (PluginWindow::show); the
+    trailing "x" (or a right-click) removes it (PluginHost::removePlugin); a leading bypass dot
+    toggles the plugin's enabled state (te::Plugin::setEnabled); and ▲/▼ reorder it within the
+    track's chain. "+" pops a menu of available plugin names (PluginHost::getAvailablePluginNames)
+    and adds the chosen one (PluginHost::addPluginToTrack). After any add/remove/move it calls
+    onChanged() so the owning strip rebuilds its rows and the layout re-flows.
 
     The volume/level-meter plugins that every track carries are filtered out by PluginHost::
     getTrackInserts (per its contract — it returns user inserts only), so they never appear
-    here as removable rows.                                                                    */
+    here as removable rows.
+
+    Reorder recipe: getTrackInserts() returns the user inserts in chain order; the always-present
+    [volume&pan, level-meter] tail sits AFTER them. Moving an insert means re-inserting its
+    Plugin::Ptr at the chain index of its new neighbour via te::PluginList::insertPlugin — which
+    inserts BEFORE the plugin currently at that index, exactly matching the invariant that
+    PluginHost::addPluginToTrack relies on (new effects land just before the volume tail). We
+    only ever swap an insert with an adjacent insert, so the tail is never displaced.            */
 class InsertPanel : public Component
 {
 public:
@@ -174,23 +182,44 @@ public:
     {
         rows.clear();
 
-        for (auto* plugin : PluginHost::getTrackInserts (track))
+        const auto inserts = PluginHost::getTrackInserts (track);
+
+        for (int i = 0; i < inserts.size(); ++i)
         {
+            auto* plugin = inserts[i];
             if (plugin == nullptr)
                 continue;
 
-            // The row notifies us ASYNCHRONOUSLY after a remove: rebuildRows() deletes the row,
-            // so we must not re-enter it from inside the row's own click handler. The SafePointer
-            // guards against the panel being torn down (setEdit) before the async fires.
+            // The row notifies us ASYNCHRONOUSLY after a remove/move: rebuildRows() deletes the
+            // row, so we must not re-enter it from inside the row's own click handler. The
+            // SafePointer guards against the panel being torn down (setEdit) before the async
+            // fires.
             Component::SafePointer<InsertPanel> safeThis (this);
-            auto* row = rows.add (new InsertRow (*plugin, [safeThis]
+
+            auto notifyAsync = [safeThis]
             {
                 MessageManager::callAsync ([safeThis]
                 {
                     if (safeThis != nullptr && safeThis->onChanged)
                         safeThis->onChanged();
                 });
-            }));
+            };
+
+            auto* row = rows.add (new InsertRow (*plugin,
+                notifyAsync,
+                [safeThis, notifyAsync] (te::Plugin& p)
+                {
+                    if (safeThis != nullptr && safeThis->moveInsert (p, -1))
+                        notifyAsync();
+                },
+                [safeThis, notifyAsync] (te::Plugin& p)
+                {
+                    if (safeThis != nullptr && safeThis->moveInsert (p, +1))
+                        notifyAsync();
+                }));
+
+            // Reflect chain position so the ends can't move past the boundary.
+            row->setMovePermitted (i > 0, i < inserts.size() - 1);
             addAndMakeVisible (row);
         }
 
@@ -217,20 +246,64 @@ public:
 
 private:
     //==========================================================================
-    /*  One insert row: a name button (open) + an "x" button (remove). The Plugin is held by
-        reference; the row is owned by InsertPanel which is rebuilt whenever the insert set
-        changes, so a row never outlives its plugin between rebuilds. */
+    /*  One insert row, left to right: a bypass dot · ▲ up · ▼ down · the name button (open) ·
+        an "x" (remove). The Plugin is held by reference; the row is owned by InsertPanel which
+        is rebuilt whenever the insert set changes, so a row never outlives its plugin between
+        rebuilds. The move callbacks ask the panel to reorder this plugin in the engine chain;
+        the panel notifies onChanged() afterwards (async) so the row set is rebuilt cleanly.
+
+        Bypassed state (te::Plugin::isEnabled() == false) is reflected by dimming the name and
+        striking it through — no fabricated colours, all from ForgeLookAndFeel.                  */
     class InsertRow : public Component
     {
     public:
-        InsertRow (te::Plugin& p, std::function<void()> changedCb)
-            : plugin (p), onChanged (std::move (changedCb))
+        InsertRow (te::Plugin& p,
+                   std::function<void()> removedCb,
+                   std::function<void (te::Plugin&)> moveUpCb,
+                   std::function<void (te::Plugin&)> moveDownCb)
+            : plugin (p),
+              onChanged (std::move (removedCb)),
+              onMoveUp (std::move (moveUpCb)),
+              onMoveDown (std::move (moveDownCb))
         {
-            openButton.setButtonText (plugin.getName());
+            // Bypass toggle: a compact dot that lights amber when the plugin is ACTIVE and dims
+            // to secondary text when bypassed. canBeDisabled() gates plugins that refuse it.
+            bypassButton.setButtonText ("o");
+            bypassButton.setColour (TextButton::buttonColourId, Colour (ForgeLookAndFeel::raisedBg));
+            bypassButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textSec));
+            bypassButton.setConnectedEdges (Button::ConnectedOnRight);
+            bypassButton.setEnabled (plugin.canBeDisabled());
+            bypassButton.onClick = [this]
+            {
+                plugin.setEnabled (! plugin.isEnabled());
+                refreshBypassLook();
+            };
+            addAndMakeVisible (bypassButton);
+
+            // Reorder buttons. canBeMoved() guards plugins that must stay put.
+            const bool movable = plugin.canBeMoved();
+
+            upButton.setButtonText (String::charToString ((juce_wchar) 0x25b2));   // ▲
+            upButton.setColour (TextButton::buttonColourId, Colour (ForgeLookAndFeel::raisedBg));
+            upButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textSec));
+            upButton.setTooltip ("Move " + plugin.getName() + " earlier in the chain");
+            upButton.setConnectedEdges (Button::ConnectedOnLeft | Button::ConnectedOnRight);
+            upButton.setEnabled (movable);
+            upButton.onClick = [this] { if (onMoveUp) onMoveUp (plugin); };
+            addAndMakeVisible (upButton);
+
+            downButton.setButtonText (String::charToString ((juce_wchar) 0x25bc)); // ▼
+            downButton.setColour (TextButton::buttonColourId, Colour (ForgeLookAndFeel::raisedBg));
+            downButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textSec));
+            downButton.setTooltip ("Move " + plugin.getName() + " later in the chain");
+            downButton.setConnectedEdges (Button::ConnectedOnLeft | Button::ConnectedOnRight);
+            downButton.setEnabled (movable);
+            downButton.onClick = [this] { if (onMoveDown) onMoveDown (plugin); };
+            addAndMakeVisible (downButton);
+
             openButton.setColour (TextButton::buttonColourId, Colour (ForgeLookAndFeel::panelBg));
             openButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textPrim));
-            openButton.setTooltip ("Open " + plugin.getName() + "  (right-click to remove)");
-            openButton.setConnectedEdges (Button::ConnectedOnRight);
+            openButton.setConnectedEdges (Button::ConnectedOnLeft | Button::ConnectedOnRight);
             openButton.onClick = [this] { PluginWindow::show (plugin); };
             addAndMakeVisible (openButton);
 
@@ -241,6 +314,19 @@ private:
             removeButton.setConnectedEdges (Button::ConnectedOnLeft);
             removeButton.onClick = [this] { remove(); };
             addAndMakeVisible (removeButton);
+
+            refreshBypassLook();
+        }
+
+        /** Enables/disables the reorder buttons to reflect this insert's position in the chain
+            (the topmost insert can't move up; the bottom-most can't move down). */
+        void setMovePermitted (bool canMoveUp, bool canMoveDown)
+        {
+            if (plugin.canBeMoved())
+            {
+                upButton.setEnabled (canMoveUp);
+                downButton.setEnabled (canMoveDown);
+            }
         }
 
         void mouseDown (const MouseEvent& e) override
@@ -252,11 +338,47 @@ private:
         void resized() override
         {
             auto r = getLocalBounds();
-            removeButton.setBounds (r.removeFromRight (14));
+            bypassButton.setBounds (r.removeFromLeft (12));
+            upButton.setBounds     (r.removeFromLeft (11));
+            downButton.setBounds   (r.removeFromLeft (11));
+            removeButton.setBounds (r.removeFromRight (12));
             openButton.setBounds (r);
+            nameBounds = openButton.getBounds();
+        }
+
+        /** A strike-through line across the name when the insert is bypassed, so a glance reads
+            "this insert is off" even at strip width. Drawn over the child button. */
+        void paintOverChildren (Graphics& g) override
+        {
+            if (! bypassed)
+                return;
+
+            const float midY = (float) nameBounds.getCentreY();
+            g.setColour (Colour (ForgeLookAndFeel::textSec));
+            g.fillRect ((float) nameBounds.getX() + 3.0f, midY,
+                        (float) nameBounds.getWidth() - 6.0f, 1.0f);
         }
 
     private:
+        void refreshBypassLook()
+        {
+            bypassed = ! plugin.isEnabled();
+
+            // Bypass dot: amber when active, dimmed when bypassed.
+            bypassButton.setColour (TextButton::textColourOffId,
+                                    bypassed ? Colour (ForgeLookAndFeel::textSec)
+                                             : Colour (ForgeLookAndFeel::accent));
+            bypassButton.setTooltip ((bypassed ? "Enable " : "Bypass ") + plugin.getName());
+
+            // Name reads dimmed when bypassed (the strikethrough is drawn in paintOverChildren).
+            openButton.setButtonText (plugin.getName());
+            openButton.setColour (TextButton::textColourOffId,
+                                  bypassed ? Colour (ForgeLookAndFeel::textSec)
+                                           : Colour (ForgeLookAndFeel::textPrim));
+            openButton.setTooltip ("Open " + plugin.getName() + "  (right-click to remove)");
+            repaint();
+        }
+
         void remove()
         {
             // removePlugin() drops the engine plugin (our `plugin` ref dangles after this), then
@@ -269,10 +391,54 @@ private:
 
         te::Plugin& plugin;
         std::function<void()> onChanged;
-        TextButton openButton, removeButton;
+        std::function<void (te::Plugin&)> onMoveUp, onMoveDown;
+        TextButton bypassButton, upButton, downButton, openButton, removeButton;
+        Rectangle<int> nameBounds;
+        bool bypassed = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (InsertRow)
     };
+
+    /*  Reorders one insert within the track's plugin chain by re-inserting its Plugin::Ptr at
+        the chain position of its target neighbour. direction < 0 moves it EARLIER (swap with the
+        previous insert), direction > 0 moves it LATER (swap with the next insert).
+
+        We work in terms of the user-insert list (getTrackInserts), then map the chosen neighbour
+        to its FULL-chain index for te::PluginList::insertPlugin. insertPlugin captures the target
+        sibling's tree position before detaching the moving plugin and re-adds it there, so:
+          - earlier: target = chain index of the previous insert  -> lands before it;
+          - later:   target = chain index of the next insert      -> lands after it
+                     (the detach shifts the sibling down one, which is exactly what we want).
+        The volume&pan + level-meter tail is never a neighbour here (it's filtered out of the
+        insert list and the end buttons are disabled), so the tail always stays last. Returns
+        true if a move was actually performed.                                                   */
+    bool moveInsert (te::Plugin& plugin, int direction)
+    {
+        if (direction == 0 || ! plugin.canBeMoved())
+            return false;
+
+        const auto inserts = PluginHost::getTrackInserts (track);
+        const int here = inserts.indexOf (&plugin);
+        if (here < 0)
+            return false;
+
+        const int neighbourPos = here + (direction < 0 ? -1 : +1);
+        if (neighbourPos < 0 || neighbourPos >= inserts.size())
+            return false;   // already at an end; nothing to swap with
+
+        auto* neighbour = inserts[neighbourPos];
+        if (neighbour == nullptr)
+            return false;
+
+        const int targetChainIndex = track.pluginList.indexOf (neighbour);
+        if (targetChainIndex < 0)
+            return false;
+
+        // Hold a Ptr so the plugin survives the detach-and-reinsert inside insertPlugin.
+        te::Plugin::Ptr held (&plugin);
+        track.pluginList.insertPlugin (held, targetChainIndex, nullptr);
+        return true;
+    }
 
     void showAddMenu()
     {
@@ -474,9 +640,19 @@ private:
 
 //==============================================================================
 /*  MasterStrip — the fixed right-hand strip driving the edit's master volume plugin
-    (edit.getMasterVolumePlugin(), a VolumeAndPanPlugin with getVolumeDb/setVolumeDb). Its
-    meter is fed from a LevelMeterPlugin on the master plugin list if one exists; if the master
-    chain has no level meter, the meter is drawn empty (data hookup deferred — never faked).   */
+    (edit.getMasterVolumePlugin(), a VolumeAndPanPlugin with getVolumeDb/setVolumeDb).
+
+    Its meter reads the engine's master OUTPUT measurer, EditPlaybackContext::masterLevels —
+    the same post-fader master level the engine surfaces to control surfaces. We deliberately do
+    NOT insert a te::LevelMeterPlugin into the master plugin list: that would mutate the
+    persisted Edit (write a spurious plugin), dirty a clean project and push an undo step just
+    for opening the mixer. It would also meter PRE master-fader, since the master plugin list is
+    rendered before the master volume plugin. masterLevels avoids both problems — it lives on the
+    playback context, not the Edit model, and is measured after the master fader.
+
+    The playback context (and its masterLevels) is created/destroyed as the transport allocates
+    and frees its graph, so the meter re-binds to the current context every poll (see pollMeter)
+    rather than caching a pointer.                                                              */
 class MixerView::MasterStrip : public Component
 {
 public:
@@ -489,9 +665,8 @@ public:
         nameLabel.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (nameLabel);
 
-        // Master meter source: a LevelMeterPlugin in the master plugin list, if present.
-        if (auto* lm = edit.getMasterPluginList().findFirstPluginOfType<te::LevelMeterPlugin>())
-            meter.attach (&lm->measurer);
+        // The meter binds to the playback context's master output measurer on each poll
+        // (pollMeter) — nothing to provision here, and no mutation of the Edit.
         addAndMakeVisible (meter);
 
         fader.setSliderStyle (Slider::LinearVertical);
@@ -517,7 +692,19 @@ public:
         addAndMakeVisible (fader);
     }
 
-    PeakMeter& getMeter() { return meter; }
+    /*  Re-points the meter at the CURRENT playback context's master output measurer and pulls a
+        sample. masterLevels is post master-fader and reading it mutates nothing in the Edit; the
+        context comes and goes with the transport graph, so we re-bind every poll. PeakMeter::
+        attach() no-ops when the source is unchanged and detaches (empties the bar) on nullptr. */
+    void pollMeter (float secondsSinceLast)
+    {
+        te::LevelMeasurer* src = nullptr;
+        if (auto* ctx = edit.getTransport().getCurrentPlaybackContext())
+            src = &ctx->masterLevels;
+
+        meter.attach (src);
+        meter.poll (secondsSinceLast);
+    }
 
     void paint (Graphics& g) override
     {
@@ -614,7 +801,7 @@ void MixerView::timerCallback()
         strip->getMeter().poll (dt);
 
     if (master != nullptr)
-        master->getMeter().poll (dt);
+        master->pollMeter (dt);
 }
 
 void MixerView::resized()

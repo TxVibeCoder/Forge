@@ -11,6 +11,13 @@
     and right-click context menus for structural edits. Optional std::function callbacks
     let the shell drive an Inspector and persist structural mutations.
 
+    Snap: clip drag-to-move snaps to a selectable grid (SnapDivision: off / bar / 1\2 / 1\4 /
+    1\8 / 1\16) chosen from a ComboBox in the headerW x rulerH corner box at the top-left
+    (above the lane headers, left of the ruler). snapToGrid() converts via the TempoSequence;
+    bar keeps the original logic, sub-bar divisions snap to beat-fraction grid lines. Holding
+    Ctrl/Cmd during a drag bypasses snap. setSnapEnabled/isSnapEnabled remain as thin wrappers
+    over the division model for the existing toolbar seam.
+
     Message-thread only.
 */
 
@@ -64,11 +71,18 @@ public:
     explicit TimeRulerComponent (TimelineView&);
 
     void setEdit (te::Edit*);
+
+    /** Number of sub-beat ticks to draw between whole beats (0 = beats only). Set by ArrangeView
+        from the active snap division so finer grids show subdivision marks. Stored as a plain int
+        to keep the ruler decoupled from ArrangeView's SnapDivision enum. */
+    void setSubBeatTicks (int ticksPerBeat);
+
     void paint (juce::Graphics&) override;
 
 private:
     TimelineView& view;
     te::Edit* edit = nullptr;
+    int subBeatTicks = 0;     // 0 = none, 1 = 1/8 (one tick per beat half), 3 = 1/16, etc.
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TimeRulerComponent)
 };
@@ -225,6 +239,12 @@ private:
 class ArrangeView : public juce::Component
 {
 public:
+    /** Snap granularity for clip drag-to-move. `off` disables snapping entirely; `bar` is the
+        legacy default (snap to whole bars). The remaining values snap to musical sub-bar grid
+        lines derived from the local bar's beats-per-bar. Numeric values are stable (they back the
+        ComboBox item IDs as id = (int) value + 1), so do not reorder existing members. */
+    enum class SnapDivision { off, bar, half, quarter, eighth, sixteenth };
+
     explicit ArrangeView (TimelineView&);
 
     /** Binds the view to an Edit (or nullptr) and rebuilds. */
@@ -239,10 +259,18 @@ public:
     int getNumClipComponentsOnTrack0() const;
     int getPlayheadX() const { return playhead != nullptr ? playhead->getCurrentX() : -1; }
 
-    /** Enables/disables bar-snap for clip drag-to-move. Default ON. The shell can wire this to a
-        toolbar toggle (see devlog); holding Ctrl/Cmd during a drag always bypasses snap regardless. */
+    /** Enables/disables snapping for clip drag-to-move. Default ON. Implemented on top of the
+        snap-division model: enabling restores the last non-off division (bar if none), disabling
+        sets SnapDivision::off. The shell can wire this to a toolbar toggle (see devlog); holding
+        Ctrl/Cmd during a drag always bypasses snap regardless. */
     void setSnapEnabled (bool shouldSnap);
-    bool isSnapEnabled() const { return snapEnabled; }
+    bool isSnapEnabled() const { return division != SnapDivision::off; }
+
+    /** Sets the active snap division live (updates the in-surface selector and the drag-snap grid).
+        SnapDivision::off disables snapping; any other value enables it. Default is SnapDivision::bar,
+        which preserves the original bar-snap behaviour. */
+    void setSnapDivision (SnapDivision newDivision);
+    SnapDivision getSnapDivision() const { return division; }
 
     /** Re-derives every lane's control state (incl. the R arm indicator) from the engine via the
         queryArmed callback. Call after any arm/disarm so a stolen single input clears the other
@@ -261,6 +289,9 @@ public:
     /** Authoritative per-track arm query (engine truth), set by the shell. Used to re-derive every
         lane's R indicator on rebuild() and after each arm/disarm. */
     std::function<bool (te::AudioTrack&)> isTrackArmed;
+    /** Optional: invoked after the snap division changes (selector or setSnapDivision), so the
+        shell can mirror the state elsewhere. Snap is self-contained here; this is purely additive. */
+    std::function<void (SnapDivision)> onSnapDivisionChanged;
 
 private:
     void selectClip (AudioClipComponent*);
@@ -278,10 +309,23 @@ private:
 
     void notifyEditMutated();
 
-    /** Snaps a candidate clip-start time to the nearest bar via edit->tempoSequence. Returns the
-        input unchanged when snapping is off or there is no Edit. Clamps to >= 0 and never round-trips
-        a negative time (which can trip engine asserts). */
+    /** Snaps a candidate clip-start time to the nearest grid line for the active SnapDivision via
+        edit->tempoSequence. Returns the input unchanged when the division is off or there is no Edit.
+        For SnapDivision::bar this matches the original bar-snap logic exactly; sub-bar divisions snap
+        to the nearest beat-fraction grid line derived from the local bar's beats-per-bar. Clamps to
+        >= 0 and never round-trips a negative time (which can trip engine asserts). */
+    te::TimePosition snapToGrid (te::TimePosition) const;
+
+    /** Legacy entry point retained for source/binary stability: forwards to snapToGrid. */
     te::TimePosition snapToBar (te::TimePosition) const;
+
+    /** Grid step in engine beats for a sub-bar division, given the local time signature's numerator
+        (beats per bar) and denominator (which scales musical note divisions onto the engine-beat
+        grid). Returns 0 for off/bar (handled separately by snapToGrid). */
+    static double gridStepInBeats (SnapDivision, int numerator, int denominator);
+
+    /** Builds/positions the in-surface snap-division selector ComboBox in the top-left corner box. */
+    void buildSnapSelector();
 
     /** Sets the one-line hint text and repaints the hint strip. */
     void setHint (const juce::String&);
@@ -295,8 +339,10 @@ private:
     te::Clip* selectedClip = nullptr;
     te::Track* selectedTrack = nullptr;
 
-    bool snapEnabled = true;                 // bar-snap default ON; shell-toggleable seam
-    juce::String hintText;                   // current one-line hint shown in the bottom strip
+    SnapDivision division = SnapDivision::bar;     // snap granularity; bar preserves legacy default
+    SnapDivision lastEnabledDivision = SnapDivision::bar;  // restored by setSnapEnabled(true)
+    juce::ComboBox snapSelector;                   // top-left corner-box division picker
+    juce::String hintText;                         // current one-line hint shown in the bottom strip
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ArrangeView)
 };

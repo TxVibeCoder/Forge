@@ -1,6 +1,7 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-29 (Phases 2–3 committed: `53034a5`).*
+*Living status document. Last updated 2026-06-30 (Phase 4 polish wave: snap-division, stem export,
+plugin scan, mixer bypass/reorder + post-fader master meter).*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
 [../tests/SELFTEST.md](../tests/SELFTEST.md) (verification contract).*
@@ -106,6 +107,22 @@ The Browser, Detail-drawer and Mixer placeholder regions are now **all real**. P
 - **Recording arm/disarm** wired to the lane **R** button — arm state is now **engine-derived**
   (`RecordController::isTrackArmed`), not a transient flag, so it survives rebuilds and input-steal.
 
+### Phase 4 — polish wave  (file-disjoint fan-out + adversarial review)
+Four file-disjoint feature agents, integrated by the orchestrator in one green build, then an
+adversarial-review wave (5 reviewers → independent skeptic-verify per finding) that confirmed +
+fixed 3 real correctness bugs. Build clean (0 warnings); playback selftest PASS.
+- **Snap-division selector** (`ArrangeView`): Off/Bar/½/¼/⅛/1⁄16 grid selector in the ruler corner;
+  drag-to-move snaps to the chosen division. Grid math is **denominator-aware** (review fix: one
+  engine beat is a denominator-note, not always a quarter, so ¼/⅛/1⁄16 scale by denominator/4).
+- **Stem export** (`Exporter::renderStems`): each non-empty audio track → its own 24-bit WAV in a
+  chosen folder (ControlBar **Export ▸ Stems**). Per-track render bitset built by hand (the engine's
+  `toBitSet` helper is buggy for single-track input).
+- **External plugin scan** (`PluginScanner`): JUCE `PluginListComponent` dialog (**Plugins** button)
+  bound to the engine's format manager + known list; auto-persists; surfaces in the insert menu.
+- **Mixer polish** (`MixerView`): per-insert **bypass** dot + ▲/▼ **reorder** (tail preserved);
+  **master meter** now reads the post-fader `EditPlaybackContext::masterLevels` (no Edit mutation —
+  review fix: the previous insert-a-meter approach dirtied a clean project and metered pre-fader).
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** when the
 audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal — if the active
@@ -185,13 +202,19 @@ tests/  SELFTEST.md
 - [ ] **Startup latency hardening (recommended).** `initialiseAudioForRecording` opens a default
   *input* synchronously on the message thread; when the default device changes (e.g. a Bluetooth
   headset disconnects) startup can stall 25–77 s. Open inputs lazily / off the message thread.
-- [ ] **External plugin scanning UI.** `PluginHost` loads whatever is already in the engine's
-  known-plugin list; a VST3/AU **scan** action (in Audio settings) is still to add.
-- [ ] **Master-output metering.** The master peak meter is fed only if the master chain already has
-  a `LevelMeterPlugin`; hook it to the master output node (or insert a meter) for a reliable reading.
-- [ ] **Plugin insert reorder** (drag) + per-insert bypass toggle (engine supports `setEnabled`).
-- [ ] **Snap-division selector** — snap is bar-only; add beat / 1-N grid choices + a toggle in the UI.
-- [ ] **Async export + progress** — export currently blocks the message thread (fine for short edits).
+- [x] **External plugin scanning UI.** DONE — `PluginScanner` hosts JUCE's `PluginListComponent`
+  in a dialog (ControlBar **Plugins** button), bound to the engine's format manager + known-plugin
+  list; scans persist automatically and surface in `PluginHost::getAvailablePluginNames`.
+- [x] **Master-output metering.** DONE — the master strip reads `EditPlaybackContext::masterLevels`
+  (the engine's post-fader master output measurer), re-bound each poll. Earlier approach (inserting a
+  `LevelMeterPlugin` on the master chain) was rejected in review: it dirtied a clean Edit + metered
+  pre-fader. Now no Edit mutation and post-fader, consistent with the track strips.
+- [x] **Plugin insert reorder + per-insert bypass.** DONE — ▲/▼ reorder within a track's chain (the
+  volume/meter tail stays last) + a bypass dot per insert (`te::Plugin::setEnabled`).
+- [x] **Snap-division selector** — DONE — Off/Bar/½/¼/⅛/1⁄16 selector in the arrange ruler corner;
+  grid math is denominator-aware (correct in any time signature, not just 4/4).
+- [ ] **Async export + progress** — export (mixdown + stems) currently blocks the message thread
+  (fine for short edits). Stem export added (`Exporter::renderStems`, ControlBar Export ▸ Stems).
 - [ ] **Live cross-surface refresh** — Mixer/Inspector read engine state on `setEdit`/select only
   (manual-rebuild model); a value changed on another surface updates on re-select, not live.
 

@@ -6,7 +6,7 @@ using namespace juce;
 ControlBar::ControlBar()
 {
     for (auto* b : { &browserBtn, &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn,
-                     &audioBtn, &arrangeBtn, &mixBtn, &drawerBtn })
+                     &scanBtn, &audioBtn, &arrangeBtn, &mixBtn, &drawerBtn })
         addAndMakeVisible (b);
 
     addAndMakeVisible (transportBar);
@@ -19,7 +19,8 @@ ControlBar::ControlBar()
     saveBtn.onClick    = [this] { if (onSave) onSave(); };
     saveAsBtn.onClick  = [this] { if (onSaveAs) onSaveAs(); };
     importBtn.onClick  = [this] { if (onImport) onImport(); };
-    exportBtn.onClick  = [this] { if (onExport) onExport(); };
+    exportBtn.onClick  = [this] { showExportMenu(); };
+    scanBtn.onClick    = [this] { if (onScanPlugins) onScanPlugins(); };
     audioBtn.onClick   = [this] { if (onAudioSettings) onAudioSettings(); };
 
     arrangeBtn.onClick = [this] { setViewMode (0); if (onViewMode) onViewMode (0); };
@@ -45,13 +46,26 @@ void ControlBar::updateViewButtons()
     mixBtn.setToggleState     (viewMode == 1, dontSendNotification);
 }
 
+void ControlBar::showExportMenu()
+{
+    PopupMenu m;
+    m.addItem (1, "Export Mixdown (WAV)...");
+    m.addItem (2, "Export Stems...");
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (exportBtn),
+                     [this] (int r)
+                     {
+                         if      (r == 1) { if (onExport)      onExport(); }
+                         else if (r == 2) { if (onExportStems) onExportStems(); }
+                     });
+}
+
 void ControlBar::resized()
 {
     auto r = getLocalBounds().reduced (6, 6);
 
     browserBtn.setBounds (r.removeFromLeft (66));
     r.removeFromLeft (8);
-    for (auto* b : { &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn, &audioBtn })
+    for (auto* b : { &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn, &scanBtn, &audioBtn })
     {
         b->setBounds (r.removeFromLeft (60));
         r.removeFromLeft (3);

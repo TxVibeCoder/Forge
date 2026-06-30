@@ -28,4 +28,19 @@ namespace Exporter
         Returns true on success. On failure returns false and sets `error` to an explanatory
         message. An edit with no clips returns false with an explanatory error. */
     bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& error);
+
+    /** Renders each audio track in the edit to its own 24-bit WAV file inside outputDir.
+
+        Synchronous/blocking — renders on the calling thread, same recipe as renderEditToWav but
+        restricted to a single track per file (one render pass per track). Audio tracks that have
+        no clips are skipped. Each file is named after its track (the name is sanitised for the
+        filesystem and disambiguated against collisions). Renders the range [0, edit.getLength()]
+        at the Edit's current sample rate, forced to stereo.
+
+        outputDir is created if it doesn't exist.
+
+        Returns true if at least one stem renders. Returns false (with an explanatory `error`) if
+        the edit has no audio tracks, no track has any clips, or every render fails. If some stems
+        render and others fail, returns true but appends the per-track failures to `error`. */
+    bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& error);
 }

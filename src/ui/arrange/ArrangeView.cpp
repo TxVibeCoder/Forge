@@ -16,6 +16,21 @@ namespace
         Colour (0xffe24b4a), Colour (0xffe0902f), Colour (0xffe0c93f), Colour (0xff6bbf59),
         Colour (0xff3fa7c9), Colour (0xff5566cc), Colour (0xff9b59b6), Colour (0xff8a9095)
     };
+
+    // Human-readable label for the active snap division, used in the drag hint strip.
+    String snapDivisionLabel (ArrangeView::SnapDivision d)
+    {
+        switch (d)
+        {
+            case ArrangeView::SnapDivision::off:       return "off";
+            case ArrangeView::SnapDivision::bar:       return "bars";
+            case ArrangeView::SnapDivision::half:      return "1/2 notes";
+            case ArrangeView::SnapDivision::quarter:   return "1/4 notes";
+            case ArrangeView::SnapDivision::eighth:    return "1/8 notes";
+            case ArrangeView::SnapDivision::sixteenth: return "1/16 notes";
+            default:                                   return "grid";
+        }
+    }
 }
 
 //==============================================================================
@@ -29,6 +44,16 @@ void TimeRulerComponent::setEdit (te::Edit* e)
 {
     edit = e;
     repaint();
+}
+
+void TimeRulerComponent::setSubBeatTicks (int ticksPerBeat)
+{
+    const int clamped = jmax (0, ticksPerBeat);
+    if (subBeatTicks != clamped)
+    {
+        subBeatTicks = clamped;
+        repaint();
+    }
 }
 
 void TimeRulerComponent::paint (Graphics& g)
@@ -106,6 +131,26 @@ void TimeRulerComponent::paint (Graphics& g)
         {
             g.setColour (Colour (ForgeLookAndFeel::hairline));
             g.fillRect (x, h / 2, 1, h / 2);
+        }
+
+        // Sub-beat subdivision ticks (active for finer-than-beat snap divisions): draw short faint
+        // marks at evenly-spaced fractions of THIS beat -> the next, so the ruler previews the snap
+        // grid. Drawn only for the last quarter of the strip height to read as minor gridlines, and
+        // skipped on the very last iteration (no following beat to subdivide into).
+        if (subBeatTicks > 0 && beat < lastBeat)
+        {
+            const auto tNext = seq.toTime (te::BeatPosition::fromBeats ((double) (beat + 1)));
+            const int  xNext = view.timeToX (tNext, w);
+
+            g.setColour (Colour (ForgeLookAndFeel::hairline).withAlpha (0.6f));
+
+            for (int s = 1; s <= subBeatTicks; ++s)
+            {
+                const int sx = x + (int) std::lround ((double) (xNext - x) * (double) s
+                                                      / (double) (subBeatTicks + 1));
+                if (sx > 0 && sx < w)
+                    g.fillRect (sx, (h * 3) / 4, 1, h / 4);
+            }
         }
     }
 }
@@ -609,6 +654,34 @@ void PlayheadComponent::scrubTo (const MouseEvent& e)
 ArrangeView::ArrangeView (TimelineView& v)
     : view (v)
 {
+    buildSnapSelector();
+}
+
+void ArrangeView::buildSnapSelector()
+{
+    // Discrete snap-division picker living in the headerW x rulerH corner box (top-left, above the
+    // lane headers and left of the ruler). Item IDs are (int) SnapDivision + 1 so id 0 (no selection)
+    // is never a valid division. Colours come from ForgeLookAndFeel via the ComboBox colour IDs that
+    // the shared LookAndFeel already sets, so no per-instance colour overrides are needed here.
+    snapSelector.addItem ("Off",  (int) SnapDivision::off       + 1);
+    snapSelector.addItem ("Bar",  (int) SnapDivision::bar       + 1);
+    snapSelector.addItem ("1/2",  (int) SnapDivision::half      + 1);
+    snapSelector.addItem ("1/4",  (int) SnapDivision::quarter   + 1);
+    snapSelector.addItem ("1/8",  (int) SnapDivision::eighth    + 1);
+    snapSelector.addItem ("1/16", (int) SnapDivision::sixteenth + 1);
+
+    snapSelector.setTooltip ("Snap clip moves to this grid (hold Ctrl while dragging to bypass)");
+    snapSelector.setJustificationType (Justification::centredLeft);
+    snapSelector.setSelectedId ((int) division + 1, dontSendNotification);
+
+    snapSelector.onChange = [this]
+    {
+        const int id = snapSelector.getSelectedId();
+        if (id > 0)
+            setSnapDivision (static_cast<SnapDivision> (id - 1));
+    };
+
+    addAndMakeVisible (snapSelector);
 }
 
 void ArrangeView::setEdit (te::Edit* e)
@@ -630,6 +703,11 @@ void ArrangeView::rebuild()
     {
         ruler = std::make_unique<TimeRulerComponent> (view);
         ruler->setEdit (edit);
+        // Re-apply the subdivision-tick preview for the current division (the ruler is recreated on
+        // every rebuild, so its tick state would otherwise reset to none).
+        ruler->setSubBeatTicks (division == SnapDivision::sixteenth ? 3
+                                : division == SnapDivision::eighth  ? 1
+                                                                    : 0);
         addAndMakeVisible (*ruler);
 
         for (auto* track : te::getAudioTracks (*edit))
@@ -650,8 +728,10 @@ void ArrangeView::rebuild()
             lane->onClipDragStarted = [this] (AudioClipComponent& cc)
             {
                 selectClip (&cc);
-                setHint (snapEnabled ? "Moving clip - snapping to bars - hold Ctrl to bypass snap"
-                                     : "Moving clip - snap off");
+                setHint (isSnapEnabled()
+                             ? "Moving clip - snapping to " + snapDivisionLabel (division)
+                                 + " - hold Ctrl to bypass snap"
+                             : "Moving clip - snap off");
             };
 
             lane->onClipDragCommitted = [this] (AudioClipComponent&)
@@ -666,8 +746,8 @@ void ArrangeView::rebuild()
                 setHint ("Drag a clip to move it - hold Ctrl to bypass snap");
             };
 
-            // Per-lane snap seam -> ArrangeView's bar-snap helper (honours snapEnabled).
-            lane->snapStartTime = [this] (te::TimePosition t) { return snapToBar (t); };
+            // Per-lane snap seam -> ArrangeView's grid-snap helper (honours the active division).
+            lane->snapStartTime = [this] (te::TimePosition t) { return snapToGrid (t); };
 
             lane->onHeaderClicked = [this] (TrackLaneComponent& l)
             {
@@ -723,6 +803,10 @@ void ArrangeView::rebuild()
 void ArrangeView::resized()
 {
     using namespace ArrangeLayout;
+
+    // Snap-division selector occupies the corner box (above the lane headers, left of the ruler).
+    // A small inset keeps it visually distinct from the ruler/header edges.
+    snapSelector.setBounds (Rectangle<int> (0, 0, headerW, rulerH).reduced (2, 2));
 
     if (ruler != nullptr)
         ruler->setBounds (headerW, 0, jmax (0, getWidth() - headerW), rulerH);
@@ -833,7 +917,34 @@ void ArrangeView::notifyEditMutated()
 
 void ArrangeView::setSnapEnabled (bool shouldSnap)
 {
-    snapEnabled = shouldSnap;
+    // Thin wrapper over the division model: enabling restores the last non-off division (so a
+    // toolbar toggle round-trips back to whatever the user last picked), disabling sets off.
+    if (shouldSnap)
+        setSnapDivision (lastEnabledDivision == SnapDivision::off ? SnapDivision::bar
+                                                                  : lastEnabledDivision);
+    else
+        setSnapDivision (SnapDivision::off);
+}
+
+void ArrangeView::setSnapDivision (SnapDivision newDivision)
+{
+    division = newDivision;
+
+    if (division != SnapDivision::off)
+        lastEnabledDivision = division;
+
+    // Keep the in-surface selector in sync (no-op if the change originated there).
+    snapSelector.setSelectedId ((int) division + 1, dontSendNotification);
+
+    // Preview finer-than-beat grids on the ruler. The ruler already draws whole-beat lines, so only
+    // sub-beat divisions add ticks: 1/8 -> 1 tick per beat (halves), 1/16 -> 3 ticks (quarters).
+    if (ruler != nullptr)
+        ruler->setSubBeatTicks (division == SnapDivision::sixteenth ? 3
+                                : division == SnapDivision::eighth  ? 1
+                                                                    : 0);
+
+    if (onSnapDivisionChanged != nullptr)
+        onSnapDivisionChanged (division);
 }
 
 void ArrangeView::setHint (const String& text)
@@ -845,34 +956,89 @@ void ArrangeView::setHint (const String& text)
     }
 }
 
+double ArrangeView::gridStepInBeats (SnapDivision d, int numerator, int denominator)
+{
+    // Grid step measured in ENGINE BEATS (the unit of BarsAndBeats::beats / BeatPosition). Under
+    // Tracktion's default LengthOfOneBeat::dependsOnTimeSignature policy one engine beat is one
+    // DENOMINATOR-note (e.g. an eighth-note in 6/8), NOT always a quarter-note. So the musical
+    // 1/4, 1/8, 1/16 divisions are scaled by denominator/4 to land on true note values in any
+    // time signature (denominator/4 == 1 in 4/4, the common case, so that path is unchanged).
+    // 'half' means half a BAR, derived from the bar's beat count, so it needs no scaling.
+    // Returns 0 for off/bar, which snapToGrid handles via the dedicated bar path.
+    const double quarterNoteInBeats = jmax (1, denominator) / 4.0;
+
+    switch (d)
+    {
+        case SnapDivision::half:      return numerator * 0.5;             // half of a bar
+        case SnapDivision::quarter:   return 1.0  * quarterNoteInBeats;   // one quarter-note
+        case SnapDivision::eighth:    return 0.5  * quarterNoteInBeats;   // an eighth-note
+        case SnapDivision::sixteenth: return 0.25 * quarterNoteInBeats;   // a sixteenth-note
+        case SnapDivision::off:
+        case SnapDivision::bar:
+        default:                      return 0.0;
+    }
+}
+
 te::TimePosition ArrangeView::snapToBar (te::TimePosition t) const
 {
-    // Snap a candidate clip-start to the nearest BAR. Mirrors the ruler's robust idiom: ask the
-    // TempoSequence which bar/beat the time lands on, round to the nearest whole bar by the
-    // fraction of the bar already elapsed, then convert that bar back to a time. We never
+    // Retained legacy entry point (existing call sites / shell seams): forward to the grid snapper.
+    return snapToGrid (t);
+}
+
+te::TimePosition ArrangeView::snapToGrid (te::TimePosition t) const
+{
+    // Snap a candidate clip-start to the nearest grid line for the active division. We never
     // round-trip a negative time/beat (which can trip engine asserts) — negatives are clamped to 0.
-    if (! snapEnabled || edit == nullptr)
+    if (division == SnapDivision::off || edit == nullptr)
         return t;
 
     if (t <= te::TimePosition())
         return te::TimePosition();
 
     auto& seq = edit->tempoSequence;
-    const auto bb = seq.toBarsAndBeats (t);
 
-    // bb.beats is the TOTAL beats elapsed into the current bar (whole + fractional combined), and
-    // numerator is that bar's beats-per-bar. fractionOfBar in [0, 1) tells us whether to round down
-    // to this bar or up to the next.
-    const int    numerator     = jmax (1, bb.numerator);
-    const double fractionOfBar = bb.beats.inBeats() / (double) numerator;
+    if (division == SnapDivision::bar)
+    {
+        // Snap to the nearest BAR. Mirrors the ruler's robust idiom: ask the TempoSequence which
+        // bar/beat the time lands on, round to the nearest whole bar by the fraction of the bar
+        // already elapsed, then convert that bar back to a time.
+        const auto bb = seq.toBarsAndBeats (t);
 
-    int nearestBar = bb.bars + (int) std::lround (fractionOfBar);
-    if (nearestBar < 0)
-        nearestBar = 0;
+        // bb.beats is the TOTAL beats elapsed into the current bar (whole + fractional combined), and
+        // numerator is that bar's beats-per-bar. fractionOfBar in [0, 1) tells us whether to round
+        // down to this bar or up to the next.
+        const int    numerator     = jmax (1, bb.numerator);
+        const double fractionOfBar = bb.beats.inBeats() / (double) numerator;
 
-    // BarsAndBeats with zero beats -> the exact start of `nearestBar` (toTime reads tempo sections,
-    // so the numerator field is not consulted here; bars + zero beats is sufficient).
-    const auto snapped = seq.toTime (te::tempo::BarsAndBeats { nearestBar, te::BeatDuration() });
+        int nearestBar = bb.bars + (int) std::lround (fractionOfBar);
+        if (nearestBar < 0)
+            nearestBar = 0;
+
+        // BarsAndBeats with zero beats -> the exact start of `nearestBar` (toTime reads tempo
+        // sections, so the numerator field is not consulted here; bars + zero beats is sufficient).
+        const auto snapped = seq.toTime (te::tempo::BarsAndBeats { nearestBar, te::BeatDuration() });
+
+        return snapped < te::TimePosition() ? te::TimePosition() : snapped;
+    }
+
+    // Sub-bar division: snap on the absolute beat grid. The step is derived from the local time
+    // signature in force at the candidate — numerator gives beats-per-bar (for 'half'), the
+    // denominator scales the musical note divisions onto the engine-beat grid (see gridStepInBeats).
+    const auto bb          = seq.toBarsAndBeats (t);
+    const int  numerator   = jmax (1, bb.numerator);
+    const int  denominator = seq.getTimeSigAt (t).denominator;
+    const double step      = gridStepInBeats (division, numerator, denominator);
+
+    if (step <= 0.0)
+        return t;
+
+    const double absBeats     = seq.toBeats (t).inBeats();
+    const double snappedBeats = std::lround (absBeats / step) * step;
+
+    if (snappedBeats <= 0.0)
+        return te::TimePosition();
+
+    const auto snapped = seq.toTime (te::BeatPosition::fromBeats (snappedBeats));
 
     return snapped < te::TimePosition() ? te::TimePosition() : snapped;
 }
