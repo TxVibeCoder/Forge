@@ -156,19 +156,12 @@ void TimeRulerComponent::paint (Graphics& g)
 }
 
 //==============================================================================
-AudioClipComponent::AudioClipComponent (TimelineView& v, te::Clip& c)
+ClipComponent::ClipComponent (TimelineView& v, te::Clip& c)
     : view (v), clip (c)
 {
-    if (auto* wac = dynamic_cast<te::WaveAudioClip*> (&clip))
-    {
-        const te::AudioFile audioFile = wac->getPlaybackFile();
-
-        if (audioFile.isValid())
-            thumbnail = std::make_unique<te::SmartThumbnail> (clip.edit.engine, audioFile, *this, &clip.edit);
-    }
 }
 
-void AudioClipComponent::setSelected (bool shouldBeSelected)
+void ClipComponent::setSelected (bool shouldBeSelected)
 {
     if (selected != shouldBeSelected)
     {
@@ -177,7 +170,7 @@ void AudioClipComponent::setSelected (bool shouldBeSelected)
     }
 }
 
-int AudioClipComponent::clipAreaWidth() const
+int ClipComponent::clipAreaWidth() const
 {
     // The clip is a child of TrackLaneComponent; the clip area is the parent width minus the fixed
     // track-header strip on the left. (resized() positions clips with exactly this width.)
@@ -187,7 +180,7 @@ int AudioClipComponent::clipAreaWidth() const
     return jmax (0, getWidth());
 }
 
-void AudioClipComponent::mouseDown (const MouseEvent& e)
+void ClipComponent::mouseDown (const MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
     {
@@ -210,7 +203,7 @@ void AudioClipComponent::mouseDown (const MouseEvent& e)
     dragOriginStart = clip.getPosition().getStart();
 }
 
-void AudioClipComponent::mouseDrag (const MouseEvent& e)
+void ClipComponent::mouseDrag (const MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
         return;
@@ -253,7 +246,7 @@ void AudioClipComponent::mouseDrag (const MouseEvent& e)
     setTopLeftPosition (newLeft, getY());
 }
 
-void AudioClipComponent::mouseUp (const MouseEvent& e)
+void ClipComponent::mouseUp (const MouseEvent& e)
 {
     if (! dragging)
         return;
@@ -281,6 +274,40 @@ void AudioClipComponent::mouseUp (const MouseEvent& e)
 
     if (onDragCommitted != nullptr)
         onDragCommitted (*this);
+}
+
+void ClipComponent::paint (Graphics& g)
+{
+    // Shared chrome: clip-colour fill + border, a name fallback, and the selection outline.
+    // Subclasses draw their type-specific body (waveform / notes) in their own override.
+    auto bounds = getLocalBounds();
+
+    g.setColour (clip.getColour().withAlpha (0.55f));
+    g.fillRect (bounds);
+    g.setColour (Colours::black.withAlpha (0.6f));
+    g.drawRect (bounds);
+
+    g.setColour (Colour (ForgeLookAndFeel::textPrim));
+    g.drawText (clip.getName(), bounds.reduced (4), Justification::topLeft);
+
+    if (selected)
+    {
+        g.setColour (Colour (ForgeLookAndFeel::accent));
+        g.drawRect (bounds, 2);
+    }
+}
+
+//==============================================================================
+AudioClipComponent::AudioClipComponent (TimelineView& v, te::Clip& c)
+    : ClipComponent (v, c)
+{
+    if (auto* wac = dynamic_cast<te::WaveAudioClip*> (&clip))
+    {
+        const te::AudioFile audioFile = wac->getPlaybackFile();
+
+        if (audioFile.isValid())
+            thumbnail = std::make_unique<te::SmartThumbnail> (clip.edit.engine, audioFile, *this, &clip.edit);
+    }
 }
 
 void AudioClipComponent::drawWaveformWindow (Graphics& g, Rectangle<int> area,
@@ -378,6 +405,87 @@ void AudioClipComponent::paint (Graphics& g)
 }
 
 //==============================================================================
+MidiClipComponent::MidiClipComponent (TimelineView& v, te::Clip& c)
+    : ClipComponent (v, c)
+{
+}
+
+void MidiClipComponent::paint (Graphics& g)
+{
+    auto bounds = getLocalBounds();
+
+    // Distinct fill so a MIDI clip reads differently from a wave clip: shift the clip colour
+    // towards a fixed hue rather than drawing the raw colour, then the usual border.
+    g.setColour (clip.getColour().withRotatedHue (0.5f).withAlpha (0.55f));
+    g.fillRect (bounds);
+    g.setColour (Colours::black.withAlpha (0.6f));
+    g.drawRect (bounds);
+
+    g.setColour (Colour (ForgeLookAndFeel::textPrim));
+    g.drawText (clip.getName(), bounds.reduced (4), Justification::topLeft);
+
+    // Mini note-preview: plot each note as a tiny filled rect, x from its beat range (mapped onto
+    // the clip's own beat span) and y from its pitch (mapped onto a fixed pitch window so the scale
+    // stays cheap and robust). An empty clip just shows the chrome + name above.
+    if (auto* mc = dynamic_cast<te::MidiClip*> (&getClip()))
+    {
+        const auto& notes = mc->getSequence().getNotes();
+
+        if (! notes.isEmpty())
+        {
+            // MidiNote beats are CONTENT beats (the sequence's own coordinate system, including the
+            // clip offset), so map each note's content-beat range to timeline time via the clip's
+            // getTimeOfContentBeat, then onto the clip's own pixel width through its on-timeline
+            // length. This stays correct under tempo/offset/speed without re-deriving any of it here.
+            const auto pos       = mc->getPosition();
+            const double clipT0  = pos.getStart().inSeconds();
+            const double clipLen = jmax (1.0e-9, pos.getLength().inSeconds());
+
+            auto plot = bounds.reduced (1).withTrimmedTop (bounds.getHeight() / 3);  // notes under the name
+            const int plotW = plot.getWidth();
+            const int plotH = plot.getHeight();
+            const double pitchSpan = (double) (pitchHi - pitchLo);
+
+            if (plotW > 0 && plotH > 0)
+            {
+                g.setColour (Colours::white.withAlpha (0.85f));
+
+                for (auto* n : notes)
+                {
+                    if (n == nullptr)
+                        continue;
+
+                    // Content-beat -> timeline time -> fraction of the clip's on-timeline length,
+                    // clamped into [0, 1] so notes outside the visible window collapse to the edges.
+                    const double t0 = mc->getTimeOfContentBeat (n->getStartBeat()).inSeconds();
+                    const double t1 = mc->getTimeOfContentBeat (n->getEndBeat()).inSeconds();
+
+                    const double f0 = jlimit (0.0, 1.0, (t0 - clipT0) / clipLen);
+                    const double f1 = jlimit (0.0, 1.0, (t1 - clipT0) / clipLen);
+
+                    const int x1 = plot.getX() + roundToInt (f0 * (double) plotW);
+                    const int x2 = plot.getX() + roundToInt (f1 * (double) plotW);
+
+                    // Pitch -> y (inverted so higher pitches sit higher), within the fixed window.
+                    const int pitch = jlimit (pitchLo, pitchHi, n->getNoteNumber());
+                    const int y = plot.getY()
+                                    + roundToInt ((double) (pitchHi - pitch) / jmax (1.0, pitchSpan)
+                                                  * (double) (plotH - 2));
+
+                    g.fillRect (x1, y, jmax (2, x2 - x1), 2);
+                }
+            }
+        }
+    }
+
+    if (selected)
+    {
+        g.setColour (Colour (ForgeLookAndFeel::accent));
+        g.drawRect (bounds, 2);
+    }
+}
+
+//==============================================================================
 TrackLaneComponent::TrackLaneComponent (TimelineView& v, te::AudioTrack& t)
     : view (v), track (t)
 {
@@ -454,27 +562,31 @@ void TrackLaneComponent::rebuildClips()
 
     for (auto* c : track.getClips())
     {
-        auto* cc = clipComps.add (new AudioClipComponent (view, *c));
+        // Pick the component by clip type so a MIDI clip draws as a note-block instead of the
+        // wave path: MidiClipComponent for te::MidiClip, AudioClipComponent for everything else.
+        ClipComponent* cc = dynamic_cast<te::MidiClip*> (c)
+                                ? static_cast<ClipComponent*> (clipComps.add (new MidiClipComponent (view, *c)))
+                                : static_cast<ClipComponent*> (clipComps.add (new AudioClipComponent (view, *c)));
 
-        cc->onClicked = [this] (AudioClipComponent& clicked)
+        cc->onClicked = [this] (ClipComponent& clicked)
         {
             if (onClipClicked != nullptr)
                 onClipClicked (clicked);
         };
 
-        cc->onRightClicked = [this] (AudioClipComponent& clicked, const MouseEvent& e)
+        cc->onRightClicked = [this] (ClipComponent& clicked, const MouseEvent& e)
         {
             if (onClipRightClicked != nullptr)
                 onClipRightClicked (clicked, e);
         };
 
-        cc->onDragStarted = [this] (AudioClipComponent& dragged)
+        cc->onDragStarted = [this] (ClipComponent& dragged)
         {
             if (onClipDragStarted != nullptr)
                 onClipDragStarted (dragged);
         };
 
-        cc->onDragCommitted = [this] (AudioClipComponent& dragged)
+        cc->onDragCommitted = [this] (ClipComponent& dragged)
         {
             if (onClipDragCommitted != nullptr)
                 onClipDragCommitted (dragged);
@@ -500,10 +612,18 @@ void TrackLaneComponent::mouseDown (const MouseEvent& e)
 
     if (e.mods.isPopupMenu())
     {
-        // Right-click in the header opens the lane menu. (Right-click on a clip is handled
-        // by AudioClipComponent; right-click in the empty clip area is a no-op for now.)
-        if (inHeader && onHeaderRightClicked != nullptr)
-            onHeaderRightClicked (*this, e);
+        // Right-click in the header opens the lane menu. (Right-click on a clip is handled by
+        // ClipComponent.) Right-click in the empty clip area offers a "New MIDI Clip" affordance
+        // at the clicked time via onClipAreaRightClicked.
+        if (inHeader)
+        {
+            if (onHeaderRightClicked != nullptr)
+                onHeaderRightClicked (*this, e);
+        }
+        else if (onClipAreaRightClicked != nullptr)
+        {
+            onClipAreaRightClicked (*this, e.x - headerW, jmax (0, getWidth() - headerW), e);
+        }
     }
     else if (inHeader)
     {
@@ -714,18 +834,18 @@ void ArrangeView::rebuild()
         {
             auto* lane = lanes.add (new TrackLaneComponent (view, *track));
 
-            lane->onClipClicked = [this] (AudioClipComponent& cc)
+            lane->onClipClicked = [this] (ClipComponent& cc)
             {
                 selectClip (&cc);
             };
 
-            lane->onClipRightClicked = [this] (AudioClipComponent& cc, const MouseEvent& e)
+            lane->onClipRightClicked = [this] (ClipComponent& cc, const MouseEvent& e)
             {
                 selectClip (&cc);
                 showClipContextMenu (cc, e);
             };
 
-            lane->onClipDragStarted = [this] (AudioClipComponent& cc)
+            lane->onClipDragStarted = [this] (ClipComponent& cc)
             {
                 selectClip (&cc);
                 setHint (isSnapEnabled()
@@ -734,7 +854,7 @@ void ArrangeView::rebuild()
                              : "Moving clip - snap off");
             };
 
-            lane->onClipDragCommitted = [this] (AudioClipComponent&)
+            lane->onClipDragCommitted = [this] (ClipComponent&)
             {
                 // The clip's start was committed to the engine; persist, then re-lay-out every lane
                 // DIRECTLY so each clip's bounds are re-derived from the authoritative engine
@@ -748,6 +868,13 @@ void ArrangeView::rebuild()
 
             // Per-lane snap seam -> ArrangeView's grid-snap helper (honours the active division).
             lane->snapStartTime = [this] (te::TimePosition t) { return snapToGrid (t); };
+
+            // Right-click on the empty clip area -> the "New MIDI Clip" affordance at that time.
+            lane->onClipAreaRightClicked = [this] (TrackLaneComponent& l, int clipAreaX, int clipAreaW,
+                                                   const MouseEvent& e)
+            {
+                showClipAreaContextMenu (l, clipAreaX, clipAreaW, e);
+            };
 
             lane->onHeaderClicked = [this] (TrackLaneComponent& l)
             {
@@ -864,7 +991,7 @@ void ArrangeView::refreshArmStates()
 }
 
 //==============================================================================
-void ArrangeView::selectClip (AudioClipComponent* cc)
+void ArrangeView::selectClip (ClipComponent* cc)
 {
     selectedClip = (cc != nullptr ? &cc->getClip() : nullptr);
     selectedTrack = nullptr;
@@ -1044,7 +1171,35 @@ te::TimePosition ArrangeView::snapToGrid (te::TimePosition t) const
 }
 
 //==============================================================================
-void ArrangeView::showClipContextMenu (AudioClipComponent& cc, const MouseEvent&)
+void ArrangeView::showClipAreaContextMenu (TrackLaneComponent& lane, int clipAreaX, int clipAreaW,
+                                           const MouseEvent&)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* track = &lane.getTrack();
+    // Snap the clicked time to the active grid so the new clip lands where a dragged clip would.
+    const auto startTime = snapToGrid (view.xToTime (clipAreaX, clipAreaW));
+
+    Component::SafePointer<ArrangeView> safeThis (this);
+
+    PopupMenu menu;
+    menu.addItem ("New MIDI Clip", [safeThis, track, startTime]
+    {
+        if (safeThis != nullptr && track != nullptr && safeThis->edit != nullptr
+              && safeThis->onCreateMidiClipRequested != nullptr)
+        {
+            const auto tracks = te::getAudioTracks (*safeThis->edit);
+            const int trackIndex = tracks.indexOf (track);
+            if (trackIndex >= 0)
+                safeThis->onCreateMidiClipRequested (trackIndex, startTime);
+        }
+    });
+
+    menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&lane));
+}
+
+void ArrangeView::showClipContextMenu (ClipComponent& cc, const MouseEvent&)
 {
     auto* clip = &cc.getClip();
     Component::SafePointer<ArrangeView> safeThis (this);
@@ -1109,6 +1264,20 @@ void ArrangeView::showLaneContextMenu (TrackLaneComponent& lane, const MouseEven
     {
         if (safeThis != nullptr && track != nullptr)
             safeThis->deleteTrack (*track);
+    });
+
+    // Convenience: create a new MIDI clip at time 0 on this lane's track. Mirrors the clip-area
+    // affordance but always at the bar-1 start (the header has no time-under-pointer to use).
+    menu.addItem ("New MIDI Clip", [safeThis, track]
+    {
+        if (safeThis != nullptr && track != nullptr && safeThis->edit != nullptr
+              && safeThis->onCreateMidiClipRequested != nullptr)
+        {
+            const auto tracks = te::getAudioTracks (*safeThis->edit);
+            const int trackIndex = tracks.indexOf (track);
+            if (trackIndex >= 0)
+                safeThis->onCreateMidiClipRequested (trackIndex, te::TimePosition());
+        }
     });
 
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&lane));

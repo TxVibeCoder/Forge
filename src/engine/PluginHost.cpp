@@ -41,7 +41,7 @@ namespace PluginHost
     // PluginManager::createBuiltInPluginDescription<>(), kept explicit here so we don't depend
     // on template availability and so the displayName matches getName() at runtime.
     template <typename PluginClass>
-    static Creatable makeBuiltIn()
+    static Creatable makeBuiltIn (const juce::String& category = TRANS ("Effect"))
     {
         Creatable c;
         c.displayName = TRANS (PluginClass::getPluginName());
@@ -49,7 +49,7 @@ namespace PluginHost
 
         c.description.name             = c.displayName;
         c.description.pluginFormatName = te::PluginManager::builtInPluginFormatName;
-        c.description.category         = TRANS ("Effect");
+        c.description.category         = category;
         c.description.manufacturerName = "Tracktion Software Corporation";
         c.description.fileOrIdentifier = PluginClass::xmlTypeName;
 
@@ -71,6 +71,16 @@ namespace PluginHost
         list.add (makeBuiltIn<te::PhaserPlugin>());        // "Phaser"
         list.add (makeBuiltIn<te::PitchShiftPlugin>());    // "Pitch Shifter"
         list.add (makeBuiltIn<te::LowPassPlugin>());       // "Low/High-Pass Filter"
+        return list;
+    }
+
+    // The always-available built-in INSTRUMENTS. Unlike effects these report category
+    // "Instrument" and go at the HEAD of a track's chain as its sound source. Currently just
+    // the 4OSC synth, which is what a fresh MIDI track gets so its clips are audible.
+    static Array<Creatable> getBuiltInInstruments()
+    {
+        Array<Creatable> list;
+        list.add (makeBuiltIn<te::FourOscPlugin> (TRANS ("Instrument")));   // "4OSC"
         return list;
     }
 
@@ -175,6 +185,54 @@ namespace PluginHost
         track.pluginList.insertPlugin (plugin, insertIndex, nullptr);
 
         return plugin;
+    }
+
+    //==============================================================================
+    te::Plugin::Ptr addInstrumentToTrack (te::AudioTrack& track, const juce::String& displayName)
+    {
+        auto& edit = track.edit;
+
+        // Find the built-in instrument whose display name matches.
+        const Creatable* match = nullptr;
+
+        const auto instruments = getBuiltInInstruments();
+        for (const auto& c : instruments)
+        {
+            if (c.displayName == displayName)
+            {
+                match = &c;
+                break;
+            }
+        }
+
+        if (match == nullptr)
+            return {};
+
+        // Create the plugin instance through the Edit's cache (the canonical path).
+        auto plugin = edit.getPluginCache().createNewPlugin (match->xmlType, match->description);
+
+        if (plugin == nullptr)
+            return {};
+
+        // The instrument is the track's sound source, so it goes at the HEAD of the chain
+        // (index 0) — effects, then the volume/meter tail, all follow it.
+        track.pluginList.insertPlugin (plugin, 0, nullptr);
+
+        return plugin;
+    }
+
+    //==============================================================================
+    bool ensureDefaultInstrument (te::AudioTrack& track)
+    {
+        // If the chain already hosts a synth / MIDI-input plugin, there's nothing to do — and
+        // we must NOT add another, or repeated clip (re)creation would stack synths.
+        for (auto* p : track.pluginList)
+            if (p != nullptr && (p->isSynth() || p->takesMidiInput()))
+                return false;
+
+        // No instrument yet: insert a default 4OSC at the head of the chain.
+        addInstrumentToTrack (track, te::FourOscPlugin::getPluginName());
+        return true;
     }
 
     //==============================================================================

@@ -1,5 +1,6 @@
 #include "services/files/ProjectSession.h"
 #include "engine/EngineHelpers.h"
+#include "engine/PluginHost.h"
 
 ProjectSession::ProjectSession (te::Engine& e)
     : engine (e)
@@ -73,6 +74,30 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te:
 
     if (clip != nullptr)
         edit->markAsChanged();
+
+    return clip;
+}
+
+te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange range, const juce::String& name)
+{
+    if (edit == nullptr)
+        return {};
+
+    // Ensure the track exists, then insert the (empty) MIDI clip on it. We keep the track handle
+    // so we can give it a default instrument here — the MIDI-clip insert deliberately stays out of
+    // the plugin chain (EngineHelpers stays free of PluginHost; ensuring audibility lives here).
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+        return {};
+
+    auto clip = track->insertMIDIClip (name, range, nullptr);
+
+    if (clip != nullptr)
+    {
+        PluginHost::ensureDefaultInstrument (*track);   // born audible — default 4OSC at chain head
+        edit->markAsChanged();
+    }
 
     return clip;
 }

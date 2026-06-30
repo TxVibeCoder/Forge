@@ -88,12 +88,15 @@ private:
 };
 
 //==============================================================================
-/** One clip rectangle; owns a SmartThumbnail and draws the waveform. */
-class AudioClipComponent : public juce::Component
+/** One clip rectangle: the type-agnostic base owning selection, drag-to-move and the shared
+    callbacks. Subclasses override paint() to draw their type-specific body (waveform / notes). */
+class ClipComponent : public juce::Component
 {
 public:
-    AudioClipComponent (TimelineView&, te::Clip&);
+    ClipComponent (TimelineView&, te::Clip&);
 
+    /** Draws the shared chrome: clip-colour fill, border, name fallback, selection outline.
+        Subclasses override and draw their body on top of (or instead of) this. */
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -105,31 +108,31 @@ public:
     bool isSelected() const { return selected; }
 
     /** Invoked on left-click (clip selection). */
-    std::function<void (AudioClipComponent&)> onClicked;
+    std::function<void (ClipComponent&)> onClicked;
     /** Invoked on right-click; param is the screen-space event for menu placement. */
-    std::function<void (AudioClipComponent&, const juce::MouseEvent&)> onRightClicked;
+    std::function<void (ClipComponent&, const juce::MouseEvent&)> onRightClicked;
 
     /** Invoked at the START of a horizontal drag-to-move (after the move threshold is crossed),
         so the owner can select this clip and surface the drag hint. */
-    std::function<void (AudioClipComponent&)> onDragStarted;
+    std::function<void (ClipComponent&)> onDragStarted;
     /** Invoked once on mouseUp after a drag committed a new start time to the engine clip; the
         owner persists (onEditMutated) and re-lays-out. Not fired for a plain click. */
-    std::function<void (AudioClipComponent&)> onDragCommitted;
+    std::function<void (ClipComponent&)> onDragCommitted;
     /** Maps a candidate clip-start time to a snapped time. Set by the owner; returns the input
         unchanged when snapping is disabled. Only consulted when the drag is NOT bypassing snap.
         Returns a time >= 0 (the owner clamps); never round-trips a negative time. */
     std::function<te::TimePosition (te::TimePosition)> snapStartTime;
 
-private:
+protected:
     /** Width in px of the clip area this clip is positioned within (parent width minus the track
         header). Falls back to the parent width when no parent is attached. */
     int clipAreaWidth() const;
 
     TimelineView& view;
     te::Clip& clip;
-    std::unique_ptr<te::SmartThumbnail> thumbnail;
     bool selected = false;
 
+private:
     // Drag-to-move state. dragging stays false until the pointer moves past a small threshold so a
     // plain click never nudges the clip. dragOriginStart is the clip's start at mouseDown; the live
     // bounds are recomputed from it + the pixel delta each mouseDrag.
@@ -137,10 +140,44 @@ private:
     int  dragAnchorX = 0;                                  // mouseDown x in PARENT (lane) space (stable as we move)
     te::TimePosition dragOriginStart {};                  // clip start captured at mouseDown
 
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipComponent)
+};
+
+//==============================================================================
+/** A wave clip: owns a SmartThumbnail and draws the waveform over the shared chrome. */
+class AudioClipComponent : public ClipComponent
+{
+public:
+    AudioClipComponent (TimelineView&, te::Clip&);
+
+    void paint (juce::Graphics&) override;
+
+private:
+    std::unique_ptr<te::SmartThumbnail> thumbnail;
+
     void drawWaveformWindow (juce::Graphics&, juce::Rectangle<int> area,
                              double sourceStartSecs, double sourceLenSecs, double speed);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioClipComponent)
+};
+
+//==============================================================================
+/** A MIDI clip: draws the shared chrome with a distinct tint plus a mini note-preview, so a
+    te::MidiClip reads visibly differently from a wave clip. */
+class MidiClipComponent : public ClipComponent
+{
+public:
+    MidiClipComponent (TimelineView&, te::Clip&);
+
+    void paint (juce::Graphics&) override;
+
+private:
+    // Fixed pitch window for the note-preview y-scale; keeps the plot cheap and robust regardless
+    // of the actual notes' range (notes outside the window are simply clamped/skipped).
+    static constexpr int pitchLo = 36;
+    static constexpr int pitchHi = 96;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiClipComponent)
 };
 
 //==============================================================================
@@ -168,12 +205,16 @@ public:
 
     //==============================================================================
     // Callbacks bubbled up to ArrangeView (set during rebuild()).
-    std::function<void (AudioClipComponent&)> onClipClicked;
-    std::function<void (AudioClipComponent&, const juce::MouseEvent&)> onClipRightClicked;
+    std::function<void (ClipComponent&)> onClipClicked;
+    std::function<void (ClipComponent&, const juce::MouseEvent&)> onClipRightClicked;
     /** A clip on this lane began a drag-to-move. */
-    std::function<void (AudioClipComponent&)> onClipDragStarted;
+    std::function<void (ClipComponent&)> onClipDragStarted;
     /** A clip on this lane committed a new start time (drag finished). */
-    std::function<void (AudioClipComponent&)> onClipDragCommitted;
+    std::function<void (ClipComponent&)> onClipDragCommitted;
+    /** Right-click on the empty clip area of this lane (not a clip, not the header), with the
+        clip-area-relative x and the area width so the owner can offer a "New MIDI Clip" affordance
+        at the clicked time. */
+    std::function<void (TrackLaneComponent&, int clipAreaX, int clipAreaWidth, const juce::MouseEvent&)> onClipAreaRightClicked;
     /** Snap a candidate clip-start time (set by ArrangeView; identity when snap is off). */
     std::function<te::TimePosition (te::TimePosition)> snapStartTime;
     std::function<void (TrackLaneComponent&)> onHeaderClicked;
@@ -195,7 +236,7 @@ public:
 private:
     TimelineView& view;
     te::AudioTrack& track;
-    juce::OwnedArray<AudioClipComponent> clipComps;
+    juce::OwnedArray<ClipComponent> clipComps;
 
     juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" };
     bool armed = false;
@@ -292,14 +333,22 @@ public:
     /** Optional: invoked after the snap division changes (selector or setSnapDivision), so the
         shell can mirror the state elsewhere. Snap is self-contained here; this is purely additive. */
     std::function<void (SnapDivision)> onSnapDivisionChanged;
+    /** Invoked when the user requests a new (empty) MIDI clip: from the clip-area or header context
+        menu. trackIndex is the index of the lane's track within te::getAudioTracks(*edit);
+        startTime is the (snapped) clip start. The shell binds this to ProjectSession::createMidiClip
+        and then rebuild()s. Default null => no-op. */
+    std::function<void (int trackIndex, te::TimePosition startTime)> onCreateMidiClipRequested;
 
 private:
-    void selectClip (AudioClipComponent*);
+    void selectClip (ClipComponent*);
     void selectTrack (TrackLaneComponent*);
     void clearSelection();
 
-    void showClipContextMenu (AudioClipComponent&, const juce::MouseEvent&);
+    void showClipContextMenu (ClipComponent&, const juce::MouseEvent&);
     void showLaneContextMenu (TrackLaneComponent&, const juce::MouseEvent&);
+    /** Shows the empty-clip-area context menu (a "New MIDI Clip" affordance at the clicked time). */
+    void showClipAreaContextMenu (TrackLaneComponent& lane, int clipAreaX, int clipAreaW,
+                                  const juce::MouseEvent&);
 
     void renameClip (te::Clip&);
     void renameTrack (te::AudioTrack&);

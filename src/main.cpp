@@ -22,6 +22,7 @@
 #include "ui/plugins/PluginWindow.h"
 #include "ui/browser/BrowserView.h"
 #include "ui/detail/DetailView.h"
+#include "ui/pianoroll/PianoRollView.h"
 #include "ui/ControlBar.h"
 #include "ui/ForgeLookAndFeel.h"
 
@@ -30,6 +31,7 @@ using namespace juce;
 
 enum class SelfTest { none, playback, record };
 enum class ViewMode { Arrange, Mixer };
+enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
 //==============================================================================
 static File createSineWaveFile (double sampleRate, double seconds, double frequencyHz, float gain)
@@ -172,6 +174,7 @@ public:
         addAndMakeVisible (mixerView);
         addAndMakeVisible (browserPanel);
         addAndMakeVisible (detailView);
+        addAndMakeVisible (pianoRoll);
         addAndMakeVisible (browserResizer);
         addAndMakeVisible (drawerResizer);
         addAndMakeVisible (statusLabel);
@@ -231,18 +234,55 @@ public:
             }
         };
 
-        // Selecting a clip in the arrange view drives the bottom Detail-drawer inspector and pops
-        // the drawer open; edits made there are persisted.
+        // Selecting a clip in the arrange view drives the bottom drawer and pops it open: a MIDI clip
+        // opens the PianoRoll editor, any other clip opens the DetailView inspector. resized() is
+        // called unconditionally so switching between an audio and a MIDI clip swaps which editor
+        // fills the drawer even when it is already open. Edits in either are persisted.
         arrangeView.onClipSelected = [this] (te::Clip* c)
         {
-            detailView.setClip (c);
-            if (c != nullptr && ! drawerVisible)
+            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
             {
+                pianoRoll.setMidiClip (mc);
+                bottomMode = BottomMode::PianoRoll;
+            }
+            else
+            {
+                detailView.setClip (c);
+                bottomMode = BottomMode::Detail;
+            }
+
+            if (c != nullptr && ! drawerVisible)
+                drawerVisible = true;
+
+            resized();
+        };
+        detailView.onEditMutated = [this] { session.save(); };
+        pianoRoll.onEditMutated  = [this] { session.save(); };
+
+        // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
+        // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
+        // ready to draw. The lane menu supplies the track index and a (snapped) start time; we give the
+        // clip a default 4-bar length built from the tempo sequence.
+        arrangeView.onCreateMidiClipRequested = [this] (int trackIndex, te::TimePosition start)
+        {
+            auto* ed = session.getEdit();
+            if (ed == nullptr)
+                return;
+
+            const auto startBeat = ed->tempoSequence.toBeats (start);
+            const auto endTime   = ed->tempoSequence.toTime (startBeat + te::BeatDuration::fromBeats (16.0));
+
+            if (auto mc = session.createMidiClip (trackIndex, { start, endTime }, "MIDI"))
+            {
+                session.save();
+                arrangeView.rebuild();
+
+                pianoRoll.setMidiClip (mc.get());
+                bottomMode    = BottomMode::PianoRoll;
                 drawerVisible = true;
                 resized();
             }
         };
-        detailView.onEditMutated = [this] { session.save(); };
 
         // Double-clicking an audio file in the Browser imports it onto the project.
         browserPanel.onImportFile = [this] (const File& f)
@@ -306,13 +346,21 @@ public:
 
         auto centre = work;
 
-        // Detail-drawer (bottom): resizer hugging its top edge, then the panel below it.
-        detailView.setVisible (drawerVisible);
+        // Bottom drawer: either the audio-clip DetailView or the MIDI PianoRoll fills it, chosen by
+        // bottomMode (the arrange selection routes to one or the other). A resizer hugs its top edge;
+        // the inactive editor is hidden. The piano-roll scrolls its 128 pitch rows internally via its
+        // own Viewport, so the drawer keeps the same 90..420px clamp regardless of mode.
+        const bool showDetail    = drawerVisible && bottomMode == BottomMode::Detail;
+        const bool showPianoRoll = drawerVisible && bottomMode == BottomMode::PianoRoll;
+        detailView.setVisible (showDetail);
+        pianoRoll.setVisible  (showPianoRoll);
         drawerResizer.setVisible (drawerVisible);
         if (drawerVisible)
         {
             const int h = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
-            detailView.setBounds (centre.removeFromBottom (h));
+            const auto drawerArea = centre.removeFromBottom (h);
+            if (showPianoRoll) pianoRoll.setBounds (drawerArea);
+            else               detailView.setBounds (drawerArea);
             drawerResizer.setBounds (centre.removeFromBottom (resizerThickness));
         }
 
@@ -346,7 +394,8 @@ private:
     ArrangeView arrangeView { timelineView };
     MixerView mixerView;
     BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
-    DetailView  detailView;     // bottom drawer: clip inspector
+    DetailView  detailView;     // bottom drawer: audio-clip inspector
+    PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
     Label statusLabel;
     juce::uint32 statusHoldUntilMs = 0;   // transient status messages survive the 5Hz refresh until this time
 
@@ -356,6 +405,7 @@ private:
     TooltipWindow tooltipWindow;
 
     ViewMode viewMode = ViewMode::Arrange;
+    BottomMode bottomMode = BottomMode::Detail;   // Detail (audio) vs PianoRoll (MIDI) in the drawer
     bool browserVisible = false;   // lean default; toggled on demand
     bool drawerVisible  = false;
 
@@ -763,6 +813,8 @@ private:
     {
         PluginWindow::closeAll();    // plugin editors belong to the outgoing Edit
         detailView.setClip (nullptr);
+        pianoRoll.setMidiClip (nullptr);   // drop any MIDI clip held from the outgoing Edit
+        bottomMode = BottomMode::Detail;
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
         mixerView.setEdit (nullptr);

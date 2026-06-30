@@ -38,6 +38,11 @@ public:
     /** Imports an audio file as a clip on track 0 starting at `start`. Returns the clip. */
     te::WaveAudioClip::Ptr importAudioFile (const juce::File&, te::TimePosition start);
 
+    /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
+        ensuring the track exists and is born audible (a default 4OSC instrument is added if the
+        track has none). Returns the new clip, or {} if there is no open edit / the insert failed. */
+    te::MidiClip::Ptr createMidiClip (int trackIndex, te::TimeRange range, const juce::String& name);
+
     te::Edit*             getEdit() const      { return edit.get(); }
     te::TransportControl* getTransport() const;
     juce::File            getEditFile() const  { return editFile; }

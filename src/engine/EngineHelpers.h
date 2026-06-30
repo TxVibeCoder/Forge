@@ -40,6 +40,19 @@ namespace EngineHelpers
         return {};
     }
 
+    /** Inserts an empty MIDI clip spanning `range` (in SECONDS) onto `trackIndex`. The clip's
+        on-timeline position is a seconds range; any notes drawn into it later are in beats. Does
+        NOT touch the track's plugin chain — ensuring an audible instrument is the caller's job
+        (ProjectSession::createMidiClip ensures the default 4OSC), so this stays free of PluginHost. */
+    inline te::MidiClip::Ptr insertDrawnMidiClip (te::Edit& edit, int trackIndex,
+                                                  te::TimeRange range, const juce::String& name)
+    {
+        if (auto* track = getOrInsertAudioTrackAt (edit, trackIndex))
+            return track->insertMIDIClip (name, range, nullptr);
+
+        return {};
+    }
+
     /** Async file chooser filtered to the engine's supported audio formats. */
     inline void browseForAudioFile (te::Engine& engine, std::function<void (const juce::File&)> fileChosen)
     {

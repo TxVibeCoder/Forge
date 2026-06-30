@@ -32,6 +32,18 @@ namespace PluginHost
         Returns the created plugin, or nullptr (chain unchanged) on failure. */
     te::Plugin::Ptr addPluginToTrack (te::AudioTrack& track, const juce::String& displayName);
 
+    /** Creates the named built-in INSTRUMENT and inserts it at the HEAD (index 0) of the
+        track's chain, so it is the sound source ahead of any effects and the volume/meter tail.
+        The name is resolved against the built-in instruments (currently just "4OSC"). Returns
+        the created plugin, or nullptr (chain unchanged) on failure. */
+    te::Plugin::Ptr addInstrumentToTrack (te::AudioTrack& track, const juce::String& displayName);
+
+    /** Ensures the track has an instrument at the head of its chain so a MIDI clip on it is
+        audible. If the chain already hosts a synth / MIDI-input plugin this is a no-op and
+        returns false; otherwise it inserts a default 4OSC at index 0 and returns true.
+        Idempotent — safe to call every time clips are (re)created; never stacks synths. */
+    bool ensureDefaultInstrument (te::AudioTrack& track);
+
     /** The user-insertable plugins on this track in chain order, EXCLUDING the always-present
         built-ins (volume&pan, level meter) so the UI only shows real inserts. */
     juce::Array<te::Plugin*> getTrackInserts (te::AudioTrack& track);
