@@ -257,7 +257,7 @@ tests/  SELFTEST.md
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; MIDI/automation to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; **MIDI design complete + source-verified → `docs/devlog/midi-design.md`**; build next; automation to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
@@ -281,8 +281,10 @@ Practical next sequence:
    (`result=PASS`, non-zero peak); the prior FAIL was a harness bug, now fixed (event-driven harness).
    Remaining refinement: default-mic *selection* (lazy-open keeps the existing output, so the captured
    endpoint is the default pairing, not necessarily the listed mic) — see device-recording.md.
-2. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth. Best
-   run as its own multi-wave effort with a shared MIDI-clip contract.
+2. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth.
+   **Design is done and source-verified** (`docs/devlog/midi-design.md`): a file-disjoint 7-wave plan
+   (W1 instrument seam · W2 MIDI-clip create · W3 clip-component split · W4 piano-roll · W5 integrate
+   = audible-MIDI MVP; W6 velocity/polish; W7 MIDI-input record). Build is the next effort.
 3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
 4. **Polish** — async export + progress; LUFS metering; markers; comping; off-thread record-input
    open (so even the first arm never briefly blocks the message thread).
