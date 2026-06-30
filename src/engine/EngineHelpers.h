@@ -122,79 +122,81 @@ namespace EngineHelpers
         return names;
     }
 
-    /** Initialises the engine's audio so that wave INPUT channels are opened (so recording can
-        work) WITHOUT clobbering a previously-saved OUTPUT device.
+    /** Lazily opens a wave INPUT device so recording can work, WITHOUT clobbering the saved/open
+        OUTPUT device. Call this ONLY when the user actually wants to record (arming a track or
+        starting a take) — never at startup.
 
-        Why this exists (the device-override blocker):
-          - te::DeviceManager::initialise() -> loadSettings() restores the saved
-            `audio_device_setup` XML when it exists, so the saved OUTPUT is preserved by the
-            engine itself. On the very first run (no saved XML) it falls back to
-            initialiseWithDefaultDevices(), which picks the system-default output.
-          - Tracktion derives its wave-in list (getNumWaveInDevices()) purely from the ACTIVE
-            input channel names of the currently-open juce::AudioIODevice
-            (DeviceManager::AvailableWaveDeviceList::describeStandardDevices ->
-            device.getInputChannelNames()). If the restored/opened device has no input device
-            name (because the user never explicitly chose an input), it opens output-only and
-            getInputChannelNames() is empty -> zero wave inputs -> recording is impossible.
+        Startup is kept output-only by constructing the engine with a ForgeEngineBehaviour whose
+        shouldOpenAudioInputByDefault() returns false (see main.cpp): the engine's own device init
+        then opens output only, so a capture device is never negotiated on the message thread at
+        launch (which could stall 25–77 s when the default device changed). This function does the
+        input half, on demand.
 
-        Strategy (best-effort, documented tradeoff):
-          1. Let the engine initialise normally (restores saved output if XML present).
-          2. Read back the now-open AudioDeviceSetup and remember the restored OUTPUT name.
-          3. If no INPUT device is selected, pick the current type's DEFAULT input device.
-          4. Re-apply the setup with useDefaultInputChannels=true and the SAME output name,
-             passing treatAsChosenDevice=false so this auto-opened input is NOT persisted as
-             the user's explicit choice (their next explicit pick via the Audio dialog wins,
-             and we never overwrite a saved output in storage).
-          5. Rescan so Tracktion rebuilds its wave-in list from the freshly-opened channels.
+        Idempotent and cheap once an input is available: it early-outs if an input device is already
+        selected or the engine already exposes open wave inputs, so the potentially-slow OS
+        negotiation happens at most once, on the first record attempt.
 
-        Residual limitation: on a machine with NO saved settings at all, the OUTPUT is still
-        whatever the OS default is (there is nothing saved to restore). Also, if the OS denies
-        microphone access (Windows privacy) or the default input device fails to open, no input
-        channels appear and getNumWaveInDevices() stays 0 — see docs/devlog/device-recording.md.
+        Two engine subtleties this has to get right (both surfaced by the startup-latency review):
+          - The device was opened with ZERO input channels needed, and JUCE only recomputes that
+            count when useDefaultInputChannels is FALSE. So we request EXPLICIT input channels here;
+            the default-channels path would open the input with an empty channel mask and silently
+            record SILENCE.
+          - Adding an input rebuilds the device as a combined in+out device, which first tears down
+            the currently-open OUTPUT device. If the combined open fails (input busy / mic privacy),
+            JUCE leaves NO device open. We snapshot the working output-only setup and reopen it on
+            failure, so a failed arm can never kill playback.
 
-        Message-thread only. */
-    inline void initialiseAudioForRecording (te::Engine& engine)
+        Residual limitation: if the OS denies microphone access (Windows privacy) or the default
+        input fails to open, no input channels appear and getNumWaveInDevices() stays 0 — see
+        docs/devlog/device-recording.md.
+
+        Message-thread only. May block for several seconds on the FIRST call if the OS audio stack
+        is slow to open the capture device — acceptable because it is user-initiated and off the
+        startup path. */
+    inline void ensureRecordingInputOpen (te::Engine& engine)
     {
         auto& dm  = engine.getDeviceManager();
         auto& adm = dm.deviceManager;   // the underlying juce::AudioDeviceManager
 
-        // 1. Normal init. Requests up to 512 in / 512 out channels and restores saved XML.
-        dm.initialise (te::DeviceManager::defaultNumChannelsToOpen,
-                       te::DeviceManager::defaultNumChannelsToOpen);
+        const auto current = adm.getAudioDeviceSetup();   // the working, output-only setup
 
-        // 2. Snapshot what actually opened.
-        auto setup = adm.getAudioDeviceSetup();
-        const auto restoredOutput = setup.outputDeviceName;
+        // 1. Already have an input (explicit choice, or wave inputs already open) -> no-op.
+        if (current.inputDeviceName.isNotEmpty() || dm.getNumWaveInDevices() > 0)
+            return;
 
-        // 3. If nothing is selected for input, choose the type's default capture device.
-        if (setup.inputDeviceName.isEmpty())
+        auto setup = current;
+
+        // 2. Choose the current type's default capture device.
+        if (auto* type = adm.getCurrentDeviceTypeObject())
         {
-            if (auto* type = adm.getCurrentDeviceTypeObject())
-            {
-                type->scanForDevices();
-                const auto inputNames = type->getDeviceNames (true);
+            type->scanForDevices();
+            const auto inputNames = type->getDeviceNames (true);   // true => input names
 
-                if (! inputNames.isEmpty())
-                {
-                    const int defIdx = type->getDefaultDeviceIndex (true);
-                    setup.inputDeviceName = inputNames[(defIdx >= 0 && defIdx < inputNames.size()) ? defIdx : 0];
-                }
+            if (! inputNames.isEmpty())
+            {
+                const int defIdx = type->getDefaultDeviceIndex (true);
+                setup.inputDeviceName = inputNames[(defIdx >= 0 && defIdx < inputNames.size()) ? defIdx : 0];
             }
         }
 
-        // 4. Re-apply only if we now have an input to open, keeping the restored output intact.
-        if (setup.inputDeviceName.isNotEmpty())
-        {
-            setup.useDefaultInputChannels = true;       // open the device's natural input channels
+        if (setup.inputDeviceName.isEmpty())
+            return;   // no capture endpoint exists -> leave the working output untouched
 
-            if (restoredOutput.isNotEmpty())
-                setup.outputDeviceName = restoredOutput;  // belt-and-braces: never drop the output
+        // 3. Request EXPLICIT input channels (NOT useDefaultInputChannels — see the note above),
+        //    keeping the working output device.
+        setup.useDefaultInputChannels = false;
+        setup.inputChannels.clear();
+        setup.inputChannels.setRange (0, te::DeviceManager::defaultNumChannelsToOpen, true);
 
-            // treatAsChosenDevice=false => do not persist this auto-input as the user's choice,
-            // so we never rewrite the saved audio_device_setup (output stays as the user left it).
-            const auto err = adm.setAudioDeviceSetup (setup, false);
-            juce::ignoreUnused (err);   // tolerate failure (e.g. input busy / privacy-blocked)
-        }
+        if (current.outputDeviceName.isNotEmpty())
+            setup.outputDeviceName = current.outputDeviceName;   // never drop the output we have
+
+        const auto err = adm.setAudioDeviceSetup (setup, false);   // treatAsChosenDevice=false
+
+        // 4. If the combined in+out open failed, JUCE has already torn down the output device.
+        //    Reopen the output-only setup we had so playback survives a failed arm.
+        if (err.isNotEmpty() && current.outputDeviceName.isNotEmpty())
+            adm.setAudioDeviceSetup (current, false);
 
         // 5. Rebuild Tracktion's wave-in list from whatever input channels are now open.
         dm.rescanWaveDeviceList();

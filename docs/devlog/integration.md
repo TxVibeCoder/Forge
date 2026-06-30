@@ -308,3 +308,58 @@ engine headers but not exercised by the 4/4 selftest.
 audio inputs lazily / off the message thread — still the highest-leverage reliability fix);
 **async export + progress** (both mixdown and stems block the message thread); and the big remaining
 capability, **MIDI tracks + piano-roll**.
+
+## Wave 5 — startup-latency hardening (single-owner change + adversarial review)
+
+Goal: stop the 25–77 s startup freeze that happened when the system default audio device changed
+(e.g. a Bluetooth headset disconnected) — the old `initialiseAudioForRecording()` opened a capture
+INPUT synchronously on the message thread at launch. Not a parallelizable fan-out; the orchestrator
+made the change, then a focused 3-angle adversarial-review wave verified it (the recording path
+CANNOT be runtime-tested on the dev box — no capture endpoint — so static skeptic verification was
+the only signal). **Result: build clean; playback selftest PASS; measured headless startup ~17 s →
+~8 s.** This wave is the clearest example yet of review earning its cost: the first implementation
+did not actually work and introduced two new bugs, all caught before commit.
+
+### The change (committed)
+- **Output-only engine construction.** `te::Engine` is now built with a `ForgeEngineBehaviour :
+  te::EngineBehaviour` whose `shouldOpenAudioInputByDefault()` returns false (main.cpp). The engine's
+  own ctor then runs `deviceManager->initialise(0, 512)` — output device only — so no capture device
+  is negotiated on the message thread at launch.
+- **Lazy input open.** `EngineHelpers::ensureRecordingInputOpen(engine)` opens a default capture
+  input on demand, called from the three record entry points (onArmToggled arm branch,
+  toggleRecordTake, beginSelfTestRecording) before arming. Idempotent (early-outs once an input is
+  available). The old `initialiseAudioForRecording` / the interim `initialiseAudioOutput` helper were
+  removed — startup audio is entirely the engine ctor's job now.
+
+### First attempt was WRONG — review caught it (3 findings, 0 refuted, all high-confidence)
+The initial implementation kept `te::Engine engine { "Forge" }` (default behaviour) and just called
+a new `initialiseAudioOutput()` (dm.initialise(0,512)) from the MainComponent ctor to *reconfigure*
+to output-only. Review proved this and two follow-on bugs:
+
+1. **(major) The freeze was NOT eliminated.** `te::Engine`'s ctor runs `Engine::initialise()` ->
+   `deviceManager->initialise(shouldOpenAudioInputByDefault() ? 512 : 0, 512)`. The default
+   `EngineBehaviour::shouldOpenAudioInputByDefault()` returns true (tracktion_EngineBehaviour.h:93),
+   so the ctor opened the input synchronously BEFORE MainComponent's reconfigure ran. **Fix:** the
+   `ForgeEngineBehaviour` override above — prevent the open at the source instead of undoing it after.
+2. **(critical) Recording would capture SILENCE.** With the device opened for 0 input channels, JUCE
+   pins `numInputChansNeeded = 0` and only recomputes it when `useDefaultInputChannels == false`
+   (juce_AudioDeviceManager.cpp:792). The lazy open used `useDefaultInputChannels = true`, so the
+   input opened with an empty channel mask and `WaveInputDevice::copyIncomingDataIntoBuffer` would
+   write silence. **Fix:** request EXPLICIT input channels —
+   `setup.useDefaultInputChannels = false; setup.inputChannels.setRange(0, 512, true);` — so real
+   capture channels open (WASAPI clamps to the device's actual max).
+3. **(major) A failed input open would kill playback.** Adding an input rebuilds the device as a
+   combined in+out device, tearing down the working OUTPUT device first; if the combined open fails
+   (input busy / mic-privacy) JUCE leaves NO device open, and the original code swallowed the error.
+   Since this now runs on the live record path (you can arm during playback), a failed arm could
+   silently kill audio. **Fix:** snapshot the working output-only setup and reopen it if
+   `setAudioDeviceSetup` returns an error.
+
+### Verification gap
+Build + playback selftest confirm output/playback is correct and startup is faster. The recording
+path itself (silent-capture fix #2, output-restore fix #3) is grounded in the engine headers but
+**cannot be runtime-verified here** (no capture device — `--selftest-record` still FAILs with
+`inputDeviceCount=0`, unchanged). Verify a real take on a box with a mic before relying on recording.
+Also note `ensureRecordingInputOpen` is still synchronous: the FIRST arm/record on a slow/changed
+device can briefly block the message thread — acceptable because it is user-initiated and off the
+startup path; a fully off-thread input open remains possible future hardening.

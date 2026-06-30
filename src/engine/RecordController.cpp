@@ -67,7 +67,8 @@ bool RecordController::armFirstInputToTrack (te::Edit& edit, te::AudioTrack& tra
     {
         // No capture channels are open. This is the common dev-box symptom: a mic exists in
         // Windows but the open audio device was opened output-only, so Tracktion sees no
-        // wave inputs. EngineHelpers::initialiseAudioForRecording() tries to avoid this.
+        // wave inputs. EngineHelpers::ensureRecordingInputOpen() (called on the record path) tries
+        // to avoid this by opening a default capture input on demand.
         auto available = EngineHelpers::getAvailableWaveInputDeviceNames (engine);
 
         lastError = available.isEmpty()

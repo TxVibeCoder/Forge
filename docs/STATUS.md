@@ -1,7 +1,7 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (Phase 4 polish wave: snap-division, stem export,
-plugin scan, mixer bypass/reorder + post-fader master meter).*
+*Living status document. Last updated 2026-06-30 (Phase 4 polish wave + startup-latency hardening:
+output-only engine construction, lazy recording-input open).*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
 [../tests/SELFTEST.md](../tests/SELFTEST.md) (verification contract).*
@@ -199,9 +199,13 @@ tests/  SELFTEST.md
   manually or via computer-use before relying on them.
 
 ### Phase 3 follow-ups (mixer / plugins / browser / inspector)
-- [ ] **Startup latency hardening (recommended).** `initialiseAudioForRecording` opens a default
-  *input* synchronously on the message thread; when the default device changes (e.g. a Bluetooth
-  headset disconnects) startup can stall 25–77 s. Open inputs lazily / off the message thread.
+- [x] **Startup latency hardening.** DONE — the engine is constructed with a `ForgeEngineBehaviour`
+  whose `shouldOpenAudioInputByDefault()` returns false, so `te::Engine`'s ctor opens OUTPUT only and
+  never negotiates a capture device on the message thread at launch (that open could stall 25–77 s
+  when the default device changed). The recording input opens lazily on the first arm/record via
+  `EngineHelpers::ensureRecordingInputOpen()`. Measured: headless playback selftest startup dropped
+  ~17 s → ~8 s. Adversarial review caught that the first attempt (reconfigure-after-ctor) didn't
+  actually remove the ctor's input open, plus two record-path regressions — all fixed (see devlog).
 - [x] **External plugin scanning UI.** DONE — `PluginScanner` hosts JUCE's `PluginListComponent`
   in a dialog (ControlBar **Plugins** button), bound to the engine's format manager + known-plugin
   list; scans persist automatically and surface in `PluginHost::getAvailablePluginNames`.

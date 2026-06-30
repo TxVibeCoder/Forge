@@ -154,7 +154,9 @@ public:
     MainComponent (te::Engine& e, SelfTest testMode)
         : engine (e), session (e), recorder (e), mode (testMode)
     {
-        EngineHelpers::initialiseAudioForRecording (engine);   // open input channels too (for recording)
+        // No audio init here: the engine was constructed output-only (ForgeEngineBehaviour::
+        // shouldOpenAudioInputByDefault() == false), so startup never opens a capture device.
+        // Recording inputs open lazily, on the first arm/record, via ensureRecordingInputOpen().
 
         // Self-tests use a fresh, isolated temp project so clip/track counts are deterministic
         // and never polluted by leftovers in the persistent Untitled project.
@@ -211,6 +213,14 @@ public:
         {
             if (auto* ed = session.getEdit())
             {
+                if (arm)
+                {
+                    // Open + enable a capture input on demand (kept off the startup path). May
+                    // briefly block on the first arm if the OS is slow to open the device.
+                    EngineHelpers::ensureRecordingInputOpen (engine);
+                    recorder.enableInputs();
+                }
+
                 const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
                                     : recorder.disarmTrack (*ed, track);
 
@@ -613,6 +623,7 @@ private:
         }
         else
         {
+            EngineHelpers::ensureRecordingInputOpen (engine);   // lazily open the capture input
             recorder.enableInputs();
             if (auto* track = te::getAudioTracks (*edit)[0])
                 recorder.armFirstInputToTrack (*edit, *track);
@@ -637,6 +648,7 @@ private:
             rcDiagTypes += type->getTypeName() + "=" + String (type->getDeviceNames (true).size()) + "in ";
         }
 
+        EngineHelpers::ensureRecordingInputOpen (engine);   // record selftest also opens input lazily
         recorder.enableInputs();
         rcInputDeviceCount = recorder.getInputDeviceCount();
 
@@ -812,6 +824,18 @@ private:
 };
 
 //==============================================================================
+/*  ForgeEngineBehaviour — keeps the capture INPUT off the startup path. The default
+    EngineBehaviour::shouldOpenAudioInputByDefault() returns true, so te::Engine's constructor
+    would open a default input device synchronously on the message thread — which can stall
+    25–77 s when the system default device has just changed (e.g. a Bluetooth headset
+    disconnected). Returning false makes the engine open OUTPUT only at startup; the recording
+    input is opened lazily on the first arm/record via EngineHelpers::ensureRecordingInputOpen(). */
+struct ForgeEngineBehaviour : te::EngineBehaviour
+{
+    bool shouldOpenAudioInputByDefault() override { return false; }
+};
+
+//==============================================================================
 class ForgeApplication : public JUCEApplication
 {
 public:
@@ -861,7 +885,7 @@ private:
     };
 
     ForgeLookAndFeel lookAndFeel;
-    te::Engine engine { "Forge" };
+    te::Engine engine { "Forge", nullptr, std::make_unique<ForgeEngineBehaviour>() };
     std::unique_ptr<MainWindow> mainWindow;
 };
 
