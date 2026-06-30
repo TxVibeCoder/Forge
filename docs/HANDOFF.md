@@ -4,8 +4,8 @@
 > roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP build"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
-branch `main` · MIDI MVP commit `9a24989` · **4 commits ahead of `origin/main` — NOT pushed**
-(`e293424`, `79a75d5`, `9a24989`, + this docs refresh) ·
+branch `main` · MIDI MVP commit `9a24989` · **5 commits ahead of `origin/main` — NOT pushed**
+(`e293424`, `79a75d5`, `34dbf4a`, `9a24989`, + this docs refresh) ·
 ~5,900 lines / 31 source files · last build **clean** · both self-tests **PASS** · verify wave **clean**.
 
 Forge is an arrangement-first DAW on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
@@ -114,7 +114,7 @@ PASS on this box.
   gain a non-zero offset. **Always edit `getSequence()`, never `getSequenceLooped()`** (its edits are dropped).
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake.
 - **Submodules are clean.** Don't be surprised by a clean `git submodule status`.
-- **Not pushed:** `main` is 4 commits ahead of `origin/main`. Push when ready (`git push`).
+- **Not pushed:** `main` is 5 commits ahead of `origin/main`. Push when ready (`git push`).
 
 ---
 
