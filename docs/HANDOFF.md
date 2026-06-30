@@ -1,112 +1,88 @@
 # Forge — Session Handoff
 
-> Living handoff for picking the project back up cold. Pairs with [STATUS.md](STATUS.md) (the living
-> roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP + W6 polish"** session.
+> Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-06-30**, end of the
+> **"direction reset + UI mockups + doc audit"** session.
 
-> ## ⚠ READ FIRST — direction reset (2026-06-30)
-> Forge's primary identity changed: it is a **sample / scene-based DAW** — an Ableton-style **Session clip
-> grid** as the **primary** surface, **played from grid controllers** (Novation Launchpad / Akai APC40 mkII),
-> with the linear **Arrange** view **secondary**. Plus full MIDI input (note-in/record, MIDI-learn,
-> clock/Ableton Link). **Everything below this banner was built arrangement-first** and is still valid as
-> reusable building blocks, but the *primary surface* is now the Session grid + a control-surface layer.
-> **The authoritative brief is [DIRECTION.md](DIRECTION.md) — read it before planning new work.** The next
-> build is the Session grid (`SessionView` + Tracktion `ClipSlot`/scenes) and the device-agnostic
-> control-surface layer (on Tracktion's `ControlSurface` seam), not more linear-timeline features. A
-> to-scale, Session-first UI mockup set is in [`mockups/`](../mockups/) (open `preview/forge-ui-storyboard.png`).
+Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch `main` ·
+last pushed `600f80f` (mockups) · **one local doc-audit commit ahead of `origin/main`** (`git status` for the
+count) · ~6,460 lines / 33 source files · last build **clean** · both self-tests **PASS**.
 
-Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
-branch `main` · MIDI MVP commit `9a24989` · **ahead of `origin/main` — NOT pushed** (this session's MIDI
-MVP + docs, atop the earlier recording/design commits; `git status` for the exact count) ·
-~5,900 lines / 31 source files · last build **clean** · both self-tests **PASS** · verify wave **clean**.
+---
 
-Forge is a **scene-based DAW** (Session clip grid primary, controller-driven — see [DIRECTION.md](DIRECTION.md)) on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
-startup-latency hardening + the **MIDI MVP + W6 piano-roll polish** are done and live: project/arrange/
-transport/mixer/plugins/browser/inspector/export, output-only startup with lazy record-input open, and
-**drawable, audible MIDI clips with a velocity lane, multi-select, and copy/paste**. See
-[STATUS.md §2](STATUS.md) for the full feature list.
+## ⚠ READ THIS FIRST — what Forge is now
+
+**Forge is a sample / scene-based, controller-driven DAW.** The **primary surface is an Ableton-style
+Session clip grid** (tracks × scenes of launchable clips), meant to be played from real **grid controllers**
+(Novation Launchpad, Akai APC40 mkII). The linear **Arrange** timeline is a **secondary** view.
+
+This is a **direction reset** made this session. Everything built before it was *arrangement-first* — that
+work is **not wasted** (clips, the 4OSC instrument, the piano-roll, the mixer, plugin hosting all become
+building blocks that live *inside* slots and scenes), but the **primary identity and next build have
+changed**. The authoritative brief is **[DIRECTION.md](DIRECTION.md)** — read it before planning anything.
+
+**The controllers are EXTERNAL hardware** Forge connects to over MIDI — Forge does **not** draw a controller
+on screen. The only on-screen surface is the Session grid. Hardware integration is a "hope to one day
+connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyboard.
 
 ---
 
 ## What this session did
 
-### MIDI tracks + piano-roll — MVP BUILT ✅ (`9a24989`)
+1. **Direction reset → [DIRECTION.md](DIRECTION.md).** Captured the new identity (Session-first,
+   controller-driven, Arrange secondary; full MIDI input) and **realigned the whole doc set** to it
+   (STATUS / INTERFACE / ARCHITECTURE / FEATURE_CATALOG / this handoff), killing the old "arrangement-first /
+   Session deferred" framing.
+2. **Verified the engine supports all of it** (greps against `libs/tracktion_engine`): clip-launch
+   (`ClipSlot` / `getClipSlotList()` / scenes / `LaunchHandle`), the **`ControlSurface`** framework (clip
+   grid + `padStateChanged` LED feedback + faders / encoders / transport), `MidiLearn`, and `AbletonLink`.
+3. **UI mockups** — a to-scale DXF/CAD set in [`mockups/`](../mockups/): **10 sheets** led by the **Session
+   clip grid (00, primary)**, with a **controller hardware-mapping reference (09)** (Launchpad + APC40 mkII →
+   engine; clearly labelled *reference, not an app screen*). Generator + previews + storyboard, committed.
+4. **Full documentation audit** — brought the root README and mockups README fully current; reconciled all
+   "what's next" to lead with the Session build.
 
-Built the source-verified design ([midi-design.md](devlog/midi-design.md)) as the audible-MIDI slice.
-**Outcome:** right-click an empty lane area → **New MIDI Clip** → a `te::MidiClip` is created on that
-track, **born audible** via an auto-inserted **4OSC** at plugin-chain **index 0**, and the **piano-roll**
-opens in the bottom drawer ready to draw. Draw / move / resize / delete notes → **play → hear it**. No
-recording code (MIDI-input record is the later W7). Full per-wave record in
-[devlog/midi-build.md](devlog/midi-build.md).
-
-- **How:** a single **file-disjoint Workflow fan-out** — four authoring agents (W1–W4) with exclusive
-  file ownership, additive-only interfaces, contract-first seams, run in parallel; the **orchestrator
-  alone** owned `CMakeLists.txt` + `main.cpp` and did the **one integration build**. Every load-bearing
-  engine API was source-verified **before** launch, so the agents started from facts — the integration
-  build was **clean on the first try**.
-- **W1** `PluginHost`: `ensureDefaultInstrument` (idempotent 4OSC at chain head, **own insert-at-0 path**,
-  not the volume-index effect path) + `addInstrumentToTrack`; `makeBuiltIn` category parameterized.
-- **W2** `ProjectSession::createMidiClip`: the **AudioTrack-member** `insertMIDIClip(name,range,nullptr)`
-  (returns `MidiClip::Ptr` directly; dodges the `insertMIDIClip(ClipOwner&)` free-fn name collision) +
-  `ensureDefaultInstrument`. Range in SECONDS; notes in BEATS.
-- **W3** `ArrangeView`: base **`ClipComponent`** extracted; `AudioClipComponent` + new
-  **`MidiClipComponent`** derive from it; `rebuildClips` branches by `dynamic_cast<te::MidiClip*>`; the
-  six clip callbacks re-typed `AudioClipComponent&`→`ClipComponent&`; **"New MIDI Clip"** menus →
-  `onCreateMidiClipRequested`. Wave-clip behaviour preserved byte-for-byte (verified against `git HEAD`).
-- **W4** `src/ui/pianoroll/*` (new): `PianoRollView(TimelineView&)` (shared time axis, mandatory
-  `juce::Viewport` for 128 pitch rows, keybed gutter) + `MidiNoteComponent`. All edits go to the **live**
-  `getSequence()` (never the looped copy) with `&clip->edit.getUndoManager()`. Content-relative beats.
-- **W5** `main.cpp` + CMake: selection routes a `MidiClip`→piano-roll, any other clip→DetailView, via a
-  `bottomMode` drawer that swaps editors in `resized()`; `onCreateMidiClipRequested`→`createMidiClip`
-  (builds a 16-beat range, opens the roll on the new clip); `pianoRoll.onEditMutated`→save; project-swap
-  drops the held clip safely.
-
-**Deviations (all confirmed improvements):** W3 maps the note preview via the engine's
-`getTimeOfContentBeat` (`te::Clip` has no clip-level `getStartBeat`); W2 keeps `createMidiClip` inlined to
-hold the `AudioTrack*` for `ensureDefaultInstrument`; W4 delete is right-click-only + selection is
-visual-only (Delete-key + multi-select are W6).
-
-### Verification
-
-- **Build:** clean first-try integration build (6 TUs recompiled + linked, 0 errors).
-- **Selftests (no regression):** `--selftest` (playback) **PASS**; `--selftest-record` **PASS**
-  (`recordedPeakMagnitude≈0.68` — real signal). The new wiring never touches the record/playback paths.
-- **Adversarial verify wave** (3 skeptic agents over W3/W4/W5, default-refuted, evidence-required,
-  read-only): **all three `correct`, zero blocker/major/minor findings.** Two highest-risk items cleared
-  against engine source — (1) **`MidiNote&` lifetime:** `setStartAndLength`/`setNoteNumber` don't free the
-  note, and right-click-delete is safe via JUCE's `HierarchyChecker::shouldBailOut()`; (2)
-  **instrument-at-0:** the detection loop can't false-positive on the vol/meter tail, so a real 4OSC is
-  always inserted and re-create can't stack synths.
-
-### W6 — piano-roll polish ✅ (`bb5b6bf`)
-
-Post-MVP editing, all inside `src/ui/pianoroll/` (one cohesive owner → a single authoring agent, not a
-fan-out): **multi-select** (click / Shift-Ctrl-click / marquee — a plain click still draws a note),
-**Delete key**, **multi-note move** (whole selection by one delta, **group-clamped** so chords keep their
-shape at the beat-0 / pitch edges), **copy/paste** (Ctrl+C/V at the playhead, auto-selected), and a
-**velocity lane** (new `VelocityLane.{h,cpp}` — draggable bar per note, top = loud) + velocity shading on
-notes. The roll grabs keyboard focus on any interaction but `keyPressed` returns `false` for keys it
-doesn't consume, so the shell shortcuts (Space/R/Ctrl+S) still work; the four shell-facing symbols are
-unchanged (only CMake gained `VelocityLane.cpp`). Build clean; both selftests **PASS**. The verify wave (2
-skeptics) returned `correct` on velocity/layout and caught two real low-severity issues, **both fixed** (the
-multi-move group-clamp; a velocity-lane focus grab).
+> Prior session (already committed + pushed before this one): the **MIDI MVP (W1–W5)** + **W6 piano-roll
+> polish** — draw a MIDI clip and hear it via a default 4OSC; velocity lane, multi-select, copy/paste. See
+> [devlog/midi-build.md](devlog/midi-build.md).
 
 ---
 
-## ⚠️ The one thing not yet verified
+## What exists today (the building blocks)
 
-**The live GUI draw→play→hear path has NOT been exercised in a running window** — the dev-built
-`Forge.exe` can't be GUI-driven headlessly here. Everything is statically verified (build + selftests +
-adversarial trace), but the very first manual action should be a **GUI smoke test**:
+Phases 0–4 + startup-latency hardening + MIDI MVP + W6, all shipped, building clean, both selftests PASS:
 
-1. Run `Forge.exe`. Right-click the empty area of a track lane → **New MIDI Clip**.
-2. The piano-roll should open in the bottom drawer. Click the grid to draw a few notes; drag to move/resize;
-   right-click a note to delete.
-3. **W6:** Shift/Ctrl-click or marquee-drag to multi-select; drag the velocity-lane bars (bottom strip);
-   **Ctrl+C / Ctrl+V**; **Delete** the selection. Confirm **Space** still plays while the roll has focus.
-4. Press **Space** → the notes should sound through the 4OSC. Save, reopen, confirm the clip persists.
+- **Project** save/load (`.tracktionedit`), **audio import**, an **arrange timeline** (waveforms, playhead,
+  clip drag-to-move, selectable snap grid).
+- **Transport** (play/stop/record/loop) and **recording** — verified end-to-end on real hardware
+  (`--selftest-record` captures a real take); output-only startup, lazy capture-input open.
+- **MIDI** — clips on any track, born audible via a default **4OSC** at chain index 0; a **piano-roll**
+  (draw/move/resize/delete, velocity lane, multi-select, copy/paste).
+- **Mixer** (strips, plugin inserts w/ bypass+reorder, master + post-fader meter), **plugin hosting**
+  (built-in + VST3/AU scan + floating editors), **Browser**, **clip Inspector**, **WAV export + stems**.
 
-If anything is off, the per-wave detail is in [devlog/midi-build.md](devlog/midi-build.md) and the
-coordinate math + interaction logic live entirely in `src/ui/pianoroll/`.
+Full feature list + roadmap in [STATUS.md](STATUS.md).
+
+---
+
+## What's next (the path forward)
+
+1. **Session-grid build — THE pivot, start here.** A new `SessionView` clip grid as the **primary**
+   `ViewMode` (`Session ∣ Arrange ∣ Mix`, Session default) on Tracktion's `ClipSlot` / scenes /
+   `LaunchHandle`. Fully playable with mouse + keyboard. The target is [mockups](../mockups/) **sheet 00**.
+   The shipped clips / 4OSC / piano-roll / mixer ride inside slots and scenes. **Recommended approach:** a
+   design pass (understand → design → adversarial-verify, source-grounded against the `ClipSlot`/scene API),
+   then a file-disjoint build wave — the project's proven pattern (see "how the work gets done").
+2. **Control-surface layer ("one day").** A device-agnostic driver layer on the `ControlSurface` seam so
+   real grid controllers drive the grid (Launchpad first, then APC40 mkII). Same pad-colour/state model as
+   the on-screen grid. External hardware over MIDI; not an MVP gate. Reference: [mockups](../mockups/) sheet 09.
+3. **MIDI input roles** — note-record into clips (**W7**: own MIDI enable sequence + a runtime test with a
+   physical controller, see [midi-design.md §5](devlog/midi-design.md)); **MIDI-learn** param mapping;
+   **MIDI-clock / Ableton Link** sync.
+4. **GUI smoke test of the MIDI MVP + W6** — the one statically-verified-but-unclicked path (draw → play →
+   hear; multi-select / velocity / copy-paste). Worth a manual pass.
+5. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends; async export + progress; LUFS;
+   markers; comping; macOS build; interactive-UI verification.
 
 ---
 
@@ -116,57 +92,37 @@ coordinate math + interaction logic live entirely in `src/ui/pianoroll/`.
 # Full cmake path — winget doesn't refresh PATH in these shells.
 & "C:\Program Files\CMake\bin\cmake.exe" --build ".\build" --config Debug
 
-& ".\build\Forge_artefacts\Debug\Forge.exe"                 # the app
+& ".\build\Forge_artefacts\Debug\Forge.exe"                   # the app
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest        # headless playback check → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-record # headless recording check → PASS/FAIL
-# Both selftests write %TEMP%\forge_phase0_selftest.log
+# Both write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
 
-Needs VS2022 / MSVC v143 (C++20). First clone: `git submodule update --init --recursive`. Both selftests
-PASS on this box.
+Regenerate the mockups (needs Docker; the `forge-dxf` image exists on this box):
+```sh
+cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-dxf:latest python build.py
+# then copy out/*.dxf → mockups/ and out/*.png → mockups/preview/   (src/out/ is gitignored)
+```
 
 ---
 
-## ⚠️ Gotchas
+## ⚠ Gotchas
 
-- **GUI not auto-verified (above).** The MIDI draw→play path needs a manual smoke pass; computer-use can't
-  grab the dev-built `Forge.exe` window by name (it's not a Start-menu app).
-- **Build file lock:** a running `Forge.exe` → `LNK1168` on the next build. `Get-Process Forge | Stop-Process
-  -Force` first. Also kill it before runtime tests (a killed instance can still briefly hold the WASAPI output
-  device); a 45–90 s timeout is prudent.
-- **Never arm recording synchronously in one blocking callback** — the wave-device-list rebuild is async
-  (carry-forward from the recording session). MIDI-**input** recording (W7) must follow the same discipline.
-- **MIDI note beats are CONTENT-relative** (beat 0 = clip start at offset 0). The piano-roll's `beatToX`/
-  `xToBeat` ignore clip offset — fine for the MVP (created clips have offset 0); revisit if MIDI clips ever
-  gain a non-zero offset. **Always edit `getSequence()`, never `getSequenceLooped()`** (its edits are dropped).
+- **GUI can't be driven headlessly here** — computer-use can't grab the dev-built `Forge.exe` window by
+  name. The MIDI draw→play path and any new `SessionView` UI need a **manual** smoke pass, or a headless
+  selftest hook.
+- **Build file lock:** a running `Forge.exe` → `LNK1168` on the next build, and it can hold the WASAPI
+  device. `Get-Process Forge | Stop-Process -Force` before building or runtime-testing; use a 45–90 s timeout.
+- **Docker on this Windows box:** mount with the Windows path or Git Bash mangles it —
+  `MSYS_NO_PATHCONV=1 docker run -v "$(pwd -W):/work" …`.
+- **MIDI note beats are CONTENT-relative** (beat 0 = clip start at offset 0); always edit `getSequence()`,
+  never `getSequenceLooped()`. The clip-launcher path is the `insertMIDIClip(ClipSlot&, …)` *free function*
+  (the one the linear MVP deliberately avoided) — the Session build will use it.
+- **Never arm recording synchronously in one blocking callback** — the device-list rebuild is async (the
+  W7 MIDI-input arm must follow the same discipline).
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake.
-- **Submodules are clean.** Don't be surprised by a clean `git submodule status`.
-- **Not pushed:** `main` is ahead of `origin/main` (this session's MIDI MVP `9a24989` + W6 `bb5b6bf` +
-  docs, atop the earlier recording/design commits). `git push` when ready; `git status` shows the count.
-
----
-
-## What's next (prioritized)
-
-> **Direction reset this session** (see the banner + [DIRECTION.md](DIRECTION.md)). The next build is the
-> **Session clip grid**, not more linear-timeline features.
-
-1. **Session-grid build — the pivot.** A new `SessionView` clip grid as the **primary** `ViewMode`
-   (`Session ∣ Arrange ∣ Mix`, Session default), on Tracktion's `ClipSlot` / `getClipSlotList()` / scenes /
-   `LaunchHandle`. Fully playable with mouse + keyboard. Start from [DIRECTION.md](DIRECTION.md); the
-   [mockups](../mockups/) sheet **00** shows the target. The shipped clips / 4OSC / piano-roll / mixer ride
-   inside slots and scenes.
-2. **Control-surface layer ("one day").** A device-agnostic driver layer on Tracktion's `ControlSurface`
-   seam so **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state
-   model feeds the on-screen grid and the hardware LEDs. **Not an MVP gate** — the controllers are external
-   hardware (mockups sheet **09** is the mapping reference, not an app screen).
-3. **MIDI input roles.** Note-record into clips (**W7** — its own MIDI enable sequence + a
-   physical-controller runtime test, see [midi-design.md §5](devlog/midi-design.md)); MIDI-learn param
-   mapping (`MidiLearn`); MIDI-clock / Ableton Link sync.
-4. **GUI smoke test of the MIDI MVP + W6** — the one statically-verified-but-unclicked path (draw → play →
-   hear; multi-select / velocity / copy-paste). Worth a manual pass before building atop it.
-5. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends in the mixer; async export +
-   progress; LUFS; markers; comping; off-thread record-input open; macOS build; interactive-UI verification.
+- **Submodules are clean.** **Not fully pushed:** one local doc-audit commit is ahead of `origin/main`
+  (`git push` when ready; `git status` shows the count).
 
 ---
 
@@ -174,23 +130,29 @@ PASS on this box.
 
 - **Workflow tool with file-disjoint agents** — exclusive file ownership + additive-only interfaces +
   contract-first seams; the orchestrator does the `CMakeLists`/`main.cpp` wiring and the single integration
-  build. This session: 4 authoring agents → one clean first-try build. **Source-verify every load-bearing
-  API before launching the fan-out** (it's what made the integration clean).
-- **Adversarial verify waves** (independent skeptic-verify, default-refuted, evidence-required) — extremely
-  high ROI. This session's wave traced the two scariest correctness questions (note-pointer lifetime,
-  instrument audibility) to a confident *correct* against engine source. **Run one on any change you can't
-  runtime-confirm here.**
+  build. This session's MIDI MVP landed a **clean first-try integration build** this way, because every
+  load-bearing engine API was **source-verified before** launching the fan-out.
+- **Adversarial verify waves** (independent skeptics, default-refuted, evidence-required) — high ROI for
+  anything that can't be runtime-confirmed here. Run one on the `SessionView` design + build.
+
+---
+
+## Open decisions (waiting on you)
+
+- **The control-bar "Editor" button** — third view, drawer toggle, or drop it? (Unresolved across the mockups.)
+- **`INTERFACE.md` body** — still the old arrangement-first 7-phase UI plan (banner-flagged as superseded;
+  DIRECTION.md wins). A full Session-first rewrite is queued but not done.
+- **Mockup refinements** — likely incoming (Session footer mixer, hard renumber 00→01, geometry tweaks).
+- **Which controllers you actually own** — affects which driver to build first.
 
 ---
 
 ## Key references
 
-- [STATUS.md](STATUS.md) — living roadmap (refreshed this session).
-- [docs/devlog/midi-build.md](devlog/midi-build.md) — **this session's** wave-by-wave MIDI MVP build record
-  (deviations + verify results).
-- [docs/devlog/midi-design.md](devlog/midi-design.md) — the build-ready MIDI design + 7-wave plan (read
-  before W6/W7).
-- [docs/devlog/device-recording.md](devlog/device-recording.md) — recording root cause + device-pairing nuance.
-- [docs/devlog/integration.md](devlog/integration.md) — earlier orchestrator wave-by-wave record.
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) · [docs/INTERFACE.md](INTERFACE.md) · [docs/FEATURE_CATALOG.md](FEATURE_CATALOG.md)
-- [tests/SELFTEST.md](../tests/SELFTEST.md) — both selftests' fields + pass criteria.
+- **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
+- [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
+- [devlog/midi-build.md](devlog/midi-build.md) — the MIDI MVP + W6 build record.
+- [devlog/midi-design.md](devlog/midi-design.md) — MIDI design + the W7 (input-record) plan.
+- [devlog/device-recording.md](devlog/device-recording.md) — recording root-cause + device-pairing nuance.
+- [ARCHITECTURE.md](ARCHITECTURE.md) · [INTERFACE.md](INTERFACE.md) · [FEATURE_CATALOG.md](FEATURE_CATALOG.md) ·
+  [../tests/SELFTEST.md](../tests/SELFTEST.md).
