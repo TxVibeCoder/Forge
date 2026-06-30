@@ -30,7 +30,12 @@ void MidiNoteComponent::paint (Graphics& g)
 {
     const auto r = getLocalBounds().toFloat();
 
-    g.setColour (Colour (ForgeLookAndFeel::accent).withAlpha (selected ? 1.0f : 0.85f));
+    // Fill alpha tracks velocity so the grid reads as dynamics: soft notes are dimmer, loud notes
+    // near solid. Selection overrides to fully opaque so the selected set stays legible regardless.
+    const float vel   = jlimit (1.0f, 127.0f, (float) note.getVelocity()) / 127.0f;
+    const float alpha = selected ? 1.0f : (0.45f + 0.5f * vel);
+
+    g.setColour (Colour (ForgeLookAndFeel::accent).withAlpha (alpha));
     g.fillRoundedRectangle (r, 2.0f);
 
     g.setColour (Colour (selected ? ForgeLookAndFeel::textPrim : ForgeLookAndFeel::hairline));
@@ -46,14 +51,23 @@ void MidiNoteComponent::mouseMove (const MouseEvent& e)
 
 void MidiNoteComponent::mouseDown (const MouseEvent& e)
 {
+    // Take keyboard focus on the roll so Delete / Copy / Paste land here after a note click.
+    owner.grabKeyboardFocus();
+
     if (e.mods.isPopupMenu())
     {
-        // Right-click deletes the note (PianoRollView rebuilds, so don't touch `note` afterwards).
-        owner.deleteNote (note);
+        // Right-click deletes this note, or the whole selection if this note is part of one
+        // (PianoRollView rebuilds, so don't touch `note` afterwards).
+        owner.deleteNoteOrSelection (note);
         return;
     }
 
-    setSelected (true);   // selection is purely visual (the accent fill); no engine state here.
+    // Route the click through the owner's selection model: Shift / Ctrl / Cmd toggles this note in
+    // or out of the set (multi-select); a plain click selects only this note.
+    if (e.mods.isShiftDown() || e.mods.isCommandDown())
+        owner.toggleSelect (note);
+    else if (! owner.isSelected (note))
+        owner.selectOnly (note);
 
     // Decide move-vs-resize once, at mouseDown, from the hit zone. Capture the anchor in PARENT
     // (canvas) space so the live move — which shifts this component — doesn't move the anchor under
@@ -107,13 +121,14 @@ void MidiNoteComponent::mouseDrag (const MouseEvent& e)
     }
     else
     {
-        // Live preview of a move: convert the pixel delta to a beat delta, and the absolute pointer
-        // y to a pitch row, then reposition the component (the commit re-snaps on mouseUp).
-        const double startBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
-        const int pitch = juce::jlimit (0, 127, PianoRollView::yToPitch (pointerY));
-        const int x1 = owner.beatToX (juce::jmax (0.0, startBeat));
-        const int x2 = owner.beatToX (juce::jmax (0.0, startBeat) + dragOriginLengthBeats);
-        setBounds (x1, PianoRollView::pitchToY (pitch), juce::jmax (2, x2 - x1), getHeight());
+        // Live preview of a move: convert the pixel delta to a (beat, pitch) delta off the dragged
+        // note's origin, then let the owner reposition the WHOLE selection by that same delta (the
+        // dragged note is always in the selection — mouseDown selected it). Commit re-snaps on up.
+        const double newStartBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
+        const int    newPitch     = PianoRollView::yToPitch (pointerY);
+        const double beatDelta  = newStartBeat - dragOriginStartBeat;
+        const int    pitchDelta = newPitch - dragOriginPitch;
+        owner.previewMoveSelection (note, beatDelta, pitchDelta);
     }
 }
 
@@ -135,8 +150,10 @@ void MidiNoteComponent::mouseUp (const MouseEvent& e)
     }
     else
     {
-        const double startBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
-        const int pitch = juce::jlimit (0, 127, PianoRollView::yToPitch (pointerY));
-        owner.commitNoteMove (note, juce::jmax (0.0, startBeat), pitch);
+        // Commit the whole selection by the dragged note's (beat, pitch) delta. The owner snaps the
+        // dragged note's start and applies the SAME beat delta to the rest (see commitMoveSelection).
+        const double newStartBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
+        const int    newPitch     = PianoRollView::yToPitch (pointerY);
+        owner.commitMoveSelection (note, newStartBeat - dragOriginStartBeat, newPitch - dragOriginPitch);
     }
 }

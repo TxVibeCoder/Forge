@@ -38,6 +38,7 @@ target_sources(Forge PRIVATE
     src/ui/arrange/ArrangeView.cpp
     src/ui/pianoroll/PianoRollView.cpp
     src/ui/pianoroll/MidiNoteComponent.cpp
+    src/ui/pianoroll/VelocityLane.cpp
     src/ui/mixer/MixerView.cpp
     src/ui/plugins/PluginWindow.cpp
     src/ui/browser/BrowserView.cpp

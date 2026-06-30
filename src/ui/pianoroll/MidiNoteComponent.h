@@ -9,7 +9,9 @@
 
     Interaction: left-drag on the body moves the note (horizontally in time, vertically in pitch);
     left-drag in the right-edge zone resizes the note's length; right-click deletes it. A plain
-    click never nudges (the move threshold guards it).
+    click never nudges (the move threshold guards it). mouseDown routes the click through
+    PianoRollView's selection model (plain click selects only this note; Shift/Ctrl/Cmd toggles it),
+    and a body-drag of a selected note moves the WHOLE selection by the dragged note's delta.
 
     Message-thread only.
 */
