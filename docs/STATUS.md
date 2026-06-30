@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-29 (Phase 2 fan-out integrated; uncommitted).*
+*Living status document. Last updated 2026-06-29 (Phases 2–3 committed: `53034a5`).*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
 [../tests/SELFTEST.md](../tests/SELFTEST.md) (verification contract).*
@@ -18,13 +18,16 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
 | **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
-| **Code size** | ~2,660 lines of Forge source (engine/JUCE excluded) across 16 files |
+| **Code size** | ~5,280 lines of Forge source (engine/JUCE excluded) across 25 files |
 
 ---
 
 ## 2. Accomplished
 
-Seven green commits, each compiling and passing the headless `--selftest`:
+Ten green commits, each compiling clean. Phases 2–3 were built by successive **file-disjoint
+Workflow fan-outs** (4–5 parallel agents per wave, exclusive file ownership + additive-only
+interfaces + contract-first seams), each integrated by the orchestrator in **one green build (0
+warnings)**, plus an adversarial-review wave that found + fixed 5 real bugs:
 
 ### Phase 0 — toolchain + first sound  (`1f5eb70`, `5fa6f8e`)
 - Installed the toolchain (VS2022 Build Tools / MSVC v143, CMake) and vendored Tracktion +
@@ -79,10 +82,38 @@ Delivered by five file-disjoint agents, integrated in one green build. Per-area 
   input-name diagnostics; plus a synthetic-input helper (see §4 — wiring is future work).
 - **Hygiene:** `.gitattributes` (`* text=auto`); `formatTimecode` negative-sign fix.
 
+### Phase 3 — mixer · export · plugins · browser · inspector  (`53034a5`; two more fan-outs)
+The Browser, Detail-drawer and Mixer placeholder regions are now **all real**. Per-area writeups in
+`docs/devlog/` (mixer · engine-mix · arrange-drag · export · plugins · mixer-fx · browser · detail).
+- **Mixer view** (`src/ui/mixer/MixerView`): real channel strips — vertical dB fader, rotary pan,
+  M/S, colour swatch — over the Edit (volume/pan via new `EngineHelpers::get/setTrackVolumeDb` +
+  `…Pan`, driving each track's `VolumeAndPanPlugin`); per-strip **plugin insert slots**, a **master
+  strip** (`edit.getMasterVolumePlugin()`), and ~28 Hz **peak meters** off each track's level
+  measurer. Horizontal Viewport so many tracks scroll.
+- **Plugin hosting** (`src/engine/PluginHost` + `src/ui/plugins/PluginWindow`): list built-in
+  effects (EQ, Compressor, Reverb, Delay, Chorus, Phaser…) + any scanned externals; add/remove on a
+  track; **floating editor windows** (native editor for externals, a generated parameter panel for
+  built-ins) that auto-close with their Edit.
+- **WAV export** (`src/services/export/Exporter`): render the Edit to a 24-bit stereo WAV via the
+  engine renderer, behind a ControlBar **Export** button + save-chooser.
+- **File Browser** (`src/ui/browser/BrowserView`): a `FileTreeComponent` in the left region;
+  double-click an audio file to import.
+- **Clip Inspector** (`src/ui/detail/DetailView`): the bottom drawer shows the selected clip —
+  name, gain (dB), mute, fades, position, larger waveform; auto-opens on selection; holds the clip
+  as a `te::Clip::Ptr` so it can't dangle.
+- **Clip drag-to-move + snap-to-bar** in the arrange view (Ctrl bypasses snap) + a one-line info
+  hint; fixed a *latent* bug where the full-width playhead overlay shadowed all clip mouse events.
+- **Recording arm/disarm** wired to the lane **R** button — arm state is now **engine-derived**
+  (`RecordController::isTrackArmed`), not a transient flag, so it survives rebuilds and input-steal.
+
 ### Verified by `--selftest` (current)
-`mode=playback`: device open · `editLoaded=0` (fresh) · `importedClip=1` ·
-`numClipComponents=1` · `playing=1` · **result=PASS**.
-`mode=record`: `inputDeviceCount=0` → **FAIL** (honest: no input device available).
+`mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** when the
+audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal — if the active
+output device changes mid-session (e.g. a Bluetooth headset disconnects) the default-device
+negotiation in `initialiseAudioForRecording` can balloon startup to 25–77 s and a contended device
+may return `playing=0`; this is environmental (affects the committed baseline identically), not a
+code regression. See the hardening item in §4 and `docs/devlog/integration.md`.
+`mode=record`: `inputDeviceCount=0` → **FAIL** (honest: no input device available on this box).
 
 ---
 
@@ -91,16 +122,23 @@ Delivered by five file-disjoint agents, integrated in one green build. Per-area 
 ```
 src/
 ├── main.cpp                       ForgeApplication (owns Engine + LookAndFeel) + MainComponent (the shell)
-├── services/files/ProjectSession  owns the Edit; create/open/save/import
+├── services/
+│   ├── files/ProjectSession       owns the Edit; create/open/save/import; isModified
+│   └── export/Exporter            render the Edit → 24-bit WAV (engine renderer)
 ├── engine/
-│   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, audio settings
-│   └── RecordController           the recording recipe (enable/arm/record)
+│   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, audio init, track vol/pan
+│   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed
+│   └── PluginHost                 list/add/remove built-in + external plugins on a track
 └── ui/
     ├── ForgeLookAndFeel.h         dark amber theme (colour IDs)
     ├── ControlBar                 merged top strip + view-switch + region toggles
     ├── transport/TransportBar     play/stop/rec/loop + timecode/bars|beats
-    └── arrange/ArrangeView        TimelineView, TrackLane, AudioClip (waveform), Playhead
-docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-area Phase 2 writeups)
+    ├── arrange/ArrangeView        ruler, lanes (M/S/R + colour), clips (waveform, drag, snap), selection, playhead
+    ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots, master strip, peak meters
+    ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
+    ├── browser/BrowserView        left-region file browser (double-click → import)
+    └── detail/DetailView          bottom-drawer clip inspector (name/gain/fades/waveform)
+docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-wave writeups)
 tests/  SELFTEST.md
 ```
 
@@ -143,6 +181,20 @@ tests/  SELFTEST.md
   construct (full shell builds in the playback selftest) but aren't covered headlessly — verify
   manually or via computer-use before relying on them.
 
+### Phase 3 follow-ups (mixer / plugins / browser / inspector)
+- [ ] **Startup latency hardening (recommended).** `initialiseAudioForRecording` opens a default
+  *input* synchronously on the message thread; when the default device changes (e.g. a Bluetooth
+  headset disconnects) startup can stall 25–77 s. Open inputs lazily / off the message thread.
+- [ ] **External plugin scanning UI.** `PluginHost` loads whatever is already in the engine's
+  known-plugin list; a VST3/AU **scan** action (in Audio settings) is still to add.
+- [ ] **Master-output metering.** The master peak meter is fed only if the master chain already has
+  a `LevelMeterPlugin`; hook it to the master output node (or insert a meter) for a reliable reading.
+- [ ] **Plugin insert reorder** (drag) + per-insert bypass toggle (engine supports `setEnabled`).
+- [ ] **Snap-division selector** — snap is bar-only; add beat / 1-N grid choices + a toggle in the UI.
+- [ ] **Async export + progress** — export currently blocks the message thread (fine for short edits).
+- [ ] **Live cross-surface refresh** — Mixer/Inspector read engine state on `setEdit`/select only
+  (manual-rebuild model); a value changed on another surface updates on re-select, not live.
+
 ### Later / feature-gated
 - [ ] **MIDI is not yet supported** — Forge is audio-only (`WaveAudioClip` only). MIDI tracks
   + piano-roll are a later add (gates INTERFACE Phase 4's piano-roll).
@@ -165,30 +217,32 @@ tests/  SELFTEST.md
 |---|---|---|
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; recording still input-gated for real HW) |
-| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ⏳ next |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ |
-| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ |
+| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + plugin hosting + floating windows done; buses/sends + external scan UI to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; MIDI/automation to do) |
+| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV export + bar snap done; LUFS/stems/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
 ### Interface build order (from INTERFACE.md)
 | Phase | Items | State |
 |---|---|---|
 | 1 — Shell refactor | ForgeShell, Control Bar, LookAndFeel, view-slot, collapsible regions, tooltips | ✅ done |
-| 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection state ✅; **snap + Info/Help box** still to do | ✅ mostly |
-| 3 — Browser/Inspector | left column: Browse (drag-onto-track) + Inspect (selection props); value popups; CallOutBox clusters | ⏳ |
-| 4 — Detail Drawer | audio clip editor → piano-roll → automation; color-swatch palette | ⏳ |
-| 5 — Mixer + devices + plugins | Mixer view-switch; device chain; floating VST/AU windows | ⏳ |
+| 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection, clip drag + bar snap + info hint ✅; **snap-division selector** to do | ✅ done |
+| 3 — Browser/Inspector | left-column file Browser (double-click import) ✅; clip Inspector (props) ✅; drag-onto-track + value popups to do | ✅ mostly |
+| 4 — Detail Drawer | clip inspector (name/gain/fades/waveform) ✅; piano-roll → automation later | ✅ (audio clip stage) |
+| 5 — Mixer + devices + plugins | Mixer view-switch ✅; channel strips + inserts + master + meters ✅; floating plugin windows ✅; device chain reorder/bypass to do | ✅ done |
 | 6 — Config + delivery | tabbed Preferences (folds in Audio settings); Export/Render | ⏳ |
 | 7 — Power-user + Session | tear-off panels, saved layouts; SessionView when wanted | ⏳ |
 
 ### How they interleave (recommended path)
-The interface and engine roadmaps are two views of the same work. Practical next sequence:
-1. **Interface Phase 2 (arrange polish)** + engine selection/track plumbing — makes the
-   arrange view a real working surface (per-lane controls, context menus, ruler).
-2. **Device-override fix** + finish **recording verification** (small, unblocks tracking).
-3. **Mixer view** (interface Phase 5 / engine Phase 2) — channel strips over the same Edit.
-4. **Plugin hosting** (VST3/AU) — the headline capability; floating plugin windows + scan.
-5. **Detail Drawer** content (audio editor first), then **MIDI + piano-roll**.
+Phases 0–3 are done: the spine, arrange surface, mixer, plugin hosting, browser, inspector, export.
+Practical next sequence:
+1. **Startup-latency hardening** (open inputs lazily/off-thread) + finish **recording verification**
+   once a real input is selected — unblocks tracking and makes selftests reliable on any device.
+2. **External plugin scanning UI** (VST3/AU scan in Audio settings) — the host already loads what's
+   in the known list; scanning makes it discoverable.
+3. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth.
+4. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
+5. **Polish** — master metering (LUFS), markers, comping, stem export, snap-division selector.
 
 ---
 
