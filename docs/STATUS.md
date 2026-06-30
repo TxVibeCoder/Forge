@@ -1,7 +1,7 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (recording verified end-to-end on real hardware +
-`--selftest-record` harness fix; MIDI tracks + piano-roll design complete & source-verified).*
+*Living status document. Last updated 2026-06-30 (**MIDI tracks + piano-roll MVP built** — W1–W5,
+draw a clip and hear it via a default 4OSC; clean build, both selftests PASS, adversarial verify clean).*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
 *Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design), [INTERFACE.md](INTERFACE.md)
 (UI plan), [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape), and
@@ -20,7 +20,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Recording + arrangement** first (tracking, comping, MIDI, mixing). Not clip-launch. |
 | **UI direction** | Ableton's *look + interaction* on an arrangement-first DAW; dark + **warm amber** accent; single-window. **Session clip-grid deferred** (seam reserved). |
-| **Code size** | ~6,110 lines of Forge source (engine/JUCE excluded) across 27 files |
+| **Code size** | ~5,900 lines of Forge source (engine/JUCE excluded) across 31 files |
 
 ---
 
@@ -126,6 +126,31 @@ fixed 3 real correctness bugs. Build clean (0 warnings); playback selftest PASS.
   **master meter** now reads the post-fader `EditPlaybackContext::masterLevels` (no Edit mutation —
   review fix: the previous insert-a-meter approach dirtied a clean project and metered pre-fader).
 
+### MIDI tracks + piano-roll — MVP  (`9a24989`; file-disjoint 5-wave fan-out + adversarial verify)
+The audible-MIDI slice (engine Phase 3) is built. Right-click an empty lane area → **New MIDI Clip** →
+a `te::MidiClip` is created on that track, **born audible** via an auto-inserted **4OSC** at plugin-chain
+**index 0**, and the **piano-roll** opens in the bottom drawer. Draw / move / resize / delete notes →
+**play → hear it**. No recording code (MIDI-input record is the later W7). Per-wave record in
+[devlog/midi-build.md](devlog/midi-build.md); the source-verified design in [devlog/midi-design.md](devlog/midi-design.md).
+- **Instrument seam** (`PluginHost`): `ensureDefaultInstrument` inserts a 4OSC at chain head (its own
+  insert-at-0 path, *not* the volume-index effect path) and is idempotent (never stacks synths);
+  `addInstrumentToTrack`; `makeBuiltIn` category parameterized.
+- **MIDI-clip create** (`ProjectSession::createMidiClip`): the **AudioTrack-member** `insertMIDIClip`
+  (not the `ClipOwner` free-fn) + `ensureDefaultInstrument`; range in SECONDS, notes in BEATS.
+- **Polymorphic clips** (`ArrangeView`): base **`ClipComponent`** extracted; `AudioClipComponent` +
+  new **`MidiClipComponent`** derive from it; `rebuildClips` branches by `dynamic_cast`; wave-clip
+  behaviour byte-for-byte preserved. A **"New MIDI Clip"** lane menu emits `onCreateMidiClipRequested`.
+- **Piano-roll** (`src/ui/pianoroll/`): `PianoRollView` (shared `TimelineView` time axis, mandatory
+  `juce::Viewport` for the 128 pitch rows, keybed gutter) + `MidiNoteComponent`; all edits go to the
+  **live** `getSequence()` (never the looped copy) with the Edit's UndoManager. Content-relative beats.
+- **Integration** (`main.cpp`): selection routes a `MidiClip`→piano-roll, any other clip→DetailView, via
+  a `bottomMode` drawer that swaps editors; project-swap drops the held clip safely.
+- **Verified:** clean first-try integration build; `--selftest` + `--selftest-record` both **PASS** (no
+  regression); a 3-agent adversarial verify wave (W3/W4/W5, default-refuted) returned **`correct` with
+  zero blocker/major/minor findings** — incl. tracing `MidiNote&` lifetime safety and instrument-at-0
+  audibility against engine source. The live GUI draw→play path still needs a **manual smoke pass** (the
+  dev-built window can't be GUI-driven headlessly).
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** when the
 audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal. The old
@@ -149,12 +174,12 @@ full root cause in `docs/devlog/device-recording.md`.
 src/
 ├── main.cpp                       ForgeApplication (owns Engine + LookAndFeel) + MainComponent (the shell)
 ├── services/
-│   ├── files/ProjectSession       owns the Edit; create/open/save/import; isModified
+│   ├── files/ProjectSession       owns the Edit; create/open/save/import; createMidiClip; isModified
 │   └── export/Exporter            render the Edit → 24-bit WAV (whole-edit mixdown + per-track stems)
 ├── engine/
 │   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, lazy record-input open, track vol/pan
 │   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed
-│   ├── PluginHost                 list/add/remove built-in + external plugins on a track
+│   ├── PluginHost                 list/add/remove built-in + external plugins; instrument seam (4OSC at chain head)
 │   └── PluginScanner              VST3/AU scan dialog → engine known-plugin list (auto-persist)
 └── ui/
     ├── ForgeLookAndFeel.h         dark amber theme (colour IDs)
@@ -164,7 +189,8 @@ src/
     ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots (bypass + reorder), master strip + post-fader meter
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
-    └── detail/DetailView          bottom-drawer clip inspector (name/gain/fades/waveform)
+    ├── detail/DetailView          bottom-drawer audio-clip inspector (name/gain/fades/waveform)
+    └── pianoroll/                 bottom-drawer MIDI editor: PianoRollView (Viewport grid) + MidiNoteComponent
 docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-wave writeups)
 tests/  SELFTEST.md
 ```
@@ -236,8 +262,10 @@ tests/  SELFTEST.md
   (manual-rebuild model); a value changed on another surface updates on re-select, not live.
 
 ### Later / feature-gated
-- [ ] **MIDI is not yet supported** — Forge is audio-only (`WaveAudioClip` only). MIDI tracks
-  + piano-roll are a later add (gates INTERFACE Phase 4's piano-roll).
+- [x] **MIDI tracks + piano-roll — MVP DONE** (`9a24989`). Draw a MIDI clip and hear it via a default
+  4OSC; clips render polymorphically (`ClipComponent` base). **Post-MVP remaining:** W6 velocity lane +
+  multi-select/copy-paste/Delete-key/horizontal auto-scroll; **W7 MIDI-input recording** (its own enable
+  sequence + a runtime test with a physical controller). Live GUI draw→play path needs a manual smoke pass.
 - [ ] ASIO (needs Steinberg SDK + `JUCE_ASIO=1`); MP3 import (`JUCE_USE_MP3AUDIOFORMAT=1`).
 - [ ] `rtcheck` RT-safety tool is macOS/Linux only — N/A on the Windows dev box.
 - [ ] AGPLv3 obligations when distributing builds (share source — trivial for this repo).
@@ -258,7 +286,7 @@ tests/  SELFTEST.md
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (clip move/snap done; **MIDI design complete + source-verified → `docs/devlog/midi-design.md`**; build next; automation to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll → `docs/devlog/midi-build.md`; W6 velocity/polish + W7 MIDI-input record + automation to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
@@ -268,7 +296,7 @@ tests/  SELFTEST.md
 | 1 — Shell refactor | ForgeShell, Control Bar, LookAndFeel, view-slot, collapsible regions, tooltips | ✅ done |
 | 2 — Arrange polish | per-lane mute/solo/arm + color, context menus, bars\|beats ruler, selection, clip drag + snap + info hint ✅; snap-division selector (Off/Bar/½/¼/⅛/1⁄16, denominator-aware) ✅ | ✅ done |
 | 3 — Browser/Inspector | left-column file Browser (double-click import) ✅; clip Inspector (props) ✅; drag-onto-track + value popups to do | ✅ mostly |
-| 4 — Detail Drawer | clip inspector (name/gain/fades/waveform) ✅; piano-roll → automation later | ✅ (audio clip stage) |
+| 4 — Detail Drawer | clip inspector (name/gain/fades/waveform) ✅; **piano-roll (draw/move/resize/delete, audible via 4OSC) ✅**; automation later | ✅ (audio inspector + MIDI piano-roll) |
 | 5 — Mixer + devices + plugins | Mixer view-switch ✅; channel strips + inserts + master + meters ✅; floating plugin windows ✅; device chain reorder + per-insert bypass ✅ | ✅ done |
 | 6 — Config + delivery | tabbed Preferences (folds in Audio settings); Export/Render | ⏳ |
 | 7 — Power-user + Session | tear-off panels, saved layouts; SessionView when wanted | ⏳ |
@@ -282,10 +310,10 @@ Practical next sequence:
    (`result=PASS`, non-zero peak); the prior FAIL was a harness bug, now fixed (event-driven harness).
    Remaining refinement: default-mic *selection* (lazy-open keeps the existing output, so the captured
    endpoint is the default pairing, not necessarily the listed mic) — see device-recording.md.
-2. **MIDI tracks + piano-roll** (engine Phase 3) — the big remaining capability; gates a synth.
-   **Design is done and source-verified** (`docs/devlog/midi-design.md`): a file-disjoint 7-wave plan
-   (W1 instrument seam · W2 MIDI-clip create · W3 clip-component split · W4 piano-roll · W5 integrate
-   = audible-MIDI MVP; W6 velocity/polish; W7 MIDI-input record). Build is the next effort.
+2. **MIDI tracks + piano-roll** (engine Phase 3) — **MVP DONE** (W1–W5: draw a clip + hear it via 4OSC;
+   `docs/devlog/midi-build.md`). Remaining: **W6** velocity lane + multi-select/copy-paste/Delete-key/
+   horizontal auto-scroll; **W7** MIDI-input recording (own enable sequence + a physical-controller runtime
+   test — see midi-design.md §5). First do a **manual GUI smoke pass** of the draw→play path.
 3. **Automation** (volume/pan/plugin-param lanes) + **buses/sends** in the mixer.
 4. **Polish** — async export + progress; LUFS metering; markers; comping; off-thread record-input
    open (so even the first arm never briefly blocks the message thread).

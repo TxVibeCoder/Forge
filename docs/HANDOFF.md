@@ -1,77 +1,85 @@
 # Forge — Session Handoff
 
 > Living handoff for picking the project back up cold. Pairs with [STATUS.md](STATUS.md) (the living
-> roadmap). Last updated: **2026-06-30**, end of the "recording-verification + MIDI-design" session.
+> roadmap). Last updated: **2026-06-30**, end of the **"MIDI MVP build"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) ·
-HEAD: `79a75d5` · branch `main` · **2 commits ahead of `origin/main` — NOT pushed** (`e293424`, `79a75d5`) ·
-~6,180 lines / 27 source files · last build clean · both self-tests **PASS**.
+branch `main` · MIDI MVP commit `9a24989` · **4 commits ahead of `origin/main` — NOT pushed**
+(`e293424`, `79a75d5`, `9a24989`, + this docs refresh) ·
+~5,900 lines / 31 source files · last build **clean** · both self-tests **PASS** · verify wave **clean**.
 
 Forge is an arrangement-first DAW on **JUCE + Tracktion Engine** (C++20, Windows-verified). Phases 0–4 +
-startup-latency hardening are done and live: project/arrange/transport/mixer/plugins/browser/inspector/
-export, output-only startup with lazy record-input open. See [STATUS.md §2](STATUS.md) for the full feature list.
+startup-latency hardening + the **MIDI MVP** are done and live: project/arrange/transport/mixer/plugins/
+browser/inspector/export, output-only startup with lazy record-input open, and **drawable, audible MIDI
+clips**. See [STATUS.md §2](STATUS.md) for the full feature list.
 
 ---
 
 ## What this session did
 
-### 1. Recording — VERIFIED end-to-end on real hardware ✅ (`e293424`)
+### MIDI tracks + piano-roll — MVP BUILT ✅ (`9a24989`)
 
-The recording path was **correct all along**. The `--selftest-record` FAIL in the previous handoff was a
-**harness bug, not a product bug.**
+Built the source-verified design ([midi-design.md](devlog/midi-design.md)) as the audible-MIDI slice.
+**Outcome:** right-click an empty lane area → **New MIDI Clip** → a `te::MidiClip` is created on that
+track, **born audible** via an auto-inserted **4OSC** at plugin-chain **index 0**, and the **piano-roll**
+opens in the bottom drawer ready to draw. Draw / move / resize / delete notes → **play → hear it**. No
+recording code (MIDI-input record is the later W7). Full per-wave record in
+[devlog/midi-build.md](devlog/midi-build.md).
 
-- **Root cause (fully traced).** The old harness ran open → enable → arm → record **synchronously inside one
-  blocking `MessageManager::callAsync` callback**. Tracktion rebuilds its wave-input list in
-  `DeviceManager::handleAsyncUpdate`, driven by an **async posted message**. While the single callback blocked
-  the message thread, `postMessageToSystemQueue` failed app-wide (`InternalMessageQueue` unavailable →
-  `AsyncUpdater::post()` returns false → `cancelPendingUpdate()`), so the rebuild was silently dropped,
-  `getNumWaveInDevices()` stayed 0, and `armFirstInputToTrack` bailed. The **real app never hits this** — it
-  arms on a UI click and the message loop keeps pumping, so `enableInputs()`'s `dispatchPendingUpdates()`
-  force-runs the (successfully-posted, still-pending) rebuild synchronously before the arm.
-- **Fix.** Made `--selftest-record` **event-driven** (phase 1 open input + yield → phase 2 arm/record after the
-  rebuild delivers → phase 3 stop + verify), mirroring the real arm path. It now captures a **real take to disk**:
-  `inputDeviceCount=8, trackArmed=1, recordingStarted=1, recordedClipCount=1, recordedFileExists=1,
-  recordedClipLengthSecs≈1.44, recordedPeakMagnitude>0` (non-zero ⇒ real samples reached disk), `result=PASS`,
-  stable across runs. Playback selftest still PASS.
-- **Code touched (2 files):** [EngineHelpers.h](../src/engine/EngineHelpers.h) (`ensureRecordingInputOpen` now
-  returns its device-open error string — informational; real-app callers ignore it, the selftest reports it) and
-  [main.cpp](../src/main.cpp) (phased record-selftest state machine + a recorded-file peak-magnitude content
-  check). All temporary submodule instrumentation was reverted — submodules are clean.
-- **Carry-forward lesson:** **never arm recording synchronously in one blocking callback** — the engine's
-  device-list rebuild is async and must be allowed to deliver. This applies directly to MIDI-input recording (W7).
-- **Device-pairing nuance (documented, not a bug):** the lazy open keeps the working OUTPUT device and adds the
-  current type's DEFAULT capture input. On this box that combined device reports as "Speakers (Realtek)" with its
-  own 8 input channels rather than the listed "Microphone Array (Intel)". The record PATH is verified regardless;
-  picking a specific mic is done via the Audio Settings dialog. Full writeup in
-  [device-recording.md](devlog/device-recording.md).
+- **How:** a single **file-disjoint Workflow fan-out** — four authoring agents (W1–W4) with exclusive
+  file ownership, additive-only interfaces, contract-first seams, run in parallel; the **orchestrator
+  alone** owned `CMakeLists.txt` + `main.cpp` and did the **one integration build**. Every load-bearing
+  engine API was source-verified **before** launch, so the agents started from facts — the integration
+  build was **clean on the first try**.
+- **W1** `PluginHost`: `ensureDefaultInstrument` (idempotent 4OSC at chain head, **own insert-at-0 path**,
+  not the volume-index effect path) + `addInstrumentToTrack`; `makeBuiltIn` category parameterized.
+- **W2** `ProjectSession::createMidiClip`: the **AudioTrack-member** `insertMIDIClip(name,range,nullptr)`
+  (returns `MidiClip::Ptr` directly; dodges the `insertMIDIClip(ClipOwner&)` free-fn name collision) +
+  `ensureDefaultInstrument`. Range in SECONDS; notes in BEATS.
+- **W3** `ArrangeView`: base **`ClipComponent`** extracted; `AudioClipComponent` + new
+  **`MidiClipComponent`** derive from it; `rebuildClips` branches by `dynamic_cast<te::MidiClip*>`; the
+  six clip callbacks re-typed `AudioClipComponent&`→`ClipComponent&`; **"New MIDI Clip"** menus →
+  `onCreateMidiClipRequested`. Wave-clip behaviour preserved byte-for-byte (verified against `git HEAD`).
+- **W4** `src/ui/pianoroll/*` (new): `PianoRollView(TimelineView&)` (shared time axis, mandatory
+  `juce::Viewport` for 128 pitch rows, keybed gutter) + `MidiNoteComponent`. All edits go to the **live**
+  `getSequence()` (never the looped copy) with `&clip->edit.getUndoManager()`. Content-relative beats.
+- **W5** `main.cpp` + CMake: selection routes a `MidiClip`→piano-roll, any other clip→DetailView, via a
+  `bottomMode` drawer that swaps editors in `resized()`; `onCreateMidiClipRequested`→`createMidiClip`
+  (builds a 16-beat range, opens the roll on the new clip); `pianoRoll.onEditMutated`→save; project-swap
+  drops the held clip safely.
 
-### 2. MIDI tracks + piano-roll — DESIGN complete & source-verified ✅ (`79a75d5`)
+**Deviations (all confirmed improvements):** W3 maps the note preview via the engine's
+`getTimeOfContentBeat` (`te::Clip` has no clip-level `getStartBeat`); W2 keeps `createMidiClip` inlined to
+hold the `AudioTrack*` for `ensureDefaultInstrument`; W4 delete is right-click-only + selection is
+visual-only (Delete-key + multi-select are W6).
 
-A multi-agent design pass (understand → design → adversarial-verify → synthesize) produced a **build-ready,
-source-grounded design**: [docs/devlog/midi-design.md](devlog/midi-design.md). **5 of 6 load-bearing assumptions
-confirmed against the actual source; 1 refuted and corrected.**
+### Verification
 
-- **Key facts (confirmed):** Tracktion has **no MIDI track type** — a `te::AudioTrack` hosts MIDI + wave clips,
-  and audibility comes from a built-in **4OSC** synth at plugin-chain **index 0**. A drawn MIDI clip is audible
-  with just `createNewPlugin("4osc") → insertPlugin(synth,0) → insertMIDIClip → addNote → play` (no input/record
-  code — matches three shipped engine demos). The `getSequence()` vs `getSequenceLooped()` data-loss trap is real
-  (always edit `getSequence()`). The arrange selection/drag/snap/persist seams are base-typed on `te::Clip*`, so
-  MIDI rides them; the piano-roll reuses the shared `TimelineView` + snap grid in the bottom drawer.
-- **Refuted (the valuable catch):** MIDI-input recording is **NOT** a mechanical clone of the audio arm —
-  `enableInputs()` is wave-only (`setStereoPair` doesn't exist on MIDI), MIDI needs its own enable sequence
-  **before** `ensureContextAllocated()` (else the device is dropped from `getAllInputs()`), a different flush
-  (`rescanMidiDeviceList()`), and a multi-value device-type filter. → re-scoped to a higher-risk later wave (W7),
-  de-risking the MVP.
-- **The plan — file-disjoint 7-wave build** (matches the project's established workflow):
-  - **MVP = W1–W5:** W1 instrument seam (`PluginHost`) · W2 MIDI-clip create (`ProjectSession`) · W3
-    clip-component split (`ArrangeView` — the one heavily-wired file, single-owner) · W4 piano-roll
-    (`src/ui/pianoroll/*`, new) · W5 integrate (orchestrator: `CMakeLists`/`main.cpp`/ControlBar) → **a drawn
-    MIDI clip you can hear.**
-  - **Post-MVP:** W6 velocity/polish · W7 MIDI-input recording (needs a runtime test with a physical controller).
-  - Six source-grounded corrections are already folded into the design doc (instrument insert-at-0 vs. the
-    volume-index effect path; `ResizerBar` max-height baked at construction; the `insertMIDIClip(ClipOwner&)`
-    free-function name collision; the two-arg `createNewPlugin` overload; W3 callback re-typing; the
-    Viewport-mandatory piano-roll). A builder starts from verified facts.
+- **Build:** clean first-try integration build (6 TUs recompiled + linked, 0 errors).
+- **Selftests (no regression):** `--selftest` (playback) **PASS**; `--selftest-record` **PASS**
+  (`recordedPeakMagnitude≈0.68` — real signal). The new wiring never touches the record/playback paths.
+- **Adversarial verify wave** (3 skeptic agents over W3/W4/W5, default-refuted, evidence-required,
+  read-only): **all three `correct`, zero blocker/major/minor findings.** Two highest-risk items cleared
+  against engine source — (1) **`MidiNote&` lifetime:** `setStartAndLength`/`setNoteNumber` don't free the
+  note, and right-click-delete is safe via JUCE's `HierarchyChecker::shouldBailOut()`; (2)
+  **instrument-at-0:** the detection loop can't false-positive on the vol/meter tail, so a real 4OSC is
+  always inserted and re-create can't stack synths.
+
+---
+
+## ⚠️ The one thing not yet verified
+
+**The live GUI draw→play→hear path has NOT been exercised in a running window** — the dev-built
+`Forge.exe` can't be GUI-driven headlessly here. Everything is statically verified (build + selftests +
+adversarial trace), but the very first manual action should be a **GUI smoke test**:
+
+1. Run `Forge.exe`. Right-click the empty area of a track lane → **New MIDI Clip**.
+2. The piano-roll should open in the bottom drawer. Click the grid to draw a few notes; drag to move/resize;
+   right-click a note to delete.
+3. Press **Space** → the notes should sound through the 4OSC. Save, reopen, confirm the clip persists.
+
+If anything is off, the per-wave detail is in [devlog/midi-build.md](devlog/midi-build.md) and the
+coordinate math + interaction logic live entirely in `src/ui/pianoroll/`.
 
 ---
 
@@ -87,55 +95,53 @@ confirmed against the actual source; 1 refuted and corrected.**
 # Both selftests write %TEMP%\forge_phase0_selftest.log
 ```
 
-Needs VS2022 / MSVC v143 (C++20). First clone: `git submodule update --init --recursive`. The record selftest
-writes a real take and reports `recordedPeakMagnitude` (>0 ⇒ signal flowed). Both selftests PASS on this box.
+Needs VS2022 / MSVC v143 (C++20). First clone: `git submodule update --init --recursive`. Both selftests
+PASS on this box.
 
 ---
 
 ## ⚠️ Gotchas
 
-- **Recording is verified working** — the previous "input-gated / unverified" caveat is resolved. The only
-  remaining refinement is default-mic *selection* (device-pairing nuance above), not the record path itself.
-- **Never arm recording synchronously in one blocking callback.** The wave-device-list rebuild is async; the
-  selftest is event-driven for exactly this reason. MIDI-input recording (W7) must follow the same discipline.
+- **GUI not auto-verified (above).** The MIDI draw→play path needs a manual smoke pass; computer-use can't
+  grab the dev-built `Forge.exe` window by name (it's not a Start-menu app).
 - **Build file lock:** a running `Forge.exe` → `LNK1168` on the next build. `Get-Process Forge | Stop-Process
   -Force` first. Also kill it before runtime tests (a killed instance can still briefly hold the WASAPI output
   device); a 45–90 s timeout is prudent.
+- **Never arm recording synchronously in one blocking callback** — the wave-device-list rebuild is async
+  (carry-forward from the recording session). MIDI-**input** recording (W7) must follow the same discipline.
+- **MIDI note beats are CONTENT-relative** (beat 0 = clip start at offset 0). The piano-roll's `beatToX`/
+  `xToBeat` ignore clip offset — fine for the MVP (created clips have offset 0); revisit if MIDI clips ever
+  gain a non-zero offset. **Always edit `getSequence()`, never `getSequenceLooped()`** (its edits are dropped).
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake.
-- **Submodules are clean** — all the temporary engine/JUCE instrumentation used to root-cause the record bug was
-  reverted. Don't be surprised by a clean `git submodule status`.
-- **Not pushed:** `main` is 2 commits ahead of `origin/main`. Push when ready (`git push`).
+- **Submodules are clean.** Don't be surprised by a clean `git submodule status`.
+- **Not pushed:** `main` is 4 commits ahead of `origin/main`. Push when ready (`git push`).
 
 ---
 
 ## What's next (prioritized)
 
-1. **MIDI MVP build (W1–W5)** — the clear next effort. Design is done and source-verified in
-   [midi-design.md](devlog/midi-design.md); follow the file-disjoint wave plan in §6 there. Outcome: draw a MIDI
-   clip on a track and **hear it** via the default 4OSC. The handoff's earlier advice still holds — start it with
-   a **fresh context budget**, using the Workflow tool with file-disjoint agents (the project's proven pattern).
-2. **MIDI post-MVP:** W6 velocity lane + selection/copy-paste polish; **W7 MIDI-input recording** (carries the
-   most risk — needs its own enable sequence + a runtime test with a physical MIDI controller; see midi-design.md
-   §5 + the residual-uncertainty note).
+1. **GUI smoke test of the MIDI MVP** (above) — the one unverified path. Do this before building on it.
+2. **MIDI post-MVP:** **W6** velocity lane + multi-select/marquee + copy/paste + **Delete-key** + horizontal
+   auto-scroll to the clip (all inside `src/ui/pianoroll/*`, disjoint from engine files). **W7** MIDI-input
+   recording — the higher-risk wave: its own enable sequence (`getMidiInDevices()` + `setEnabled` +
+   `setMonitorMode` + `rescanMidiDeviceList()`) **before** `ensureContextAllocated()`, a different device-type
+   filter, and a **runtime test with a physical MIDI controller**. See [midi-design.md §5](devlog/midi-design.md).
 3. **Automation** (vol/pan/plugin-param lanes) + **buses/sends** in the mixer (engine Phase 3 + 2 remainder).
-4. **Polish** — async export + progress (mixdown & stems both block the message thread); LUFS metering; markers;
-   comping; off-thread record-input open (so even the first arm never briefly blocks the message thread).
-5. **macOS build** (only Windows verified) and interactive-UI verification of the Phase-4 surfaces (snap selector,
-   scan dialog, mixer bypass/reorder, stem output construct + compile but aren't headlessly exercised).
-
-> Note: computer-use cannot grab the dev-built `Forge.exe` window by name (it's not a Start-menu app), so
-> GUI-driven verification of in-app surfaces needs either a manual pass or a headless selftest hook.
+4. **Polish** — async export + progress (mixdown & stems both block the message thread); LUFS metering;
+   markers; comping; off-thread record-input open.
+5. **macOS build** (only Windows verified) and interactive-UI verification of the Phase-4 surfaces.
 
 ---
 
 ## How the work gets done (what's working)
 
-- **Workflow tool with file-disjoint agents** — exclusive file ownership + additive-only interfaces + contract-first
-  seams; the orchestrator does the `CMakeLists`/`main.cpp`/ControlBar wiring and the single integration build.
-- **Adversarial-review / verify waves** (design → independent skeptic-verify, default-refuted) — extremely high
-  ROI. This session a verify wave caught that MIDI-input recording is *not* a mechanical clone of the audio arm
-  (which would have produced a broken W7), and the recording root-cause was found by progressively instrumenting
-  the engine until the async-post failure was undeniable. **Run a verify wave on any design or change you can't
+- **Workflow tool with file-disjoint agents** — exclusive file ownership + additive-only interfaces +
+  contract-first seams; the orchestrator does the `CMakeLists`/`main.cpp` wiring and the single integration
+  build. This session: 4 authoring agents → one clean first-try build. **Source-verify every load-bearing
+  API before launching the fan-out** (it's what made the integration clean).
+- **Adversarial verify waves** (independent skeptic-verify, default-refuted, evidence-required) — extremely
+  high ROI. This session's wave traced the two scariest correctness questions (note-pointer lifetime,
+  instrument audibility) to a confident *correct* against engine source. **Run one on any change you can't
   runtime-confirm here.**
 
 ---
@@ -143,10 +149,11 @@ writes a real take and reports `recordedPeakMagnitude` (>0 ⇒ signal flowed). B
 ## Key references
 
 - [STATUS.md](STATUS.md) — living roadmap (refreshed this session).
-- [docs/devlog/midi-design.md](devlog/midi-design.md) — the build-ready MIDI design + 7-wave plan (**read before
-  starting the MIDI build**).
-- [docs/devlog/device-recording.md](devlog/device-recording.md) — recording root cause, the harness-bug writeup,
-  the device-pairing nuance, and "verifying a real take".
-- [docs/devlog/integration.md](devlog/integration.md) — orchestrator's wave-by-wave record (incl. review findings).
+- [docs/devlog/midi-build.md](devlog/midi-build.md) — **this session's** wave-by-wave MIDI MVP build record
+  (deviations + verify results).
+- [docs/devlog/midi-design.md](devlog/midi-design.md) — the build-ready MIDI design + 7-wave plan (read
+  before W6/W7).
+- [docs/devlog/device-recording.md](devlog/device-recording.md) — recording root cause + device-pairing nuance.
+- [docs/devlog/integration.md](devlog/integration.md) — earlier orchestrator wave-by-wave record.
 - [docs/ARCHITECTURE.md](ARCHITECTURE.md) · [docs/INTERFACE.md](INTERFACE.md) · [docs/FEATURE_CATALOG.md](FEATURE_CATALOG.md)
-- [tests/SELFTEST.md](../tests/SELFTEST.md) — both selftests' fields + pass criteria (record test now event-driven).
+- [tests/SELFTEST.md](../tests/SELFTEST.md) — both selftests' fields + pass criteria.
