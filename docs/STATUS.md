@@ -3,8 +3,8 @@
 *Living status document. Last updated 2026-07-01 (this session: **W02 — MIDI-learn HW routing · Forge-native
 control surface · offline LUFS** — three engine-facing feature seams (roadmap items 2a / 3 / 4) built against
 source-verified Tracktion facts and proven headless, in **ONE scoped commit `bb9ef5e`** on top of `1eb876d`.
-**Committed LOCALLY, NOT yet pushed** — `origin/main` is still `1eb876d`; working tree clean, sanitize before the
-push: clean MSVC Debug build (0 warnings); **all EIGHT selftests PASS** — `--selftest`, `--selftest-record`,
+**Committed + PUSHED to `origin/main`** (docs commits `d5dbe1a` + `2da5f16` follow it; the pushed set was
+sanitized); working tree clean: clean MSVC Debug build (0 warnings); **all EIGHT selftests PASS** — `--selftest`, `--selftest-record`,
 `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
 `--selftest-controlsurface`, `--selftest-lufs`; full record → [devlog/wave-02-features.md](devlog/wave-02-features.md).
 Prior session: **Wave 01 — six parallel feature seams** (Forge's first multi-CLI wave — metronome + count-in ·
@@ -291,7 +291,7 @@ contract-first seams and committed their own scoped commits; the orchestrator (P
   (mixer shows the A/B sends + Return A/B strips; arrange shows Click + count-in). Live-gesture smoke pass still
   maintainer-only.
 
-### W02 — MIDI-learn HW routing · Forge-native control surface · offline LUFS — SHIPPED  (`bb9ef5e`; committed locally on `1eb876d`, NOT yet pushed)
+### W02 — MIDI-learn HW routing · Forge-native control surface · offline LUFS — SHIPPED  (`bb9ef5e` on `1eb876d`; PUSHED to `origin/main`)
 Three engine-facing feature seams (roadmap items **2a / 3 / 4**), built against **source-verified Tracktion
 facts** and proven headless, in **one scoped commit**. Same multi-phase agent process as prior waves: 3 parallel
 source-verify spikes → an adversarial verification pass (4 skeptics, default-refuted) → 3 parallel file-disjoint
@@ -478,8 +478,8 @@ tests/  SELFTEST.md
   empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
   (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
   remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
-- [x] **W02 — MIDI-learn HW routing + control surface + offline LUFS — DONE** (`bb9ef5e`, committed locally, not
-  yet pushed). Focused-Edit `ForgeUIBehaviour` (item 2a, `--selftest-midiinput`); a Forge-native grid
+- [x] **W02 — MIDI-learn HW routing + control surface + offline LUFS — DONE** (`bb9ef5e`, pushed to
+  `origin/main`). Focused-Edit `ForgeUIBehaviour` (item 2a, `--selftest-midiinput`); a Forge-native grid
   control-surface driver + a Novation Launchpad driver (item 3, `--selftest-controlsurface`; byte mapping needs a
   real device); offline BS.1770-4 LUFS on the export render → export-done status strip (item 4, `--selftest-lufs`).
   **Remaining:** a real-hardware Launchpad smoke test (proves both the physical-CC routing and the driver byte
