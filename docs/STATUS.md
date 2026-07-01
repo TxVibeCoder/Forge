@@ -1,8 +1,9 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (**MIDI tracks + piano-roll** — MVP (W1–W5: draw a clip
-and hear it via a default 4OSC) **+ W6 polish** (velocity lane, multi-select, copy/paste); clean build,
-both selftests PASS, adversarial verify clean).*
+*Living status document. Last updated 2026-06-30 (**Session clip-launch grid** — the new DEFAULT view
+(Session ∣ Arrange ∣ Mix) on Tracktion's Scene / ClipSlot / LaunchHandle; playable with mouse + keyboard,
+launch audible + bar-quantised. Built via source-grounded design + file-disjoint build workflows, then a
+5-lens adversarial QC + an independent fix re-verify. Clean build; all four selftests PASS).*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
@@ -23,7 +24,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
 | **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
-| **Code size** | ~6,460 lines of Forge source (engine/JUCE excluded) across 33 files |
+| **Code size** | ~8,400 lines of Forge source (engine/JUCE excluded) across 43 files |
 
 ---
 
@@ -159,13 +160,51 @@ a `te::MidiClip` is created on that track, **born audible** via an auto-inserted
   audibility against engine source. The live GUI draw→play path still needs a **manual smoke pass** (the
   dev-built window can't be GUI-driven headlessly).
 
+### Session clip-launch grid — the PRIMARY view  (`def1193`; design + build workflows → adversarial QC → fix re-verify)
+**The pivot from [DIRECTION.md](DIRECTION.md) is built.** `SessionView` is the new DEFAULT `ViewMode`
+(`Session ∣ Arrange ∣ Mix`) — an Ableton-style tracks×scenes clip-launch grid on Tracktion's `Scene` /
+`ClipSlot` / `LaunchHandle`, playable with mouse + keyboard. The shipped 4OSC / piano-roll / mixer ride
+inside slots and scenes. Full design record in [devlog/session-design.md](devlog/session-design.md).
+- **Grid** (`src/ui/session/`, 10 new files): `SessionLayout` (geometry + a shared `rowBand` partition so
+  scene rows never drift from pads), `SlotVisualState` (ONE pad-state model for the screen + the future LED
+  encoding), `ClipSlotComponent` (the pad leaf — holds `(track,scene)` indices only, **never** a cached
+  engine pointer, R1), `TrackColumnComponent` (per-track header — name / Audio-MIDI tag / 4OSC chip / M-S-R
+  — + pads + clip-stop), `SceneColumnComponent` (pinned scene-launch column + MASTER stop-all), `SessionView`
+  (top-level grid: a 25 Hz **gated** state poll, keyboard launch, null-guarded shell seams).
+- **Engine seam** (`ProjectSession`): `ensureScenes` (grow-only, off the user undo stack, seeds the sheet-00
+  scene names for newly-grown rows only), a **const non-mutating** `getClipSlot` (safe at 25 Hz — never
+  inserts a track/slot), `createMidiClipInSlot` (born-audible via 4OSC), `importAudioIntoSlot`, and
+  `launchSlot`/`stopSlot`/`stopTrackClips`/`stopAllSlots`/`launchScene` — **quantised + audible** launch
+  ported from the engine's `ClipLauncherDemo`.
+- **Shell** (`main.cpp`, `ControlBar`): `ViewMode::Session` default + **F8**; the atomic 3-way view-switch
+  renumber (0=Session / 1=Arrange / 2=Mixer); grid selection routes a MIDI clip → piano-roll drawer; a
+  **rebuild-on-track-change** guard closes a cross-view use-after-free.
+- **Interaction:** single-click **launches** (instant); **right-click "Edit clip"** opens a clip
+  launch-free; double-click opens it as a convenience (belt-and-suspenders edit paths).
+- **Verified (headless):** a new **`--selftest-session`** audibility gate (create a clip in a slot, launch,
+  assert the `LaunchHandle` reaches *playing* with the transport rolling) → **PASS**; a new **`--screenshot`**
+  mode renders each view to PNG for headless visual review (the grid matches sheet 00). Built by
+  file-disjoint agents against fixed header contracts; a **5-lens adversarial QC** confirmed 12 real issues
+  (a use-after-free blocker, dead keyboard focus, a 25 Hz poll doing ~6,400 tree-walks/s, scene/pad row
+  drift, a double-click that also launched) — all fixed; an **independent fix re-verify** then caught + fixed
+  two regressions introduced by those fixes.
+- **Open:** 16 scene rows don't fit a short window (**vertical-scroll vs. shorter-pads** decision, unresolved);
+  real hardware controllers are the next "one day" seam (§5). Live mouse interaction still needs a manual pass
+  (the dev window can't be GUI-driven headlessly, but `--screenshot` covers rendering).
+
 ### Verified by `--selftest` (current)
-`mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** when the
-audio device is healthy (`playing=1`). *Caveat:* the build is the definitive signal. The old
-input-negotiation startup balloon (25–77 s when the default device changed) is **fixed** — startup is
-now output-only (see "Startup latency hardening" below), and measured headless startup dropped ~17 s
-→ ~8 s. A genuinely contended OUTPUT device can still be slow to open or return `playing=0`; that is
-environmental (affects the committed baseline identically), not a code regression.
+`mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
+Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
+selftest runs its import+play off the message loop, drains the device-change async cascade
+(`dispatchPendingUpdates`), waits for the stream to actually roll (`blockUntilSyncPointChange`), and
+**bounded-polls** instead of sampling at a blind fixed time — so a just-swapped output device no longer
+reports a false `playing=0 / position=0`. (Root-caused via a source-grounded investigation workflow: it was
+**test-only** fragility — the real app's Play button already flows through the robust path.) The old
+input-negotiation startup balloon (25–77 s on a device change) remains fixed — startup is output-only with a
+lazy record-input open.
+`mode=session`: **result=PASS** — the Session-grid **audibility gate**: a clip created in slot (0,0),
+launched, reaches *playing* with the transport rolling (proves the launcher playback path engages on the
+same device).
 `mode=record`: **result=PASS** — recording is now **verified end-to-end on real hardware**. The
 event-driven harness opens the input lazily, yields to the message loop, then arms + records a real
 take: `inputDeviceCount=8 · trackArmed=1 · recordingStarted=1 · recordedClipCount=1 ·
@@ -198,7 +237,8 @@ src/
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
     ├── detail/DetailView          bottom-drawer audio-clip inspector (name/gain/fades/waveform)
-    └── pianoroll/                 bottom-drawer MIDI editor: PianoRollView (Viewport grid) + MidiNoteComponent
+    ├── pianoroll/                 bottom-drawer MIDI editor: PianoRollView (Viewport grid) + MidiNoteComponent
+    └── session/                   PRIMARY view: clip-launch grid — SessionView + Track/Scene columns + ClipSlot pad + SlotVisualState
 docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-wave writeups)
 tests/  SELFTEST.md
 ```
@@ -310,7 +350,7 @@ tests/  SELFTEST.md
 | 4 — Detail Drawer | clip inspector (name/gain/fades/waveform) ✅; **piano-roll (draw/move/resize/delete, audible via 4OSC) ✅**; automation later | ✅ (audio inspector + MIDI piano-roll) |
 | 5 — Mixer + devices + plugins | Mixer view-switch ✅; channel strips + inserts + master + meters ✅; floating plugin windows ✅; device chain reorder + per-insert bypass ✅ | ✅ done |
 | 6 — Config + delivery | tabbed Preferences (folds in Audio settings); Export/Render | ⏳ |
-| 7 — Power-user + Session | tear-off panels, saved layouts; SessionView when wanted | ⏳ |
+| 7 — Power-user + Session | **SessionView (primary clip-launch grid) ✅**; tear-off panels + saved layouts to do | ✅ (Session grid) |
 
 ### How they interleave (recommended path)
 Phases 0–4 + startup-latency hardening are done: the spine, arrange surface (incl. snap-division
@@ -318,9 +358,11 @@ grid), mixer (incl. insert bypass/reorder + post-fader master meter), plugin hos
 browser, inspector, export (mixdown + stems), and output-only startup with lazy record-input open.
 Practical next sequence — **direction reset 2026-06-30** (see [DIRECTION.md](DIRECTION.md)): the primary
 surface is becoming the **Session clip grid**, so the sequence is reordered around that.
-1. **Session-grid build — the pivot.** A new `SessionView` clip grid as the **primary** `ViewMode`
-   (`Session ∣ Arrange ∣ Mix`, Session default) on Tracktion's `ClipSlot` / `getClipSlotList()` / scenes /
-   `LaunchHandle`. Fully playable with mouse + keyboard. Target shown in the [mockups](../mockups/) (sheet 00).
+1. **Session-grid build — the pivot. ✅ DONE** (`def1193`). `SessionView` is the primary `ViewMode` (Session
+   default) on Tracktion's `ClipSlot` / scenes / `LaunchHandle`; playable with mouse + keyboard, launch
+   audible + bar-quantised; built + adversarially QC'd + fix-re-verified (see the Session-grid section in §2
+   and [devlog/session-design.md](devlog/session-design.md)). **Remaining:** the 16-scene-rows-vs-window
+   layout decision (vertical scroll vs. shorter pads); a manual GUI smoke pass of live mouse interaction.
 2. **Control-surface layer ("one day").** Device-agnostic drivers on Tracktion's `ControlSurface` seam so
    **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state model
    feeds the on-screen grid and the hardware LEDs. The grid works without any hardware (not an MVP gate).

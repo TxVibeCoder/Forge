@@ -13,13 +13,18 @@ scenes of launchable clips) as the *primary* surface, meant to be played from gr
 
 ## Status
 
-Built **arrangement-first** through Phases 0–4 + startup-latency hardening + a **MIDI MVP +
-piano-roll polish** — all shipped, building clean, both headless self-tests **PASS** on Windows.
-That work becomes the building blocks of the scene-based product (clips, instruments, the
-piano-roll, the mixer all live inside slots/scenes). The project is now **pivoting to the
-Session-grid build** (see DIRECTION.md). Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
+The **Session clip-launch grid** — the primary, scene-based surface from DIRECTION.md — is **built,
+QC'd, and verified**: an Ableton-style tracks × scenes grid on Tracktion's `ClipSlot` / `Scene` /
+`LaunchHandle`, playable with mouse + keyboard, with audible bar-quantised launch. It rides on top of
+the arrangement-first foundation (Phases 0–4 + a MIDI MVP + piano-roll), whose clips / instruments /
+piano-roll / mixer now live inside slots and scenes. Building clean; **all four headless self-tests
+PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 
 **What works today:**
+- **Session clip grid (the primary view)** — tracks × 16 scenes of launchable clips; single-click
+  launches, right-click "Edit clip", double-click opens, keyboard arrow/Enter launch; **audible,
+  bar-quantised** launch; a pinned scene-launch column. The shipped clips / 4OSC / piano-roll / mixer
+  ride inside its slots and scenes.
 - **Project** save/load — a real `.tracktionedit` on disk (create / open / save / save-as).
 - **Audio** import (WAV/AIFF/FLAC/OGG) onto tracks; a timeline with **waveform thumbnails**,
   a moving **playhead** (drag to scrub), clip **drag-to-move** + selectable **snap grid**.
@@ -36,11 +41,11 @@ Session-grid build** (see DIRECTION.md). Full roadmap → [`docs/STATUS.md`](doc
 - **Browser** (file tree, double-click to import) and a **clip Inspector** (name/gain/fades/waveform).
 - **Export** — WAV mixdown + per-track **stems**.
 
-**Coming next (per DIRECTION.md):** the on-screen **`SessionView`** clip grid as the primary
-`ViewMode` (Tracktion `ClipSlot` / scenes / `LaunchHandle`); then a device-agnostic
-**control-surface layer** so real grid controllers drive the grid (a "one day" hardware goal —
-the grid is fully playable with mouse + keyboard without it). Plus richer MIDI input
-(note-record into clips, MIDI-learn, MIDI-clock / Ableton Link).
+**Coming next (per DIRECTION.md):** a device-agnostic **control-surface layer** so real grid
+controllers (Launchpad, APC40 mkII) drive the grid — a "one day" hardware goal; the grid is fully
+playable with mouse + keyboard without it, and the on-screen pad model already emits the LED encoding
+a driver would push. Plus richer MIDI input (note-record into clips, MIDI-learn, MIDI-clock / Ableton
+Link), and a decision on the 16-scene-rows-vs-window layout (scroll vs. shorter pads).
 
 A to-scale **UI mockup set** of the envisioned product lives in [`mockups/`](mockups/) (open
 `mockups/preview/forge-ui-storyboard.png`).
@@ -79,7 +84,8 @@ forge/
 │   └── ui/
 │       ├── ForgeLookAndFeel.h  # dark amber theme (all colours via colour IDs)
 │       ├── ControlBar · transport/ · arrange/ · mixer/ · plugins/ · browser/ · detail/
-│       └── pianoroll/          # PianoRollView + MidiNoteComponent + VelocityLane
+│       ├── pianoroll/          # PianoRollView + MidiNoteComponent + VelocityLane
+│       └── session/            # PRIMARY view: SessionView clip grid + Track/Scene columns + ClipSlot pad
 ├── docs/                       # DIRECTION (the brief) · STATUS · ARCHITECTURE · INTERFACE · FEATURE_CATALOG · devlog/
 ├── mockups/                    # to-scale DXF/CAD UI mockups (Session-first) + generator
 └── tests/                      # SELFTEST.md — the --selftest field contract
