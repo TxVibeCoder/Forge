@@ -23,12 +23,16 @@
 
 namespace te = tracktion;
 
+class ProjectSession;   // the aux seam (buses/sends) lives here — see setSession()
+
 //==============================================================================
 namespace MixerLayout
 {
-    constexpr int stripW    = 92;   // channel-strip width (widened for the insert panel + meter)
-    constexpr int masterW   = 96;   // master strip width
-    constexpr int stripGap  = 0;    // strips sit flush; the strip paints its own right hairline
+    constexpr int stripW      = 92;   // channel-strip width (widened for the insert panel + meter)
+    constexpr int masterW     = 96;   // master strip width
+    constexpr int returnW     = 92;   // aux-return strip width (pinned right, before master)
+    constexpr int stripGap    = 0;    // strips sit flush; the strip paints its own right hairline
+    constexpr int auxBusCount = 2;    // "A"/"B" aux buses (README product call: default 2)
 }
 
 //==============================================================================
@@ -43,6 +47,12 @@ public:
         plus the master strip. Starts/stops the meter timer with the binding. */
     void setEdit (te::Edit*);
 
+    /** Binds the aux seam (buses/sends). Call ONCE after construction, before/around setEdit;
+        the ProjectSession outlives individual Edits. When unset (nullptr) the mixer degrades
+        gracefully: no send knobs, no aux-return strips — every structural aux op routes through
+        this seam, so the view makes no raw te:: bus calls. Triggers a rebuild. */
+    void setSession (ProjectSession*);
+
     void resized() override;
     void paint (juce::Graphics&) override;
 
@@ -52,17 +62,21 @@ public:
 private:
     class ChannelStrip;   // track strip — defined in the .cpp
     class MasterStrip;    // master strip — defined in the .cpp
+    class ReturnStrip;    // aux-return strip (placeholder or live) — defined in the .cpp
 
     void rebuild();
     void timerCallback() override;
 
-    te::Edit* edit = nullptr;
+    te::Edit*       edit    = nullptr;
+    ProjectSession* session = nullptr;   // aux seam (buses/sends); null until setSession()
 
     // Track strips live inside a Viewport's content holder so an Edit with many tracks scrolls
-    // horizontally instead of clipping. The master strip is OUTSIDE the viewport, pinned right.
+    // horizontally instead of clipping. The aux-return strips and the master strip are OUTSIDE
+    // the viewport, pinned to the right (returns first, then master).
     juce::Viewport viewport;
     juce::Component stripHolder;
     juce::OwnedArray<ChannelStrip> strips;
+    juce::OwnedArray<ReturnStrip>  returnStrips;   // always MixerLayout::auxBusCount of them
     std::unique_ptr<MasterStrip> master;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MixerView)

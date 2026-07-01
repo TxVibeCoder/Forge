@@ -3,6 +3,7 @@
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
+#include "services/files/ProjectSession.h"   // the aux seam (buses/sends)
 #include "core/Log.h"
 
 using namespace juce;
@@ -18,6 +19,30 @@ namespace
     // Pan travel: hard-left (-1) .. centre (0) .. hard-right (+1).
     constexpr double kMinPan = -1.0;
     constexpr double kMaxPan =  1.0;
+
+    // Aux-send knob travel in dB. Bottom of the knob (kMinSendDb) reads as "no send"; the seam
+    // reports <= kMinSendDb (engine silence) when a track has no send plugin for that bus, so the
+    // knob sits at the bottom until the user dials one in. +6 of headroom up top, matching the fader.
+    constexpr double kMinSendDb = -60.0;
+    constexpr double kMaxSendDb =   6.0;
+
+    /** Applies Forge's shared vertical dB-fader styling (range, readout, colours) to a slider.
+        One source for the strip / master / return faders so their look can't drift apart. The
+        caller sets the text-box style afterwards (its width differs per strip) and wires
+        setValue/onValueChange. */
+    inline void styleDbFader (Slider& f)
+    {
+        f.setSliderStyle (Slider::LinearVertical);
+        f.setRange (kMinDb, kMaxDb, 0.1);
+        f.setNumDecimalPlacesToDisplay (1);
+        f.setTextValueSuffix (" dB");
+        f.setDoubleClickReturnValue (true, 0.0);   // double-click -> unity (0 dB)
+        f.setColour (Slider::thumbColourId,          Colour (ForgeLookAndFeel::accent));
+        f.setColour (Slider::trackColourId,          Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
+        f.setColour (Slider::backgroundColourId,     Colour (ForgeLookAndFeel::raisedBg));
+        f.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
+        f.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+    }
 
     // Meter ballistics / scale.
     constexpr float  kMeterMinDb  = -60.0f;   // bottom of the meter
@@ -480,16 +505,117 @@ private:
 };
 
 //==============================================================================
+/*  SendControls — a compact row of aux-send knobs (one per aux bus) for a single track. Each
+    knob drives the send level (dB) from this track to that bus through the ProjectSession aux
+    seam via the injected getLevel / setLevel callbacks — SendControls itself makes NO engine
+    calls, so it stays inside MixerView's "no raw te::" rule. Turning a knob up for the first
+    time provisions the bus lazily (the seam creates the aux-return track + AuxSendPlugin); the
+    setLevel callback owner (MixerView) then flips the matching return strip from placeholder to
+    live in place — the row's own knob is never destroyed mid-drag.
+
+    Present only on real track strips; MixerView passes null callbacks (and so omits the row)
+    on the aux-return strips and whenever no ProjectSession is bound.                          */
+class SendControls : public Component
+{
+public:
+    SendControls (int trackIndex,
+                  int busCount,
+                  std::function<float (int, int)> getLevel,
+                  std::function<void (int, int, float)> setLevel)
+        : trackIdx (trackIndex),
+          getLevelFn (std::move (getLevel)),
+          setLevelFn (std::move (setLevel))
+    {
+        for (int b = 0; b < busCount; ++b)
+        {
+            const int busIdx = b;
+
+            auto* knob = knobs.add (new Slider());
+            knob->setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
+            knob->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+            knob->setRange (kMinSendDb, kMaxSendDb, 0.1);
+            knob->setDoubleClickReturnValue (true, kMinSendDb);   // double-click -> no send
+            knob->setColour (Slider::thumbColourId,             Colour (ForgeLookAndFeel::accent));
+            knob->setColour (Slider::rotarySliderFillColourId,  Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
+            knob->setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+            knob->setTooltip ("Send to Return " + busLetter (busIdx));
+
+            if (getLevelFn)
+                knob->setValue (jlimit (kMinSendDb, kMaxSendDb, (double) getLevelFn (trackIdx, busIdx)),
+                                dontSendNotification);
+
+            knob->onValueChange = [this, busIdx, knob]
+            {
+                if (setLevelFn)
+                    setLevelFn (trackIdx, busIdx, (float) knob->getValue());
+            };
+            addAndMakeVisible (knob);
+
+            auto* lab = labels.add (new Label());
+            lab->setText (busLetter (busIdx), dontSendNotification);
+            lab->setJustificationType (Justification::centred);
+            lab->setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
+            lab->setInterceptsMouseClicks (false, false);
+            addAndMakeVisible (lab);
+        }
+    }
+
+    /** Fixed height this row wants (a knob + its bus letter). */
+    static constexpr int prefHeight = 46;
+
+    void paint (Graphics& g) override
+    {
+        g.setColour (Colour (ForgeLookAndFeel::shellBg));
+        g.fillRect (getLocalBounds());
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        const int n = knobs.size();
+        if (n == 0)
+            return;
+
+        const int cellW = r.getWidth() / n;
+        constexpr int labelH = 12;
+
+        for (int i = 0; i < n; ++i)
+        {
+            auto cell = r.removeFromLeft (i == n - 1 ? r.getWidth() : cellW);
+            labels[i]->setBounds (cell.removeFromBottom (labelH));
+            knobs[i]->setBounds (cell.reduced (2, 1));
+        }
+    }
+
+private:
+    static juce::String busLetter (int b) { return String::charToString ((juce_wchar) ('A' + b)); }
+
+    int trackIdx = 0;
+    std::function<float (int, int)>        getLevelFn;
+    std::function<void (int, int, float)>  setLevelFn;
+    OwnedArray<Slider> knobs;
+    OwnedArray<Label>  labels;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SendControls)
+};
+
+//==============================================================================
 /*  ChannelStrip — one vertical strip for a single audio track. Owns its own controls and
     pushes value changes straight to the engine. Holds the track by reference; MixerView
     rebuilds the whole OwnedArray whenever the Edit or its track list changes, so a strip
     never outlives its track.
 
-    Layout, top to bottom: colour swatch · name · pan · insert panel · [meter | fader] · M/S. */
+    Layout, top to bottom: colour swatch · name · pan · sends · insert panel · [meter | fader] · M/S.
+    The sends row is present only when the aux seam is bound (MixerView passes live send
+    callbacks); otherwise it is omitted and the strip lays out exactly as before.               */
 class MixerView::ChannelStrip : public Component
 {
 public:
-    ChannelStrip (te::AudioTrack& t, std::function<void()> insertsChangedCb)
+    ChannelStrip (te::AudioTrack& t,
+                  int trackIndex,
+                  std::function<void()> insertsChangedCb,
+                  std::function<float (int, int)> sendGet,
+                  std::function<void (int, int, float)> sendSet)
         : track (t), onInsertsChanged (std::move (insertsChangedCb))
     {
         // --- Name (top) -------------------------------------------------------------------
@@ -512,6 +638,14 @@ public:
         pan.onValueChange = [this] { EngineHelpers::setTrackPan (track, (float) pan.getValue()); };
         addAndMakeVisible (pan);
 
+        // --- Aux sends (only when the aux seam is bound) ----------------------------------
+        if (sendGet && sendSet)
+        {
+            sends = std::make_unique<SendControls> (trackIndex, MixerLayout::auxBusCount,
+                                                    std::move (sendGet), std::move (sendSet));
+            addAndMakeVisible (*sends);
+        }
+
         // --- Insert panel -----------------------------------------------------------------
         insertPanel = std::make_unique<InsertPanel> (track, [this]
         {
@@ -530,17 +664,8 @@ public:
         addAndMakeVisible (meter);
 
         // --- Volume fader (vertical, dB) --------------------------------------------------
-        fader.setSliderStyle (Slider::LinearVertical);
+        styleDbFader (fader);
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::stripW - 8, 16);
-        fader.setRange (kMinDb, kMaxDb, 0.1);
-        fader.setNumDecimalPlacesToDisplay (1);
-        fader.setTextValueSuffix (" dB");
-        fader.setDoubleClickReturnValue (true, 0.0);   // double-click -> unity (0 dB)
-        fader.setColour (Slider::thumbColourId,          Colour (ForgeLookAndFeel::accent));
-        fader.setColour (Slider::trackColourId,          Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-        fader.setColour (Slider::backgroundColourId,     Colour (ForgeLookAndFeel::raisedBg));
-        fader.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
-        fader.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
         fader.setValue (EngineHelpers::getTrackVolumeDb (track), dontSendNotification);
         fader.onValueChange = [this] { EngineHelpers::setTrackVolumeDb (track, (float) fader.getValue()); };
         addAndMakeVisible (fader);
@@ -572,7 +697,8 @@ public:
     {
         const int inserts = insertPanel != nullptr ? insertPanel->getInsertCount() : 0;
         const int insertPanelH = (inserts + 1) * InsertPanel::rowH;   // rows + the "+" button
-        return swatchH + nameH + panH + insertPanelH + faderRegionH + controlsH;
+        const int sendsH = sends != nullptr ? SendControls::prefHeight : 0;
+        return swatchH + nameH + panH + sendsH + insertPanelH + faderRegionH + controlsH;
     }
 
     PeakMeter& getMeter() { return meter; }
@@ -600,6 +726,9 @@ public:
 
         nameLabel.setBounds (r.removeFromTop (nameH).reduced (3, 1));
         pan.setBounds      (r.removeFromTop (panH).reduced (8, 2));
+
+        if (sends != nullptr)
+            sends->setBounds (r.removeFromTop (SendControls::prefHeight).reduced (4, 2));
 
         if (insertPanel != nullptr)
         {
@@ -635,6 +764,7 @@ private:
     Label nameLabel;
     Slider fader, pan;
     TextButton muteButton { "M" }, soloButton { "S" };
+    std::unique_ptr<SendControls> sends;   // aux-send knobs; null when no aux seam is bound
     std::unique_ptr<InsertPanel> insertPanel;
     PeakMeter meter;
 
@@ -672,17 +802,8 @@ public:
         // (pollMeter) — nothing to provision here, and no mutation of the Edit.
         addAndMakeVisible (meter);
 
-        fader.setSliderStyle (Slider::LinearVertical);
+        styleDbFader (fader);
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::masterW - 8, 16);
-        fader.setRange (kMinDb, kMaxDb, 0.1);
-        fader.setNumDecimalPlacesToDisplay (1);
-        fader.setTextValueSuffix (" dB");
-        fader.setDoubleClickReturnValue (true, 0.0);
-        fader.setColour (Slider::thumbColourId,          Colour (ForgeLookAndFeel::accent));
-        fader.setColour (Slider::trackColourId,          Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-        fader.setColour (Slider::backgroundColourId,     Colour (ForgeLookAndFeel::raisedBg));
-        fader.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
-        fader.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
 
         if (auto mv = edit.getMasterVolumePlugin())
             fader.setValue (mv->getVolumeDb(), dontSendNotification);
@@ -754,6 +875,210 @@ private:
 };
 
 //==============================================================================
+/*  ReturnStrip — one aux-return ("bus") strip, pinned to the right of the track row (before the
+    master). A bus is backed by a plain te::AudioTrack that hosts an AuxReturnPlugin(busIndex);
+    a track that sends to the bus carries an AuxSendPlugin(busIndex). ReturnStrip owns NO engine
+    state — it re-queries the ProjectSession aux seam every refresh and makes only display
+    reads / vol-pan writes through EngineHelpers (never a raw te:: bus/plugin call).
+
+    Two states, toggled by whether the seam has provisioned the bus:
+      - placeholder (no return track yet): just the bus name + an "Enable" button that calls
+        session->ensureAuxBus(busIndex). Rendering a placeholder means the returns are always
+        visible (discoverable + screenshot-friendly) WITHOUT mutating a clean Edit on open.
+      - live (return track exists): name · insert panel (drop a reverb/delay here) ·
+        [meter | return fader] · M/S — i.e. a real FX-return channel.
+
+    The placeholder→live flip happens IN PLACE (refresh()), so turning up a send knob on some
+    other strip never destroys the strip being dragged.                                          */
+class MixerView::ReturnStrip : public Component
+{
+public:
+    ReturnStrip (ProjectSession* s, int busIdx)
+        : session (s), busIndex (busIdx)
+    {
+        nameLabel.setJustificationType (Justification::centred);
+        nameLabel.setColour (Label::textColourId, Colour (ForgeLookAndFeel::accent));
+        nameLabel.setInterceptsMouseClicks (false, false);
+        nameLabel.setMinimumHorizontalScale (0.7f);
+        addAndMakeVisible (nameLabel);
+
+        enableButton.setButtonText ("+ Enable");
+        enableButton.setColour (TextButton::buttonColourId,  Colour (ForgeLookAndFeel::raisedBg));
+        enableButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::accent));
+        enableButton.setTooltip ("Create this aux-return bus");
+        enableButton.onClick = [this]
+        {
+            if (session != nullptr)
+            {
+                session->ensureAuxBus (busIndex);   // structural; seam logs on failure
+                refresh();
+            }
+        };
+        addAndMakeVisible (enableButton);
+
+        styleDbFader (fader);
+        fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::returnW - 8, 16);
+        fader.onValueChange = [this]
+        {
+            if (returnTrack != nullptr)
+                EngineHelpers::setTrackVolumeDb (*returnTrack, (float) fader.getValue());
+        };
+        addAndMakeVisible (fader);
+
+        addAndMakeVisible (meter);
+
+        auto configureToggle = [this] (TextButton& b)
+        {
+            b.setClickingTogglesState (true);
+            b.setColour (TextButton::buttonColourId,   Colour (ForgeLookAndFeel::raisedBg));
+            b.setColour (TextButton::buttonOnColourId, Colour (ForgeLookAndFeel::accent));
+            b.setColour (TextButton::textColourOffId,  Colour (ForgeLookAndFeel::textSec));
+            b.setColour (TextButton::textColourOnId,   Colour (ForgeLookAndFeel::onAccent));
+            addAndMakeVisible (b);
+        };
+        configureToggle (muteButton);
+        configureToggle (soloButton);
+        muteButton.onClick = [this] { if (returnTrack != nullptr) returnTrack->setMute (muteButton.getToggleState()); };
+        soloButton.onClick = [this] { if (returnTrack != nullptr) returnTrack->setSolo (soloButton.getToggleState()); };
+
+        refresh();
+    }
+
+    /** Re-reads the seam and rebuilds this strip's children for the current bus state. Cheap;
+        called on construction, on the "Enable" click, and (async) when a send first provisions
+        the bus. Message-thread only. */
+    void refresh()
+    {
+        returnTrack = (session != nullptr) ? session->getAuxReturnTrack (busIndex) : nullptr;
+        const bool live = returnTrack != nullptr;
+
+        juce::String nm = (session != nullptr) ? session->getAuxBusName (busIndex) : juce::String();
+        if (nm.isEmpty())
+            nm = defaultBusName();
+        nameLabel.setText (nm, dontSendNotification);
+
+        enableButton.setVisible (! live);
+        fader.setVisible (live);
+        muteButton.setVisible (live);
+        soloButton.setVisible (live);
+
+        if (live)
+        {
+            if (auto* lm = returnTrack->getLevelMeterPlugin())
+                meter.attach (&lm->measurer);
+            else
+                meter.detach();
+
+            fader.setValue (EngineHelpers::getTrackVolumeDb (*returnTrack), dontSendNotification);
+            muteButton.setToggleState (returnTrack->isMuted (false), dontSendNotification);
+            soloButton.setToggleState (returnTrack->isSolo  (false), dontSendNotification);
+
+            insertPanel = std::make_unique<InsertPanel> (*returnTrack, [this]
+            {
+                if (insertPanel != nullptr)
+                    insertPanel->rebuildRows();
+                resized();
+            });
+            addAndMakeVisible (*insertPanel);
+        }
+        else
+        {
+            meter.detach();
+            insertPanel.reset();
+        }
+
+        resized();
+        repaint();
+    }
+
+    /** Async self-refresh — used by MixerView after a send lazily provisions this bus, so the
+        flip to "live" never happens inside the dragged send knob's own callback. */
+    void refreshAsync()
+    {
+        Component::SafePointer<ReturnStrip> safeThis (this);
+        MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->refresh(); });
+    }
+
+    bool isLive() const noexcept { return returnTrack != nullptr; }
+
+    /** Pull a meter sample (no-op until the bus is live). Called on the MixerView timer — never logs. */
+    void pollMeter (float dt) { if (returnTrack != nullptr) meter.poll (dt); }
+
+    void paint (Graphics& g) override
+    {
+        auto bounds = getLocalBounds();
+
+        g.setColour (Colour (ForgeLookAndFeel::panelBg));
+        g.fillRect (bounds);
+
+        // Accent band on top; dimmed while the bus is only a placeholder.
+        g.setColour (Colour (ForgeLookAndFeel::accent).withAlpha (isLive() ? 1.0f : 0.4f));
+        g.fillRect (bounds.removeFromTop (swatchH));
+
+        // Left-edge hairline separates the returns from the scrolling track row / each other.
+        g.setColour (Colour (ForgeLookAndFeel::hairline));
+        g.fillRect (0, 0, 1, getHeight());
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        r.removeFromTop (swatchH);
+
+        nameLabel.setBounds (r.removeFromTop (nameH).reduced (3, 1));
+
+        if (! isLive())
+        {
+            // Placeholder: a single "Enable" button near the top; the rest stays empty.
+            enableButton.setBounds (r.removeFromTop (30).reduced (8, 2));
+            return;
+        }
+
+        auto controls = r.removeFromBottom (controlsH).reduced (6, 4);
+        const int bw = jmax (16, (controls.getWidth() - 4) / 2);
+        muteButton.setBounds (controls.removeFromLeft (bw));
+        controls.removeFromLeft (4);
+        soloButton.setBounds (controls.removeFromLeft (bw));
+
+        if (insertPanel != nullptr)
+        {
+            const int inserts = insertPanel->getInsertCount();
+            const int panelH = (inserts + 1) * InsertPanel::rowH;
+            insertPanel->setBounds (r.removeFromTop (panelH).reduced (4, 0));
+        }
+
+        auto faderRegion = r.reduced (4, 4);
+        meter.setBounds (faderRegion.removeFromLeft (meterW));
+        faderRegion.removeFromLeft (3);
+        fader.setBounds (faderRegion);
+    }
+
+private:
+    juce::String defaultBusName() const
+    {
+        return "RETURN " + String::charToString ((juce_wchar) ('A' + busIndex));
+    }
+
+    static constexpr int swatchH   = 5;
+    static constexpr int nameH     = 20;
+    static constexpr int controlsH = 26;
+    static constexpr int meterW    = 8;
+
+    ProjectSession* session = nullptr;
+    int busIndex = 0;
+    te::AudioTrack* returnTrack = nullptr;   // re-resolved each refresh; never cached across one
+
+    Label nameLabel;
+    TextButton enableButton;
+    Slider fader;
+    TextButton muteButton { "M" }, soloButton { "S" };
+    PeakMeter meter;
+    std::unique_ptr<InsertPanel> insertPanel;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReturnStrip)
+};
+
+//==============================================================================
 MixerView::MixerView()
 {
     viewport.setViewedComponent (&stripHolder, false);   // we own stripHolder ourselves
@@ -777,17 +1102,68 @@ void MixerView::setEdit (te::Edit* e)
         stopTimer();
 }
 
+void MixerView::setSession (ProjectSession* s)
+{
+    session = s;
+    rebuild();   // send knobs + aux-return strips depend on the seam
+}
+
 void MixerView::rebuild()
 {
     strips.clear();
+    returnStrips.clear();
     master.reset();
 
     if (edit != nullptr)
     {
-        for (auto* track : te::getAudioTracks (*edit))
+        // Aux-send seam hooks handed to each track strip's SendControls. Null when no session is
+        // bound, so ChannelStrip then omits the sends row entirely. All bus/plugin structure is
+        // created inside the seam — MixerView makes no raw te:: bus calls.
+        std::function<float (int, int)> sendGet;
+        std::function<void (int, int, float)> sendSet;
+
+        if (session != nullptr)
         {
-            auto* strip = strips.add (new ChannelStrip (*track, [this] { resized(); }));
+            sendGet = [this] (int trackIdx, int busIdx) -> float
+            {
+                return session->getTrackSendLevel (trackIdx, busIdx);
+            };
+
+            sendSet = [this] (int trackIdx, int busIdx, float db)
+            {
+                const bool wasLive = session->getAuxReturnTrack (busIdx) != nullptr;
+                session->setTrackSendLevel (trackIdx, busIdx, db);   // provisions bus + send lazily
+
+                // If this send just created the bus, flip its placeholder return strip to live —
+                // in place (async), so the send knob being dragged is never torn down under it.
+                if (! wasLive
+                    && session->getAuxReturnTrack (busIdx) != nullptr
+                    && busIdx >= 0 && busIdx < returnStrips.size())
+                    returnStrips[busIdx]->refreshAsync();
+            };
+        }
+
+        // One channel strip per audio track, EXCLUDING aux-return tracks (they render as
+        // ReturnStrips). trackIndex is the absolute index into te::getAudioTracks — the same
+        // index the seam's send methods expect.
+        auto tracks = te::getAudioTracks (*edit);
+        for (int i = 0; i < tracks.size(); ++i)
+        {
+            auto* track = tracks[i];
+            if (track == nullptr)
+                continue;
+            if (session != nullptr && session->isAuxReturnTrack (*track))
+                continue;
+
+            auto* strip = strips.add (new ChannelStrip (*track, i, [this] { resized(); }, sendGet, sendSet));
             stripHolder.addAndMakeVisible (strip);
+        }
+
+        // Always render the aux-return strips (placeholder until a bus is provisioned).
+        for (int b = 0; b < MixerLayout::auxBusCount; ++b)
+        {
+            auto* r = returnStrips.add (new ReturnStrip (session, b));
+            addAndMakeVisible (*r);
         }
 
         master = std::make_unique<MasterStrip> (*edit);
@@ -805,6 +1181,9 @@ void MixerView::timerCallback()
     for (auto* strip : strips)
         strip->getMeter().poll (dt);
 
+    for (auto* r : returnStrips)
+        r->pollMeter (dt);
+
     if (master != nullptr)
         master->pollMeter (dt);
 }
@@ -813,9 +1192,15 @@ void MixerView::resized()
 {
     auto area = getLocalBounds();
 
-    // Master strip pinned to the right (outside the scrolling viewport), if present.
+    // Master strip pinned to the far right (outside the scrolling viewport), if present.
     if (master != nullptr)
         master->setBounds (area.removeFromRight (MixerLayout::masterW));
+
+    // Aux-return strips pinned to the right, just left of the master. Peel from the right so
+    // bus B lands right of bus A (final left→right: tracks … | A | B | MASTER). Full-height,
+    // like the master — a handful of returns don't need to scroll.
+    for (int b = returnStrips.size() - 1; b >= 0; --b)
+        returnStrips[b]->setBounds (area.removeFromRight (MixerLayout::returnW));
 
     viewport.setBounds (area);
 
