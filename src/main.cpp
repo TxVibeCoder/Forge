@@ -36,7 +36,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
@@ -558,6 +558,14 @@ public:
             // docs/devlog/midi-record-design.md.
             MessageManager::callAsync ([this] { beginSelfTestMidi(); });
         }
+        else if (mode == SelfTest::midilearn)
+        {
+            // Headless MIDI-learn gate (P2): prove the seam binds a CC to a plugin param over Tracktion's
+            // native store with NO focused Edit. A virtual device can't route CC to the parser, so inject
+            // via the seam directly. Event-driven yield discipline: arm a learn → yield → inject a CC →
+            // yield (the native bind runs on an AsyncUpdater) → assert the mapping landed. See beginSelfTestMidiLearn().
+            MessageManager::callAsync ([this] { beginSelfTestMidiLearn(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -697,6 +705,16 @@ private:
     int  miPreExistingNotes = -1;                       // notes in slot (0,0) BEFORE capture (must be 0)
     bool miClipCreated     = false;
     int  miCapturedNotes   = 0;
+
+    // --selftest-midilearn state machine (event-driven; the native bind runs on an AsyncUpdater, so the
+    // CC-inject and the verify must be separate message-loop turns — same yield discipline as --selftest-midi).
+    int  mlPhase = 0;                                   // 1 = learn armed, 2 = CC injected
+    te::AutomatableParameter* mlParam = nullptr;        // the learn target (owned by its plugin; edit-lifetime)
+    juce::String mlParamName;                           // the target's display name (diagnostic)
+    bool mlWasMappedBefore = true;                      // was the param mapped BEFORE the gate? (must be false)
+    bool mlLearnArmed      = false;                     // did beginLearn arm the native learn?
+    bool mlIsMappedAfter   = false;                     // did the CC bind the param?
+    int  mlCc = -1, mlCh = -1;                          // the CC number / channel the seam reports as mapped
 
     ControlBar controlBar;
     TimelineView timelineView;
@@ -1627,6 +1645,100 @@ private:
     }
 
     //==============================================================================
+    // --selftest-midilearn (P2, docs/devlog/wave-01-features.md): prove the MidiLearn seam binds a CC to a
+    // plugin parameter over Tracktion's native ParameterControlMappings with NO focused Edit (Forge uses the
+    // default UIBehaviour). A virtual MIDI device does NOT route CC to the engine's parser, so the CC is
+    // injected through the seam's own handleIncomingController — the same entry a Forge MIDI-input listener
+    // would use. The native bind lands on an AsyncUpdater, so arm / inject / verify are separate loop turns.
+
+    // Phase 0: ensure a born-audible plugin (4OSC) on track 0, pick its first automatable param, arm a learn,
+    // then YIELD so the native learn-arm settles before the CC is injected.
+    void beginSelfTestMidiLearn()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishSelfTestMidiLearn(); return; }
+
+        FORGE_LOG_INFO ("selftest-midilearn: adding an instrument, arming a learn on its first param");
+
+        auto tracks = te::getAudioTracks (*edit);
+        auto* track = tracks.isEmpty() ? nullptr : tracks[0];
+        if (track == nullptr) { FORGE_LOG_ERROR ("selftest-midilearn: no audio track"); finishSelfTestMidiLearn(); return; }
+
+        PluginHost::ensureDefaultInstrument (*track);   // 4OSC at chain head — has automatable params
+
+        // First automatable parameter of the first insert (the 4OSC; volume/meter are excluded).
+        for (auto* plugin : PluginHost::getTrackInserts (*track))
+        {
+            if (plugin == nullptr)
+                continue;
+
+            auto params = PluginHost::getAutomatableParameters (*plugin);
+            if (! params.isEmpty()) { mlParam = params.getReference (0).param; break; }
+        }
+
+        if (mlParam == nullptr) { FORGE_LOG_ERROR ("selftest-midilearn: no automatable parameter found"); finishSelfTestMidiLearn(); return; }
+
+        mlParamName       = mlParam->getParameterName();
+        mlWasMappedBefore = MidiLearn::isMapped (*mlParam);   // must be false at the start
+
+        midiLearn.setActiveEdit (edit);
+        midiLearn.beginLearn (*mlParam);                       // arm the native learn (no focused Edit needed)
+        mlLearnArmed = midiLearn.isLearning();
+
+        mlPhase = 1;
+        startTimer (300);   // YIELD before injecting the CC
+    }
+
+    // Phase 1: inject a controller change through the seam (cc 74, ch 1). The bind schedules on the engine's
+    // AsyncUpdater, so YIELD again before verifying.
+    void midiLearnSelftestInjectCC()
+    {
+        FORGE_LOG_INFO ("selftest-midilearn: injecting CC 74 / ch 1 via handleIncomingController");
+        midiLearn.handleIncomingController (/*cc*/ 74, /*value0to1*/ 0.5f, /*channel*/ 1);
+        mlPhase = 2;
+        startTimer (300);   // YIELD: let the AsyncUpdater dispatch the bind
+    }
+
+    // Phase 2: verify the parameter is now mapped to CC 74 / ch 1, report, quit.
+    void finishSelfTestMidiLearn()
+    {
+        if (mlParam != nullptr)
+        {
+            mlIsMappedAfter = MidiLearn::isMapped (*mlParam);
+            MidiLearn::getMappedCC (*mlParam, mlCc, mlCh);
+        }
+
+        // PASS proves the seam completes a learn with no focused Edit: the param was unmapped, beginLearn
+        // armed the native learn, a single injected CC bound it, and the store reports exactly that CC/channel.
+        const bool pass = mlLearnArmed
+                          && ! mlWasMappedBefore
+                          && mlIsMappedAfter
+                          && mlCc == 74
+                          && mlCh == 1;
+
+        String report;
+        report << "mode=midilearn" << newLine
+               << "param="           << (mlParamName.isEmpty() ? String ("(none)") : mlParamName) << newLine
+               << "wasMappedBefore="  << (mlWasMappedBefore ? 1 : 0) << newLine
+               << "learnArmed="       << (mlLearnArmed ? 1 : 0) << newLine
+               << "isMappedAfter="    << (mlIsMappedAfter ? 1 : 0) << newLine
+               << "mappedCc="         << mlCc << newLine
+               << "mappedChannel="    << mlCh << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write midilearn selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("MIDI-learn selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -1845,6 +1957,14 @@ private:
             return;
         }
 
+        if (mode == SelfTest::midilearn)
+        {
+            stopTimer();
+            if (mlPhase == 1)  midiLearnSelftestInjectCC();   // learn armed → inject CC, yield for the async bind
+            else               finishSelfTestMidiLearn();     // phase 2 → verify + report + quit
+            return;
+        }
+
         auto* t = session.getTransport();
         const bool playing = t != nullptr && t->isPlaying();
 
@@ -1948,23 +2068,25 @@ public:
     void initialise (const String& commandLine) override
     {
         // Logging comes up FIRST, before anything else can fail, so startup diagnostics are captured.
-        const auto modeDesc = commandLine.contains ("--screenshot")       ? "screenshot"
-                            : commandLine.contains ("--selftest-record")  ? "selftest-record"
-                            : commandLine.contains ("--selftest-session") ? "selftest-session"
-                            : commandLine.contains ("--selftest-midi")    ? "selftest-midi"
-                            : commandLine.contains ("--selftest")         ? "selftest-playback"
-                                                                          : "normal";
+        const auto modeDesc = commandLine.contains ("--screenshot")          ? "screenshot"
+                            : commandLine.contains ("--selftest-record")     ? "selftest-record"
+                            : commandLine.contains ("--selftest-session")    ? "selftest-session"
+                            : commandLine.contains ("--selftest-midilearn")  ? "selftest-midilearn"  // before -midi (substring)
+                            : commandLine.contains ("--selftest-midi")       ? "selftest-midi"
+                            : commandLine.contains ("--selftest")            ? "selftest-playback"
+                                                                             : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
         FORGE_LOG_INFO ("Forge starting");
 
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        const auto mode = commandLine.contains ("--screenshot")       ? SelfTest::screenshot
-                        : commandLine.contains ("--selftest-record")  ? SelfTest::record
-                        : commandLine.contains ("--selftest-session") ? SelfTest::session
-                        : commandLine.contains ("--selftest-midi")    ? SelfTest::midi
-                        : commandLine.contains ("--selftest")         ? SelfTest::playback
-                                                                      : SelfTest::none;
+        const auto mode = commandLine.contains ("--screenshot")          ? SelfTest::screenshot
+                        : commandLine.contains ("--selftest-record")     ? SelfTest::record
+                        : commandLine.contains ("--selftest-session")    ? SelfTest::session
+                        : commandLine.contains ("--selftest-midilearn")  ? SelfTest::midilearn   // before -midi (substring)
+                        : commandLine.contains ("--selftest-midi")       ? SelfTest::midi
+                        : commandLine.contains ("--selftest")            ? SelfTest::playback
+                                                                         : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
 
         // Post-open device snapshot (Option A). The engine member opened its OUTPUT device during

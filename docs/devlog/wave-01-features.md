@@ -113,9 +113,6 @@ new-seam correctness concerns held up under scrutiny.
   engine's own `MidiControllerParser` routes CC) or a Forge MIDI-input listener. Both touch engine construction /
   device management; deferred to keep the wave file-disjoint. Until then Ctrl+L **arms** a learn but completion
   from hardware awaits this follow-up.
-- **`--selftest-midilearn` gate.** The seam has no headless runtime proof yet (a virtual MIDI device can't carry
-  a CC to the store, so the gate must inject via the seam directly). Adding it means a new selftest mode +
-  report; ticketed rather than expanding the consolidation.
 - **Audio-slot-record edge-fade.** Only MIDI slot-record exists today; `ClipFades` is a no-op on MIDI, so there
   is no active audio-record commit site to fade. Wire the call in `commitSlotRecord` when audio slot-recording
   lands.
@@ -125,8 +122,14 @@ new-seam correctness concerns held up under scrutiny.
 ## Verification
 
 - **Clean MSVC Debug build, 0 warnings**; single integration target links `Forge.exe`.
-- **All four selftests PASS** — `--selftest`, `--selftest-record`, `--selftest-session`, `--selftest-midi` — no
-  regression vs. baseline `6100fb9`.
+- **All five selftests PASS** — `--selftest`, `--selftest-record`, `--selftest-session`, `--selftest-midi`, and
+  **`--selftest-midilearn`** — no regression vs. baseline `6100fb9`.
+- **`--selftest-midilearn`** (P2's first headless runtime proof — added post-consolidation, on request): ensures a
+  born-audible plugin (4OSC) on track 0, picks its first automatable parameter (`Tune 1`), **arms a learn**,
+  **injects a CC (74, ch 1) through the seam** (a virtual device can't route CC to the engine's parser, so the
+  gate uses `handleIncomingController` directly), yields for the native `AsyncUpdater` bind, then asserts the
+  parameter is now mapped to **exactly** CC 74 / channel 1 (`wasMappedBefore=0`, `learnArmed=1`, `isMappedAfter=1`)
+  → **PASS**. This is the empirical proof that the seam completes a learn with **no focused Edit**.
 - **`--screenshot`** renders all five views. Confirmed visually: the mixer shows the **A/B send knobs** per strip
   + **Return A / Return B** strips (placeholder "＋ Enable") before MASTER; the arrange control bar shows the
   **Click** toggle + **count-in** selector; the Session grid is unregressed.

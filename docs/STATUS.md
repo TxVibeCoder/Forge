@@ -267,8 +267,8 @@ contract-first seams and committed their own scoped commits; the orchestrator (P
   `RecordController` change.
 - **P2 MIDI-learn** (`1ef4f37`): a thin `MidiLearn` driver over Tracktion's native `ParameterControlMappings`
   (persists on the Edit) + `PluginHost::getAutomatableParameters`. Wired minimal — a **Ctrl+L** track▸plugin▸param
-  picker arms a learn. **Deferred:** `ForgeUIBehaviour` / a MIDI-input listener so real controller CCs reach the
-  seam; a `--selftest-midilearn` gate.
+  picker arms a learn, proven headlessly by the new **`--selftest-midilearn`** gate. **Deferred:**
+  `ForgeUIBehaviour` / a MIDI-input listener so real controller CCs reach the seam.
 - **P3 buses / sends** (`c5062a3`): per-track **A/B aux-send knobs** + two **aux-return strips** in the mixer, over
   a new `ProjectSession` aux seam (`ensureAuxBus`/`setTrackSendLevel`/…). An aux bus = a plain `AudioTrack` +
   `AuxReturnPlugin`, appended at the **END** so absolute track indices stay stable; `onTracksChanged` rebuilds the
@@ -286,7 +286,8 @@ contract-first seams and committed their own scoped commits; the orchestrator (P
   distinct lifetime blockers, both fixed in `swapProject` before the Edit is torn down: an **async-export UAF**
   (Edit freed under the render worker → `activeRender.reset()`) and a **MIDI-learn dangling `learningEdit`** (→
   `midiLearn.cancelLearn()`). Aux-index-stability + markers-alignment dimensions came back clean.
-- **Verified:** clean MSVC Debug build (0 warnings); **all four selftests PASS**; `--screenshot` renders all views
+- **Verified:** clean MSVC Debug build (0 warnings); **all five selftests PASS** (`--selftest`,
+  `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`); `--screenshot` renders all views
   (mixer shows the A/B sends + Return A/B strips; arrange shows Click + count-in). Live-gesture smoke pass still
   maintainer-only.
 

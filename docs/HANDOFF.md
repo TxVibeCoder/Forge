@@ -8,8 +8,8 @@ Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (publ
 **`main`**. **Wave 01 shipped this session: six file-disjoint feature CLIs (P1–P6) each landed a scoped commit,
 and the orchestrator (P7) consolidation is COMMITTED as `17d335c` (this docs commit sits on top) and PUSHED to
 `origin/main`; working tree clean, sanitized before the push. Baseline before the wave was `6100fb9`.** Last
-build **clean** (MSVC Debug, 0 warnings) · **all four selftests PASS** — `--selftest`, `--selftest-record`,
-`--selftest-session`, `--selftest-midi` — on the final binary; `--screenshot` renders. Six features shipped:
+build **clean** (MSVC Debug, 0 warnings) · **all five selftests PASS** — `--selftest`, `--selftest-record`,
+`--selftest-session`, `--selftest-midi`, `--selftest-midilearn` — on the final binary; `--screenshot` renders. Six features shipped:
 **metronome + count-in, MIDI-learn, buses/sends (aux A/B), async export + progress, markers, anti-click
 edge-fade** — full record in [devlog/wave-01-features.md](devlog/wave-01-features.md).
 
@@ -45,8 +45,9 @@ sanitized before the push). Full record: [devlog/wave-01-features.md](devlog/wav
   selector. Count-in is native (`transport.record()` pre-rolls it) — no `RecordController` change.
 - **P2 MIDI-learn** (`1ef4f37`): `engine/MidiLearn` — a thin driver over Tracktion's native
   `ParameterControlMappings` (persists on the Edit) + `PluginHost::getAutomatableParameters`. Wired **minimal**:
-  a **Ctrl+L** track▸plugin▸param picker arms a learn. **Deferred** (ticketed): a focused-edit
-  `ForgeUIBehaviour` / MIDI-input listener so real controller CCs reach the seam; a `--selftest-midilearn` gate.
+  a **Ctrl+L** track▸plugin▸param picker arms a learn, proven headlessly by the new **`--selftest-midilearn`**
+  gate. **Deferred** (ticketed): a focused-edit `ForgeUIBehaviour` / MIDI-input listener so real controller CCs
+  reach the seam.
 - **P3 buses / sends** (`c5062a3`): per-track **A/B aux-send knobs** + two **aux-return strips** in the mixer,
   over a new `ProjectSession` aux seam. An aux bus = a plain `AudioTrack` + `AuxReturnPlugin`, **appended at the
   END** so absolute track indices stay stable; `onTracksChanged` rebuilds the grid/lanes on add.
@@ -83,7 +84,8 @@ sanitized before the push). Full record: [devlog/wave-01-features.md](devlog/wav
 ## What exists today (the building blocks)
 
 Phases 0–4 + startup hardening + MIDI MVP/W6 + **W7 MIDI record into slots** + the **Session clip-launch grid**
-(with vertical scroll) + the **logging subsystem**, all shipped, building clean, all four selftests PASS:
+(with vertical scroll) + the **logging subsystem** + the **Wave-01 feature seams**, all shipped, building clean,
+all five selftests PASS:
 
 - **Session grid (PRIMARY view)** — tracks × 16 scenes of launchable clips on `ClipSlot` / `Scene` /
   `LaunchHandle`; single-click launches (instant), right-click "Edit clip" (launch-free), double-click opens;
@@ -127,14 +129,13 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    toggle + count-in selector; **markers** (left-click the marker bar to add, drag to move, double-click to
    rename, click to jump); mixer **aux sends** (drag an A/B send knob, click "＋ Enable" on a return); the
    **async export** progress/cancel dialog (Export a longer edit); and **Ctrl+L** MIDI-learn (pick a plugin
-   param). `--screenshot` covers rendering and the four selftests cover the headless paths, but a human should
+   param). `--screenshot` covers rendering and the five selftests cover the headless paths, but a human should
    click these once.
 2. **Deferred Wave-01 follow-ups (ticketed).** (a) **MIDI-learn hardware routing** — install a focused-edit
    `ForgeUIBehaviour` (or a Forge MIDI-input listener) so real controller CCs reach
-   `MidiLearn::handleIncomingController`; today Ctrl+L **arms** a learn but completion from hardware awaits this.
-   (b) A **`--selftest-midilearn`** headless gate (inject a CC via the seam directly — a virtual device can't
-   carry a CC to the store). (c) **Audio-slot-record edge-fade** — wire `ClipFades` into a future audio
-   slot-record commit (today's slot record is MIDI-only, where the fade is a no-op). See
+   `MidiLearn::handleIncomingController`; today Ctrl+L **arms** a learn (proven by `--selftest-midilearn`) but
+   completion from real hardware awaits this. (b) **Audio-slot-record edge-fade** — wire `ClipFades` into a
+   future audio slot-record commit (today's slot record is MIDI-only, where the fade is a no-op). See
    [devlog/wave-01-features.md](devlog/wave-01-features.md) "Deferred follow-ups".
 3. **Remaining MIDI input roles** — **MIDI-clock / Ableton Link** sync. (MIDI-learn param mapping shipped as
    Wave-01 P2, minus the deferred hardware-routing follow-up above.)
@@ -159,6 +160,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-record  # headless recording check    → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-session # Session-grid audibility gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midi    # MIDI-record-into-slot gate  → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midilearn # MIDI-learn CC→param bind gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # render each view → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```

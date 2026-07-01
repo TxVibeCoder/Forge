@@ -63,7 +63,8 @@ conflict, surface it.
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
 - **Selftest floor** (must pass after any change): `--selftest` (playback), `--selftest-record`,
-  `--selftest-session`, `--selftest-midi`; `--screenshot` renders each view to `%TEMP%\forge_shot_*.png`.
+  `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`; `--screenshot` renders each view to
+  `%TEMP%\forge_shot_*.png`.
   Reports → `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
 - **In a multi-CLI wave, CLIs DO NOT build.** One build dir + a device lock means concurrent builds collide.
   Each CLI edits + self-reviews for compile-safety; the **orchestrator** owns `main.cpp` / `CMakeLists.txt` / the
