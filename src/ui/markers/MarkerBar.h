@@ -10,7 +10,7 @@
                                    jumps, as in most DAWs; the redundant second-click jump is suppressed)
       - right-click             -> context menu (Add here / Rename / Delete)
 
-    The bar makes NO raw te:: calls and caches NO te::MarkerClip*/Clip* — it holds only value rows
+    The bar makes NO raw te:: calls and caches NO te::MarkerClip* / Clip* — it holds only value rows
     {id, time, name} pulled from a getter the shell wires to ProjectSession::getMarkers(), and it
     drives every mutation through value-typed std::function callbacks the shell wires to the proposed
     ProjectSession markers seam (addMarker / removeMarker / moveMarker / renameMarker /

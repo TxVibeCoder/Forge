@@ -1,6 +1,7 @@
 #include "services/files/ProjectSession.h"
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
+#include "engine/ClipFades.h"
 #include "core/Log.h"
 
 ProjectSession::ProjectSession (te::Engine& e)
@@ -95,7 +96,10 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te:
     auto clip = EngineHelpers::loadAudioFileAsClip (*edit, f, 0, start);
 
     if (clip != nullptr)
+    {
+        ClipFades::applyDefaultEdgeFades (*clip);   // anti-click edge fade (P6)
         edit->markAsChanged();
+    }
     else
         FORGE_LOG_ERROR ("Failed to import audio file " + f.getFullPathName() + " — format may be unsupported");
 
@@ -535,7 +539,10 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
                                     pos, te::DeleteExistingClips::yes);
 
     if (clip != nullptr)
+    {
+        ClipFades::applyDefaultEdgeFades (*clip);   // anti-click edge fade (P6)
         edit->markAsChanged();
+    }
     else
         FORGE_LOG_ERROR ("Failed to insert audio clip into slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex));
 
@@ -753,4 +760,296 @@ bool ProjectSession::isSlotRecording (int trackIndex, int sceneIndex) const
 
     auto* slot = getClipSlot (trackIndex, sceneIndex);
     return slot != nullptr && recorderIsSlotArmed (*edit, *slot);
+}
+
+//==============================================================================
+// Aux buses / sends seam (P3). Message-thread only.
+//
+// A bus is a plain te::AudioTrack hosting an AuxReturnPlugin; a per-track AuxSendPlugin with a
+// matching busNumber feeds it. Return tracks are APPENDED at the END of the track list so absolute
+// track indices (used by MixerView sends + the Session grid) never shift. See the header.
+
+te::AudioTrack* ProjectSession::getAuxReturnTrack (int busIdx) const
+{
+    if (edit == nullptr)
+        return nullptr;
+
+    for (auto* track : te::getAudioTracks (*edit))
+        if (track != nullptr)
+            for (auto* p : track->pluginList)
+                if (auto* ar = dynamic_cast<te::AuxReturnPlugin*> (p))
+                    if (ar->busNumber == busIdx)
+                        return track;
+
+    return nullptr;
+}
+
+bool ProjectSession::isAuxReturnTrack (const te::AudioTrack& track) const
+{
+    // pluginList iteration is non-const; the const_cast reads the chain without mutating it.
+    for (auto* p : const_cast<te::AudioTrack&> (track).pluginList)
+        if (dynamic_cast<te::AuxReturnPlugin*> (p) != nullptr)
+            return true;
+
+    return false;
+}
+
+juce::String ProjectSession::getAuxBusName (int busIdx) const
+{
+    return edit != nullptr ? edit->getAuxBusName (busIdx) : juce::String();
+}
+
+te::AudioTrack* ProjectSession::ensureAuxBus (int busIdx)
+{
+    if (edit == nullptr || busIdx < 0)
+    {
+        FORGE_LOG_ERROR ("ensureAuxBus: no edit or bad bus index " + juce::String (busIdx));
+        return nullptr;
+    }
+
+    // Grow-only: reuse the existing return for this bus if one is already provisioned.
+    if (auto* existing = getAuxReturnTrack (busIdx))
+        return existing;
+
+    // Append a NEW audio track at the END of the list (LOAD-BEARING — keeps every existing absolute
+    // track index stable, so mixer sends + the Session grid keep addressing tracks correctly). Default
+    // plugins give it the vol/pan + level-meter tail the return fader + meter read.
+    auto returnTrack = edit->insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (*edit), nullptr);
+
+    if (returnTrack == nullptr)
+    {
+        FORGE_LOG_ERROR ("ensureAuxBus: failed to insert aux-return track for bus " + juce::String (busIdx));
+        return nullptr;
+    }
+
+    // Put an AuxReturnPlugin(busNumber=busIdx) at the HEAD of the return track's chain.
+    auto returnPlugin = edit->getPluginCache().createNewPlugin (te::AuxReturnPlugin::xmlTypeName, {});
+
+    if (auto* ar = dynamic_cast<te::AuxReturnPlugin*> (returnPlugin.get()))
+    {
+        ar->busNumber = busIdx;
+        returnTrack->pluginList.insertPlugin (returnPlugin, 0, nullptr);
+    }
+    else
+    {
+        FORGE_LOG_ERROR ("ensureAuxBus: failed to create AuxReturnPlugin for bus " + juce::String (busIdx));
+    }
+
+    // Friendly name (Return A / Return B / …) on both the aux-bus map (what the mixer reads) and the
+    // track (what Arrange/Session show).
+    const juce::String label = "Return " + juce::String::charToString ((juce::juce_wchar) ('A' + busIdx));
+    edit->setAuxBusName (busIdx, label);
+    returnTrack->setName (label);
+
+    edit->markAsChanged();
+
+    // A track was actually added → let the shell rebuild track-ref-caching views + persist.
+    if (onTracksChanged)
+        onTracksChanged();
+
+    return returnTrack.get();
+}
+
+void ProjectSession::setTrackSendLevel (int trackIndex, int busIdx, float gainDb)
+{
+    if (edit == nullptr || trackIndex < 0)
+    {
+        FORGE_LOG_ERROR ("setTrackSendLevel: no edit or bad track index " + juce::String (trackIndex));
+        return;
+    }
+
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= tracks.size())
+    {
+        FORGE_LOG_ERROR ("setTrackSendLevel: track index out of range " + juce::String (trackIndex));
+        return;
+    }
+
+    // Make sure the destination bus exists (grow-only; may append a return track at the end). Resolve
+    // the sending track AFTER, so `tracks` isn't stale if ensureAuxBus appended (it appends at the end,
+    // so trackIndex stays valid, but re-fetch to be safe).
+    if (ensureAuxBus (busIdx) == nullptr)
+    {
+        FORGE_LOG_ERROR ("setTrackSendLevel: could not ensure aux bus " + juce::String (busIdx));
+        return;
+    }
+
+    tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= tracks.size())
+        return;
+
+    auto* track = tracks[trackIndex];
+
+    // Find an existing send for this bus, else create + insert one post-fader.
+    te::AuxSendPlugin* send = nullptr;
+
+    for (auto* p : track->pluginList)
+        if (auto* as = dynamic_cast<te::AuxSendPlugin*> (p))
+            if (as->busNumber == busIdx)
+            {
+                send = as;
+                break;
+            }
+
+    if (send == nullptr)
+    {
+        auto sendPlugin = edit->getPluginCache().createNewPlugin (te::AuxSendPlugin::create());
+        send = dynamic_cast<te::AuxSendPlugin*> (sendPlugin.get());
+
+        if (send == nullptr)
+        {
+            FORGE_LOG_ERROR ("setTrackSendLevel: failed to create AuxSendPlugin for bus " + juce::String (busIdx));
+            return;
+        }
+
+        send->busNumber = busIdx;
+
+        // Post-fader: insert just AFTER the VolumeAndPanPlugin (before the meter tail). Fall back to
+        // appending (-1) if there's no volume plugin.
+        int insertIndex = -1;
+
+        if (auto* volume = track->getVolumePlugin())
+        {
+            const auto idx = track->pluginList.indexOf (volume);
+            if (idx >= 0)
+                insertIndex = idx + 1;   // AFTER the volume/pan → post-fader send
+        }
+
+        track->pluginList.insertPlugin (sendPlugin, insertIndex, nullptr);
+    }
+
+    send->setGainDb (juce::jlimit (-100.0f, 6.0f, gainDb));
+    edit->markAsChanged();
+}
+
+float ProjectSession::getTrackSendLevel (int trackIndex, int busIdx) const
+{
+    if (edit == nullptr || trackIndex < 0)
+        return -100.0f;
+
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= tracks.size())
+        return -100.0f;
+
+    for (auto* p : tracks[trackIndex]->pluginList)
+        if (auto* as = dynamic_cast<te::AuxSendPlugin*> (p))
+            if (as->busNumber == busIdx)
+                return as->getGainDb();
+
+    return -100.0f;   // no send for this bus == silence
+}
+
+//==============================================================================
+// Markers / cue points seam (P5). Message-thread only. Stable key = EditItemID (const, edit-wide
+// unique), NOT the reassignable marker NUMBER. Pure reads never log.
+
+te::MarkerClip* ProjectSession::findMarkerById (te::EditItemID id) const
+{
+    if (edit == nullptr)
+        return nullptr;
+
+    for (auto* clip : edit->getMarkerManager().getMarkers())   // temp array; the track owns the clips
+        if (clip != nullptr && clip->itemID == id)
+            return clip;
+
+    return nullptr;
+}
+
+te::EditItemID ProjectSession::addMarker (te::TimePosition time, const juce::String& name)
+{
+    if (edit == nullptr)
+        return {};
+
+    edit->ensureMarkerTrack();   // idempotent; guards createMarker's null path
+
+    auto clip = edit->getMarkerManager().createMarker (-1, time, {}, nullptr);   // -1 → auto unique number
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("addMarker: createMarker failed (no marker track)");
+        return {};
+    }
+
+    if (name.isNotEmpty())
+        clip->setName (name);   // else keep the engine default "Marker N"
+
+    edit->markAsChanged();
+    return clip->itemID;
+}
+
+bool ProjectSession::removeMarker (te::EditItemID id)
+{
+    if (edit == nullptr)
+        return false;
+
+    auto* clip = findMarkerById (id);
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("removeMarker: id not found");
+        return false;
+    }
+
+    clip->removeFromParent();   // MarkerManager has no delete method
+    edit->markAsChanged();
+    return true;
+}
+
+bool ProjectSession::moveMarker (te::EditItemID id, te::TimePosition newTime)
+{
+    if (edit == nullptr)
+        return false;
+
+    auto* clip = findMarkerById (id);
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("moveMarker: id not found");
+        return false;
+    }
+
+    clip->setStart (newTime, /*preserveSync*/ false, /*keepLength*/ true);   // engine clamps to [0, maxEnd]
+    edit->markAsChanged();
+    return true;
+}
+
+bool ProjectSession::renameMarker (te::EditItemID id, const juce::String& newName)
+{
+    if (edit == nullptr)
+        return false;
+
+    auto* clip = findMarkerById (id);
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("renameMarker: id not found");
+        return false;
+    }
+
+    clip->setName (newName);
+    edit->markAsChanged();
+    return true;
+}
+
+std::vector<ProjectSession::Marker> ProjectSession::getMarkers() const
+{
+    std::vector<Marker> out;
+
+    if (edit == nullptr)
+        return out;
+
+    for (auto* clip : edit->getMarkerManager().getMarkers())
+        if (clip != nullptr)
+            out.push_back ({ clip->itemID, clip->getPosition().getStart(), clip->getName() });
+
+    return out;   // already time-sorted by getMarkers()
+}
+
+void ProjectSession::jumpTransportTo (te::TimePosition time)
+{
+    if (auto* t = getTransport())
+        t->setPosition (time);
 }

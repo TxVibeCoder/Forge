@@ -18,13 +18,17 @@
 #include "engine/RecordController.h"
 #include "engine/PluginScanner.h"
 #include "engine/PluginHost.h"
+#include "engine/Metronome.h"
+#include "engine/MidiLearn.h"
 #include "ui/arrange/ArrangeView.h"
+#include "ui/markers/MarkerBar.h"
 #include "ui/mixer/MixerView.h"
 #include "ui/plugins/PluginWindow.h"
 #include "ui/browser/BrowserView.h"
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
 #include "ui/session/SessionView.h"
+#include "ui/export/ExportProgress.h"
 #include "ui/ControlBar.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "core/Log.h"
@@ -187,6 +191,7 @@ public:
 
         addAndMakeVisible (controlBar);
         addAndMakeVisible (arrangeView);
+        addAndMakeVisible (markerBar);
         addAndMakeVisible (mixerView);
         addAndMakeVisible (sessionView);
         addAndMakeVisible (browserPanel);
@@ -195,6 +200,7 @@ public:
         addAndMakeVisible (browserResizer);
         addAndMakeVisible (drawerResizer);
         addAndMakeVisible (statusLabel);
+        addChildComponent (exportProgress);   // hidden until an async export starts (P4)
 
         setupResizers();
 
@@ -471,8 +477,53 @@ public:
 
         sessionView.isSlotRecording = [this] (int t, int s) { return session.isSlotRecording (t, s); };
 
+        // ---- P3: buses / sends (aux returns) ----
+        // Bind the aux seam ONCE (session outlives individual Edits); the mixer degrades gracefully
+        // (no send knobs / return strips) until this is set. When ensureAuxBus appends a return track,
+        // rebuild the views that cache track refs (grid columns / arrange lanes) so none derefs a stale
+        // column, and persist. Appending at the END keeps every existing absolute track index stable.
+        mixerView.setSession (&session);
+
+        session.onTracksChanged = [this]
+        {
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project after aux-bus add");
+
+            if (sessionViewBinds() && session.getNumAudioTracks() != sessionView.getNumColumns())
+                sessionView.rebuild();
+            arrangeView.rebuild();
+        };
+
+        // ---- P5: markers / cue points ----
+        // The MarkerBar caches only value rows; it drives every mutation through these seams (no raw
+        // te:: calls). Wired once; the lambdas read the edit live via `session`.
+        markerBar.getMarkers = [this]
+        {
+            std::vector<MarkerBar::Marker> rows;
+            for (auto& m : session.getMarkers())
+                rows.push_back ({ m.id, m.time, m.name });
+            return rows;
+        };
+        markerBar.onAddMarker     = [this] (te::TimePosition t, const juce::String& n) { session.addMarker (t, n); };
+        markerBar.onRemoveMarker  = [this] (te::EditItemID id)                          { session.removeMarker (id); };
+        markerBar.onMoveMarker    = [this] (te::EditItemID id, te::TimePosition t)      { session.moveMarker (id, t); };
+        markerBar.onRenameMarker  = [this] (te::EditItemID id, const juce::String& n)   { session.renameMarker (id, n); };
+        markerBar.onJumpTransport = [this] (te::TimePosition t)                         { session.jumpTransportTo (t); };
+        markerBar.onEditMutated   = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project after marker edit"); };
+
+        // ---- P2: MIDI-learn ----
+        // A confirmation when a learn binds. (Real-hardware CC routing into handleIncomingController is a
+        // deferred follow-up — ForgeUIBehaviour / a MIDI-input listener; see docs. The seam + UI trigger
+        // are wired now so the mapping model is in place.)
+        midiLearn.onLearnComplete = [this] (te::AutomatableParameter& p)
+        {
+            setStatusMessage ("MIDI Learn: bound " + p.getParameterName());
+        };
+
         arrangeView.setEdit (session.getEdit());
         mixerView.setEdit (session.getEdit());
+        midiLearn.setActiveEdit (session.getEdit());   // live-apply target (P2)
+        markerBar.refresh();                            // pull markers for the freshly-opened edit (P5)
 
         // The Session grid is the default view. Keep it OFF the headless playback/record selftest path so
         // the throwaway selftest edit stays pristine (no ensureScenes slot scaffolding perturbs the gates).
@@ -581,14 +632,40 @@ public:
         arrangeView.setVisible (viewMode == ViewMode::Arrange);
         mixerView.setVisible (viewMode == ViewMode::Mixer);
         sessionView.setBounds (centre);
-        arrangeView.setBounds (centre);
         mixerView.setBounds (centre);
+
+        // Markers strip (P5) rides above the arrange view, sharing its TimelineView. Carve it off the top
+        // of the arrange area ONLY in Arrange mode; Session/Mixer get the full centre. Full-width bar with
+        // headerInset = headerW so its time axis lines up pixel-for-pixel with the ruler below it.
+        markerBar.setVisible (viewMode == ViewMode::Arrange);
+        if (viewMode == ViewMode::Arrange)
+        {
+            auto arrangeArea = centre;
+            auto strip = arrangeArea.removeFromTop (MarkerBar::preferredHeight);
+            markerBar.setHeaderInset (ArrangeLayout::headerW);
+            markerBar.setBounds (strip);
+            arrangeView.setBounds (arrangeArea);
+        }
+        else
+        {
+            arrangeView.setBounds (centre);
+        }
+
+        // Async-export progress panel (P4): a centred transient overlay, only while an export runs.
+        if (exportProgress.isVisible())
+        {
+            const int w = jmin (420, getWidth() - 40);
+            const int h = 96;
+            exportProgress.setBounds ((getWidth() - w) / 2, (getHeight() - h) / 2, w, h);
+            exportProgress.toFront (false);
+        }
     }
 
 private:
     te::Engine& engine;
     ProjectSession session;
     RecordController recorder;
+    MidiLearn midiLearn { engine };   // CC → plugin-param mapping over Tracktion's native store (P2)
     SelfTest mode = SelfTest::none;
     bool editLoaded = false;
 
@@ -624,6 +701,7 @@ private:
     ControlBar controlBar;
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
+    MarkerBar markerBar { timelineView };   // markers strip over the arrange timeline (shares the axis, P5)
     MixerView mixerView;
     SessionView sessionView { session };   // primary view: tracks×scenes clip-launch grid (Sheet 00)
     BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
@@ -636,6 +714,16 @@ private:
     // (Import uses EngineHelpers::browseForAudioFile, which manages its own shared chooser.)
     std::unique_ptr<FileChooser> openChooser, saveChooser, exportChooser, stemsChooser;
     TooltipWindow tooltipWindow;
+
+    // Async export (P4): a transient centred progress panel + the in-flight render handle it drives.
+    // The handle is held for the lifetime of the export and destroyed on the message thread from inside
+    // onComplete (AsyncRender::finishAll moves onComplete out before invoking, so self-destruction is safe).
+    ExportProgress exportProgress;
+    std::unique_ptr<Exporter::AsyncRender> activeRender;
+
+    // MIDI-learn (P2): menu ids from showMidiLearnMenu() index into this; each holds a live param pointer
+    // (valid only while its plugin lives — transient, rebuilt on every menu open).
+    juce::Array<PluginHost::LearnableParam> midiLearnTargets;
 
     ViewMode viewMode = ViewMode::Session;
     BottomMode bottomMode = BottomMode::Detail;   // Detail (audio) vs PianoRoll (MIDI) in the drawer
@@ -667,6 +755,17 @@ private:
         controlBar.onViewMode      = [this] (int m) { setViewMode (m == 0 ? ViewMode::Session
                                                                   : m == 1 ? ViewMode::Arrange
                                                                            : ViewMode::Mixer); };
+
+        // Metronome + count-in (P1): route the TransportBar click toggle + count-in selector through the
+        // Metronome engine seam so the view makes no raw te:: click calls. Each lambda reads the edit LIVE
+        // (per-invocation) so it tracks project swaps, and null-guards. Count-in is native — te's
+        // transport.record() pre-rolls getNumCountInBeats() itself, so no RecordController change. Wired
+        // here (before controlBar.setEdit below), so the first syncMetronomeControls() reflects engine truth.
+        auto& tb = controlBar.getTransportBar();
+        tb.onMetronomeToggled    = [this] (bool on)  { if (auto* e = session.getEdit()) Metronome::enableClick (*e, on); };
+        tb.queryMetronomeEnabled = [this]            { auto* e = session.getEdit(); return e != nullptr && Metronome::isClickEnabled (*e); };
+        tb.onCountInBarsChanged  = [this] (int bars) { if (auto* e = session.getEdit()) Metronome::setCountInBars (*e, bars); };
+        tb.queryCountInBars      = [this]            { auto* e = session.getEdit(); return e != nullptr ? Metronome::getCountInBars (*e) : 0; };
     }
 
     void setupStatusStrip()
@@ -731,6 +830,7 @@ private:
             if (letter == 'O') { if (controlBar.onOpen)   controlBar.onOpen();   return true; }
             if (letter == 'N') { if (controlBar.onNew)    controlBar.onNew();    return true; }
             if (letter == 'I') { if (controlBar.onImport) controlBar.onImport(); return true; }
+            if (letter == 'L') { showMidiLearnMenu();                            return true; }   // MIDI-learn picker (P2)
 
             return false;   // unrecognised Ctrl combo: let it propagate
         }
@@ -852,16 +952,18 @@ private:
                                         if (edit == nullptr)
                                             return;
 
-                                        self->setStatusMessage ("Exporting " + f.getFileName() + "...");
-
+                                        // Async render off the message thread with a progress panel (P4).
                                         String err;
-                                        const bool ok = Exporter::renderEditToWav (*edit, f, err);
+                                        auto render = Exporter::renderEditToWavAsync (*edit, f, err);
 
-                                        if (! ok)
+                                        if (render == nullptr)
+                                        {
                                             FORGE_LOG_ERROR ("Export failed: " + err);
+                                            self->setStatusMessage ("Export failed: " + err);
+                                            return;
+                                        }
 
-                                        self->setStatusMessage (ok ? "Exported " + f.getFileName()
-                                                                   : "Export failed: " + err);
+                                        self->beginAsyncExport (std::move (render), "Exporting " + f.getFileName());
                                     });
     }
 
@@ -890,18 +992,140 @@ private:
                                        if (edit == nullptr)
                                            return;
 
-                                       self->setStatusMessage ("Exporting stems to " + dir.getFileName() + "...");
-
+                                       // Async per-stem render off the message thread with progress (P4).
                                        String err;
-                                       const bool ok = Exporter::renderStems (*edit, dir, err);
+                                       auto render = Exporter::renderStemsAsync (*edit, dir, err);
 
-                                       if (! ok)
+                                       if (render == nullptr)
+                                       {
                                            FORGE_LOG_ERROR ("Stem export failed: " + err);
+                                           self->setStatusMessage ("Stem export failed: " + err);
+                                           return;
+                                       }
 
-                                       self->setStatusMessage (ok ? (err.isEmpty() ? "Exported stems to " + dir.getFileName()
-                                                                                    : "Exported stems (some failed): " + err)
-                                                                  : "Stem export failed: " + err);
+                                       self->beginAsyncExport (std::move (render), "Exporting stems to " + dir.getFileName());
                                    });
+    }
+
+    // Takes ownership of a running AsyncRender handle (its factory already called begin()), wires the
+    // progress/complete/cancel callbacks, and shows the transient progress panel. Wiring here is safe:
+    // we are on the message thread and don't yield, so no deferred callAsync / 25Hz timer callback from
+    // begin() can fire before the callbacks are in place. onComplete destroys the handle (message-thread).
+    void beginAsyncExport (std::unique_ptr<Exporter::AsyncRender> render, const juce::String& caption)
+    {
+        if (render == nullptr)
+            return;
+
+        activeRender = std::move (render);   // supersede any finished-but-not-cleared handle
+
+        exportProgress.setCaption (caption);
+        exportProgress.setProgress (0.0f);
+
+        Component::SafePointer<MainComponent> safeThis (this);
+
+        exportProgress.onCancel = [safeThis]
+        {
+            if (auto* self = safeThis.getComponent())
+                if (self->activeRender != nullptr)
+                    self->activeRender->cancel();
+        };
+
+        activeRender->onProgress = [safeThis] (float p)
+        {
+            if (auto* self = safeThis.getComponent())
+                self->exportProgress.setProgress (p);
+        };
+
+        activeRender->onComplete = [safeThis, caption] (bool ok, juce::String error)
+        {
+            auto* self = safeThis.getComponent();
+            if (self == nullptr)
+                return;
+
+            if (! ok && error.isNotEmpty())
+                FORGE_LOG_ERROR ("Export failed: " + error);
+
+            self->setStatusMessage (ok ? (error.isEmpty() ? caption + " — done"
+                                                           : caption + " — done (some stems failed): " + error)
+                                       : "Export failed: " + error);
+            self->exportProgress.setVisible (false);
+            self->activeRender.reset();   // destroy the finished handle on the message thread
+        };
+
+        exportProgress.setVisible (true);
+        resized();                     // position the centred overlay
+        exportProgress.toFront (false);
+    }
+
+    // MIDI-learn (P2): a track ▸ plugin ▸ parameter picker. Choosing a parameter arms a learn on it; the
+    // next controller delivered to MidiLearn::handleIncomingController binds the CC. (Hardware CC routing
+    // into that entry point is a deferred follow-up — see docs; the mapping model + this trigger are wired.)
+    void showMidiLearnMenu()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr)
+            return;
+
+        midiLearnTargets.clearQuick();
+        PopupMenu menu;
+        int id = 1;
+
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            if (track == nullptr)
+                continue;
+
+            PopupMenu trackMenu;
+
+            for (auto* plugin : PluginHost::getTrackInserts (*track))
+            {
+                if (plugin == nullptr)
+                    continue;
+
+                PopupMenu pluginMenu;
+
+                for (auto& lp : PluginHost::getAutomatableParameters (*plugin))
+                {
+                    if (lp.param == nullptr)
+                        continue;
+
+                    midiLearnTargets.add (lp);
+                    pluginMenu.addItem (id++, lp.name);
+                }
+
+                if (pluginMenu.getNumItems() > 0)
+                    trackMenu.addSubMenu (plugin->getName(), pluginMenu);
+            }
+
+            if (trackMenu.getNumItems() > 0)
+                menu.addSubMenu (track->getName(), trackMenu);
+        }
+
+        if (midiLearnTargets.isEmpty())
+        {
+            setStatusMessage ("MIDI Learn: no automatable plugin parameters — add a plugin first");
+            return;
+        }
+
+        Component::SafePointer<MainComponent> safeThis (this);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
+                            [safeThis] (int result)
+                            {
+                                auto* self = safeThis.getComponent();
+                                if (self == nullptr || result <= 0)
+                                    return;
+
+                                const int idx = result - 1;
+                                if (idx < 0 || idx >= self->midiLearnTargets.size())
+                                    return;
+
+                                if (auto* param = self->midiLearnTargets.getReference (idx).param)
+                                {
+                                    self->midiLearn.beginLearn (*param);
+                                    self->setStatusMessage ("MIDI Learn armed: " + param->getParameterName()
+                                                            + " — move a controller to bind");
+                                }
+                            });
     }
 
     void importTestToneAndPlay()
@@ -1508,12 +1732,23 @@ private:
     void swapProject (std::function<void()> doSwap)
     {
         PluginWindow::closeAll();    // plugin editors belong to the outgoing Edit
+
+        // Abort any in-flight async export BEFORE the Edit is torn down (QC blocker, P4). ~AsyncRender
+        // joins the render worker (stopThread) and runs its engine teardown (turnOffAllPlugins(edit),
+        // ScopedRenderStatus dtor) against the Edit, so it must complete while the Edit is still ALIVE —
+        // otherwise the worker keeps rendering a graph built from freed tracks/clips (cross-thread UAF).
+        // reset() is a no-op when no export is running.
+        activeRender.reset();
+        exportProgress.setVisible (false);
+
         detailView.setClip (nullptr);
         pianoRoll.setMidiClip (nullptr);   // drop any MIDI clip held from the outgoing Edit
         bottomMode = BottomMode::Detail;
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
         mixerView.setEdit (nullptr);
+        midiLearn.cancelLearn();             // abandon any in-flight learn while its Edit is still alive (QC blocker, P2)
+        midiLearn.setActiveEdit (nullptr);   // drop the live-apply target before the Edit is destroyed (P2)
 
         // Drop any MIDI record-arm before the outgoing Edit is torn down (stop the transport first —
         // removeTarget fails while recording). The Edit owns the input-device targets, so this is
@@ -1538,6 +1773,8 @@ private:
         controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
         mixerView.setEdit (session.getEdit());
+        midiLearn.setActiveEdit (session.getEdit());   // live-apply target follows the open edit (P2)
+        markerBar.refresh();                            // reflect the new edit's markers (P5)
         if (sessionViewBinds())
             sessionView.setEdit (session.getEdit());
         repaint();

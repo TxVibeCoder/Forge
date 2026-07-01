@@ -158,6 +158,77 @@ public:
         recording pad. Never logs (poll path). */
     bool isSlotRecording (int trackIndex, int sceneIndex) const;
 
+    //==============================================================================
+    // Aux buses / sends seam (mixer buses/sends — P3). Message-thread only.
+    //
+    // An aux bus is modelled the Tracktion way: a plain te::AudioTrack hosting an AuxReturnPlugin
+    // (there is no separate "bus track" type). A per-track AuxSendPlugin with a matching busNumber
+    // feeds it. These seams are the ONLY path MixerView uses to touch bus/send structure — the view
+    // makes no raw te:: bus calls. busIdx is 0-based (0="A", 1="B"); trackIndex is the ABSOLUTE index
+    // into te::getAudioTracks(*edit) (the same index MixerView + the Session grid address tracks by).
+
+    /** Ensures aux bus `busIdx` exists, appending a new aux-return AudioTrack at the END of the track
+        list (an AuxReturnPlugin at its chain head) and seeding a friendly name. Grow-only / idempotent.
+        LOAD-BEARING: the return is appended AFTER every existing track so absolute track indices stay
+        stable (mixer sends + Session-grid slot addressing depend on it). On a real add it fires
+        onTracksChanged so views that cache track refs rebuild + the project persists. Returns the
+        return track, or nullptr (no edit / creation failed — logs on failure). */
+    te::AudioTrack* ensureAuxBus (int busIdx);
+
+    /** The aux-return AudioTrack backing `busIdx` (hosts an AuxReturnPlugin with that busNumber), or
+        nullptr if not provisioned / no edit. Const, non-mutating. */
+    te::AudioTrack* getAuxReturnTrack (int busIdx) const;
+
+    /** True if `track` hosts an AuxReturnPlugin (so the mixer renders it as a return, not a strip). */
+    bool isAuxReturnTrack (const te::AudioTrack& track) const;
+
+    /** Display name for `busIdx`: edit.getAuxBusName(busIdx) (may be ""). Const. */
+    juce::String getAuxBusName (int busIdx) const;
+
+    /** Sets the post-fader send level (dB) from track `trackIndex` to bus `busIdx`, ensuring the bus
+        exists (ensureAuxBus) then find-or-creating an AuxSendPlugin(busNumber=busIdx) on the track and
+        clamping to [-100, +6] dB. No-op + log on failure. */
+    void setTrackSendLevel (int trackIndex, int busIdx, float gainDb);
+
+    /** Current send level (dB) from `trackIndex` to `busIdx`, or a silence value (<= -100) if the
+        track has no send for that bus. Const. */
+    float getTrackSendLevel (int trackIndex, int busIdx) const;
+
+    /** Fired (message thread) when a seam changes the TRACK LIST — currently only ensureAuxBus, which
+        appends an aux-return AudioTrack. The shell wires this to rebuild views that cache track refs
+        (SessionView columns / ArrangeView lanes) so a stale column never derefs a track, and to persist.
+        Fires only when a track was actually added (grow-only). */
+    std::function<void()> onTracksChanged;
+
+    //==============================================================================
+    // Markers / cue points seam (P5). Message-thread only.
+    //
+    // A marker is a te::MarkerClip on the Edit's marker track. The stable key is te::EditItemID
+    // (EditItem::itemID — const, edit-wide-unique), NOT the marker NUMBER (getMarkerID(), which the
+    // engine reassigns on duplicate-resolution). Callers cache only value rows keyed on EditItemID.
+
+    struct Marker { te::EditItemID id; te::TimePosition time; juce::String name; };
+
+    /** Adds a marker at `time` (auto-assigned unique number; `name` overrides the default "Marker N"
+        when non-empty). Returns its stable EditItemID, or {} on failure (no edit / no marker track). */
+    te::EditItemID       addMarker    (te::TimePosition time, const juce::String& name);
+
+    /** Removes the marker with stable id `id`. Returns false if no edit / id not found. */
+    bool                 removeMarker (te::EditItemID id);
+
+    /** Moves marker `id` to `newTime` (engine clamps to [0, maxEditEnd]). False if no edit / not found. */
+    bool                 moveMarker   (te::EditItemID id, te::TimePosition newTime);
+
+    /** Renames marker `id`. False if no edit / not found. */
+    bool                 renameMarker (te::EditItemID id, const juce::String& newName);
+
+    /** All markers as value rows {id, time, name}, time-sorted (as getMarkers() returns them). Pure
+        read — allocates engine-side each call, so NEVER call from a poll/paint. */
+    std::vector<Marker>  getMarkers   () const;
+
+    /** Immediately locates the transport to `time` (marker jump). No-op if no transport. */
+    void                 jumpTransportTo (te::TimePosition time);
+
     te::Edit*             getEdit() const      { return edit.get(); }
     te::TransportControl* getTransport() const;
     juce::File            getEditFile() const  { return editFile; }
@@ -181,6 +252,10 @@ private:
     // commitSlotRecord / recordDisarmSlot. Tracks which cell beginSlotRecord may roll for.
     int activeRecordTrack = -1;
     int activeRecordScene = -1;
+
+    // Markers: linear-scan getMarkers() for the clip whose itemID matches (getMarkerByID matches on
+    // the reassignable NUMBER, not the stable itemID). The raw ptr is safe — the marker track owns it.
+    te::MarkerClip* findMarkerById (te::EditItemID id) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProjectSession)
 };

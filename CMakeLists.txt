@@ -33,10 +33,14 @@ target_sources(Forge PRIVATE
     src/services/files/ProjectSession.cpp
     src/services/export/Exporter.cpp
     src/engine/RecordController.cpp
+    src/engine/Metronome.cpp
+    src/engine/MidiLearn.cpp
+    src/engine/ClipFades.cpp
     src/engine/PluginHost.cpp
     src/engine/PluginScanner.cpp
     src/ui/transport/TransportBar.cpp
     src/ui/arrange/ArrangeView.cpp
+    src/ui/markers/MarkerBar.cpp
     src/ui/pianoroll/PianoRollView.cpp
     src/ui/pianoroll/MidiNoteComponent.cpp
     src/ui/pianoroll/VelocityLane.cpp
@@ -46,6 +50,7 @@ target_sources(Forge PRIVATE
     src/ui/session/TrackColumnComponent.cpp
     src/ui/session/SessionView.cpp
     src/ui/plugins/PluginWindow.cpp
+    src/ui/export/ExportProgress.cpp
     src/ui/browser/BrowserView.cpp
     src/ui/detail/DetailView.cpp
     src/ui/ControlBar.cpp)
