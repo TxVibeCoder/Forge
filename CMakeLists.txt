@@ -38,6 +38,9 @@ target_sources(Forge PRIVATE
     src/engine/ClipFades.cpp
     src/engine/PluginHost.cpp
     src/engine/PluginScanner.cpp
+    src/engine/ForgeUIBehaviour.cpp
+    src/engine/LaunchpadDriver.cpp
+    src/engine/dsp/LoudnessAnalyzer.cpp
     src/ui/transport/TransportBar.cpp
     src/ui/arrange/ArrangeView.cpp
     src/ui/markers/MarkerBar.cpp

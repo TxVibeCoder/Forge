@@ -20,6 +20,10 @@
 #include "engine/PluginHost.h"
 #include "engine/Metronome.h"
 #include "engine/MidiLearn.h"
+#include "engine/ForgeUIBehaviour.h"
+#include "engine/LaunchpadDriver.h"
+#include "engine/ControlSurfaceHost.h"
+#include "engine/dsp/LoudnessAnalyzer.h"
 #include "ui/arrange/ArrangeView.h"
 #include "ui/markers/MarkerBar.h"
 #include "ui/mixer/MixerView.h"
@@ -36,7 +40,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
@@ -185,6 +189,13 @@ public:
         // false editLoaded is NOT a failure. The real failure is having no edit at all afterward.
         if (session.getEdit() == nullptr)
             FORGE_LOG_ERROR ("Failed to open or create project file: " + projectFile.getFullPathName());
+
+        // Wire the engine's focused-Edit UIBehaviour to this session so real hardware CCs route to the
+        // currently-open Edit's parameter mappings (ForgeUIBehaviour). getEdit() is re-queried on every
+        // access, so a project swap needs no re-wiring. Cleared in ~MainComponent BEFORE the Engine
+        // (which owns the behaviour) is destroyed. The static_cast is safe: the Engine was constructed
+        // with a ForgeUIBehaviour as its UIBehaviour.
+        static_cast<ForgeUIBehaviour&> (engine.getUIBehaviour()).setSession (&session);
 
         setupControlBar();
         setupStatusStrip();
@@ -566,6 +577,19 @@ public:
             // yield (the native bind runs on an AsyncUpdater) → assert the mapping landed. See beginSelfTestMidiLearn().
             MessageManager::callAsync ([this] { beginSelfTestMidiLearn(); });
         }
+        else if (mode == SelfTest::midiinput)
+        {
+            // Headless HARDWARE-path gate: prove a CC arriving THROUGH a virtual device routes via the
+            // engine's parser + the ForgeUIBehaviour focused-Edit to the mapped param (the live path a
+            // real knob drives). Distinct from --selftest-midilearn, which injects into the seam directly.
+            MessageManager::callAsync ([this] { beginSelfTestMidiInput(); });
+        }
+        else if (mode == SelfTest::controlsurface)
+        {
+            // Headless control-surface gate: a virtual pad-press launches slot (0,0) and one LED poll
+            // emits the expected note-on — proving the Forge-native Launchpad driver end-to-end, no hardware.
+            MessageManager::callAsync ([this] { beginControlSurfaceSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -580,11 +604,23 @@ public:
             MessageManager::callAsync ([this] { importTestToneAndPlay(); playbackPollTicks = 0; startTimerHz (10); });
         }
         else
+        {
+            // Interactive mode: bring up the grid control surface. It stays fully inert (no timer, no
+            // MIDI traffic) when no controller is present — the norm until real hardware is connected.
+            controlSurface = std::make_unique<ControlSurfaceHost> (session,
+                                                                   std::make_unique<LaunchpadDriver>(),
+                                                                   /*openNow=*/ true);
             startTimerHz (5);
+        }
     }
 
     ~MainComponent() override
     {
+        // Clear the engine-owned ForgeUIBehaviour's session pointer and stop the control surface FIRST:
+        // the Engine outlives us, so a late CC callback or LED poll must never touch a dying ProjectSession.
+        static_cast<ForgeUIBehaviour&> (engine.getUIBehaviour()).setSession (nullptr);
+        controlSurface.reset();
+
         PluginWindow::closeAll();   // close any floating plugin editors before the Edit tears down
 
         if (auto* t = session.getTransport())
@@ -716,6 +752,19 @@ private:
     bool mlIsMappedAfter   = false;                     // did the CC bind the param?
     int  mlCc = -1, mlCh = -1;                          // the CC number / channel the seam reports as mapped
 
+    // --selftest-midiinput state: prove the ForgeUIBehaviour focused-Edit wiring (the necessary condition
+    // for a real hardware CC to reach the mappings) + a CC->param bind. A VirtualMidiInputDevice has no
+    // controllerParser, so the physical-CC end-to-end is a real-hardware smoke item, not a headless one.
+    int  miiPhase = 0;                                  // 1 = verify (after the seam bind's async yield)
+    te::AutomatableParameter* miiParam = nullptr;       // the CC-mapped target (plugin-owned, edit-lifetime)
+    juce::String miiParamName;
+    bool  miiMapped = false;                            // did CC 74 bind to miiParam?
+
+    // --selftest-controlsurface state: Forge-native Launchpad driver end-to-end with no hardware.
+    CapturingMidiSink* csSink = nullptr;                // non-owning; owned by the driver inside controlSurface
+    bool csClipCreated = false, csInputLaunched = false, csLedCaptured = false;
+    int  csExpectedNote = -1, csExpectedVel = -1, csExpectedChan = -1;
+
     ControlBar controlBar;
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
@@ -727,6 +776,11 @@ private:
     PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
     Label statusLabel;
     juce::uint32 statusHoldUntilMs = 0;   // transient status messages survive the 5Hz refresh until this time
+
+    // Grid control surface (Launchpad, Forge-native). Interactive: constructed in the ctor's normal-mode
+    // branch, inert until a controller appears. Selftest: reused by --selftest-controlsurface with a
+    // capturing LED sink. Declared AFTER `session` so it destructs before it (and is reset first in ~ctor).
+    std::unique_ptr<ControlSurfaceHost> controlSurface;
 
     // Each async file dialog owns its own FileChooser so open/save-as/export can't stomp each other.
     // (Import uses EngineHelpers::browseForAudioFile, which manages its own shared chooser.)
@@ -1063,7 +1117,14 @@ private:
             if (! ok && error.isNotEmpty())
                 FORGE_LOG_ERROR ("Export failed: " + error);
 
-            self->setStatusMessage (ok ? (error.isEmpty() ? caption + " — done"
+            // Surface the measured integrated loudness (whole-edit exports only; the handle leaves it empty
+            // for stems / failures). Read it from the still-alive handle BEFORE the reset below (item 4).
+            juce::String loudnessSuffix;
+            if (ok && self->activeRender != nullptr)
+                if (auto l = self->activeRender->getLoudness(); l && std::isfinite (l->integratedLufs))
+                    loudnessSuffix = "   ·   " + juce::String (l->integratedLufs, 1) + " LUFS";
+
+            self->setStatusMessage (ok ? (error.isEmpty() ? caption + " — done" + loudnessSuffix
                                                            : caption + " — done (some stems failed): " + error)
                                        : "Export failed: " + error);
             self->exportProgress.setVisible (false);
@@ -1739,6 +1800,183 @@ private:
     }
 
     //==============================================================================
+    // --selftest-midiinput: prove the ForgeUIBehaviour focused-Edit wiring that lets REAL hardware CCs
+    // reach parameter mappings. Source fact (tracktion): the MidiControllerParser that routes a CC to
+    // getCurrentlyFocusedMappings() lives ONLY in PhysicalMidiInputDevice (PhysicalMidiInputDevice.cpp) —
+    // a VirtualMidiInputDevice has NO controller parser, so a CC injected headlessly can never drive a
+    // param. What IS deterministic (and is exactly the gap we closed) is: (1) the engine now reports our
+    // open Edit as the focused Edit — null under the default UIBehaviour, so getCurrentlyFocusedMappings()
+    // found nothing and no physical CC could route — and (2) a CC binds to a param in that Edit's store.
+    // The final mile, a physical controller's parser actually firing, is a real-hardware smoke item.
+
+    // Phase 0: instrument + first automatable param, bind CC 74 -> it via the seam, YIELD for the async bind.
+    void beginSelfTestMidiInput()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishSelfTestMidiInput(); return; }
+
+        FORGE_LOG_INFO ("selftest-midiinput: assert the ForgeUIBehaviour focused Edit + a CC->param bind");
+
+        auto tracks = te::getAudioTracks (*edit);
+        auto* track = tracks.isEmpty() ? nullptr : tracks[0];
+        if (track == nullptr) { FORGE_LOG_ERROR ("selftest-midiinput: no audio track"); finishSelfTestMidiInput(); return; }
+
+        PluginHost::ensureDefaultInstrument (*track);
+
+        for (auto* plugin : PluginHost::getTrackInserts (*track))
+        {
+            if (plugin == nullptr) continue;
+            auto params = PluginHost::getAutomatableParameters (*plugin);
+            if (! params.isEmpty()) { miiParam = params.getReference (0).param; break; }
+        }
+
+        if (miiParam == nullptr) { FORGE_LOG_ERROR ("selftest-midiinput: no automatable parameter"); finishSelfTestMidiInput(); return; }
+        miiParamName = miiParam->getParameterName();
+
+        midiLearn.setActiveEdit (edit);
+        midiLearn.beginLearn (*miiParam);
+        midiLearn.handleIncomingController (/*cc*/ 74, /*value0to1*/ 0.5f, /*channel*/ 1);   // bind CC74 -> param
+
+        miiPhase = 1;
+        startTimer (300);   // YIELD: the native bind lands on an AsyncUpdater
+    }
+
+    // Phase 1: assert the focused Edit (the ForgeUIBehaviour contribution) + the CC bind, report, quit.
+    void finishSelfTestMidiInput()
+    {
+        auto* edit = session.getEdit();
+
+        // THE proof of what ForgeUIBehaviour adds: the engine reports our open Edit as focused, so a real
+        // controller's PhysicalMidiInputDevice controllerParser -> getCurrentlyFocusedMappings() would now
+        // resolve this Edit's mappings (the old null UIBehaviour resolved nothing, so a knob drove nothing).
+        const bool focusedEditOk = edit != nullptr
+                                   && engine.getUIBehaviour().getCurrentlyFocusedEdit() == edit
+                                   && engine.getUIBehaviour().getLastFocusedEdit()      == edit;
+
+        miiMapped = (miiParam != nullptr) && MidiLearn::isMapped (*miiParam);
+
+        const bool pass = focusedEditOk && miiMapped;
+
+        String report;
+        report << "mode=midiinput" << newLine
+               << "param="         << (miiParamName.isEmpty() ? String ("(none)") : miiParamName) << newLine
+               << "focusedEditOk=" << (focusedEditOk ? 1 : 0) << newLine
+               << "mapped="        << (miiMapped ? 1 : 0) << newLine
+               << "note=physical-CC routing needs real hardware (a VirtualMidiInputDevice has no controllerParser)" << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write midiinput selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("MIDI-input selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // --selftest-controlsurface: prove the Forge-native grid driver end-to-end with NO hardware. A virtual
+    // pad-press launches the clip in slot (0,0); one LED poll emits the exact note-on the 'playing' state
+    // encodes. Uses the driver's test seams (injectIncomingForTest + a CapturingMidiSink) so it never needs
+    // the OS to route a real MIDI port.
+    void beginControlSurfaceSelftest()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishControlSurfaceSelftest(); return; }
+
+        FORGE_LOG_INFO ("selftest-controlsurface: pad-press -> launch + LED poll (virtual, no hardware)");
+
+        session.ensureScenes (16);
+
+        // Born-audible clip in slot (0,0) so a launch can reach 'playing' (same recipe as --selftest-session).
+        ssClip = session.createMidiClipInSlot (0, 0, "CS SelfTest");
+        csClipCreated = (ssClip != nullptr);
+
+        // Driver with a capturing LED sink; host with openNow=false (no real ports — we drive it by hand).
+        auto capturing = std::make_unique<CapturingMidiSink>();
+        csSink = capturing.get();
+        auto driver = std::make_unique<LaunchpadDriver> (std::move (capturing));
+        auto* drv = driver.get();
+
+        controlSurface = std::make_unique<ControlSurfaceHost> (session, std::move (driver), /*openNow=*/ false);
+
+        // INPUT: inject a grid pad-press for cell (0,0) — cellToNote(0,0) == 81, channel 1, velocity 127.
+        drv->injectIncomingForTest (juce::MidiMessage::noteOn (1, LaunchpadDriver::cellToNote (0, 0), (juce::uint8) 127));
+        controlSurface->drainActions();   // marshal the queued press -> session.launchSlot(0,0) on the message thread
+
+        startTimer (1500);   // let the transport roll + the launch handle advance to 'playing'
+    }
+
+    void finishControlSurfaceSelftest()
+    {
+        auto* edit = session.getEdit();
+
+        // INPUT proven: the clip in slot (0,0) reached 'playing' with the transport rolling (reuse the
+        // exact SlotVisualState logic the LED poll uses, so the test can't drift from the shipped model).
+        bool transportPlaying = false;
+        if (auto* t = session.getTransport()) transportPlaying = t->isPlaying();
+        if (auto* slot = session.getClipSlot (0, 0))
+            csInputLaunched = transportPlaying
+                              && computeSlotState (slot, transportPlaying, false, false) == SlotVisualState::playing;
+
+        // OUTPUT proven: one LED poll must make the capturing sink receive the 'playing' note-on for (0,0),
+        // with the EXPECTED bytes derived from the SAME shared model (no magic numbers).
+        juce::Colour trackColour;
+        if (edit != nullptr)
+            if (auto* tr = te::getAudioTracks (*edit)[0])
+                trackColour = tr->getColour();
+
+        const PadFeedback fb = toPadFeedback (0, 0, SlotVisualState::playing, trackColour);
+        csExpectedNote = LaunchpadDriver::cellToNote (0, 0);
+        csExpectedVel  = LaunchpadDriver::colourIdxToPalette (fb.colourIdx);
+        csExpectedChan = LaunchpadDriver::stateToChannel (fb.state);
+
+        if (csSink != nullptr && controlSurface != nullptr)
+        {
+            csSink->messages.clear();
+            controlSurface->pollOnce();
+
+            for (auto& m : csSink->messages)
+                if (m.isNoteOn() && m.getNoteNumber() == csExpectedNote
+                    && m.getChannel() == csExpectedChan
+                    && m.getVelocity() == (juce::uint8) csExpectedVel)
+                { csLedCaptured = true; break; }
+        }
+
+        // Teardown the host (stops its timer + closes the driver) BEFORE stopping the transport.
+        controlSurface.reset();
+        csSink = nullptr;
+        if (auto* t = session.getTransport()) t->stop (false, false);
+
+        const bool pass = csClipCreated && csInputLaunched && csLedCaptured
+                          && csExpectedNote == 81 && csExpectedVel > 0 && csExpectedChan == 3;
+
+        String report;
+        report << "mode=controlsurface" << newLine
+               << "clipCreated="   << (csClipCreated ? 1 : 0) << newLine
+               << "inputLaunched=" << (csInputLaunched ? 1 : 0) << newLine
+               << "ledCaptured="   << (csLedCaptured ? 1 : 0) << newLine
+               << "expectedNote="  << csExpectedNote << newLine
+               << "expectedVel="   << csExpectedVel << newLine
+               << "expectedChan="  << csExpectedChan << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write controlsurface selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Control-surface selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -1965,6 +2203,20 @@ private:
             return;
         }
 
+        if (mode == SelfTest::midiinput)
+        {
+            stopTimer();
+            finishSelfTestMidiInput();   // single yield after the seam bind → verify the focused Edit + mapping
+            return;
+        }
+
+        if (mode == SelfTest::controlsurface)
+        {
+            stopTimer();
+            finishControlSurfaceSelftest();   // single yield (1500 ms) after begin() launched + drained
+            return;
+        }
+
         auto* t = session.getTransport();
         const bool playing = t != nullptr && t->isPlaying();
 
@@ -2058,6 +2310,49 @@ struct ForgeEngineBehaviour : te::EngineBehaviour
 };
 
 //==============================================================================
+// --selftest-lufs: prove the BS.1770-4 analyzer measures a known-loudness signal. A MONO full-scale 1 kHz
+// sine at 48 kHz has integrated loudness -3.00 LUFS (model value -3.0036); PASS within ±0.5 LU. A pure
+// analyzer gate — no engine / edit / device — so it runs before the window is built (see initialise()).
+static void runLufsSelfTest()
+{
+    constexpr double sr   = 48000.0;
+    constexpr int    secs = 4;                         // >= 3 s so the gating has material
+    const int        N    = (int) (sr * secs);
+
+    juce::AudioBuffer<float> buf (1, N);               // MONO full-scale 1 kHz sine
+    auto* d = buf.getWritePointer (0);
+    for (int i = 0; i < N; ++i)
+        d[i] = (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * (double) i / sr);
+
+    forge::dsp::LoudnessAnalyzer analyzer;
+    analyzer.prepare (sr, 1);
+    analyzer.processBlock (buf.getArrayOfReadPointers(), 1, N);
+    const auto r = analyzer.getResult();
+
+    constexpr float expected = -3.0036f, tol = 0.5f;
+    const bool pass = std::isfinite (r.integratedLufs) && std::abs (r.integratedLufs - expected) <= tol;
+
+    juce::String report;
+    report << "mode=lufs" << juce::newLine
+           << "integratedLufs=" << juce::String (r.integratedLufs, 4) << juce::newLine
+           << "expectedLufs="   << juce::String (expected, 4) << juce::newLine
+           << "toleranceLu="    << juce::String (tol, 2) << juce::newLine
+           << "truePeakDb="     << juce::String (r.truePeakDb, 4) << juce::newLine
+           << "momentaryLufs="  << juce::String (r.momentaryLufs, 4) << juce::newLine
+           << "result="         << (pass ? "PASS" : "FAIL") << juce::newLine
+           << "logFile="        << forge::log::getLogFile().getFullPathName() << juce::newLine;
+
+    const auto reportFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getChildFile ("forge_phase0_selftest.log");
+    if (! reportFile.replaceWithText (report))
+        FORGE_LOG_ERROR ("Failed to write lufs selftest report to: " + reportFile.getFullPathName());
+
+    FORGE_LOG_INFO ("LUFS selftest " + juce::String (pass ? "PASS" : "FAIL")
+                    + " — integrated " + juce::String (r.integratedLufs, 3) + " LUFS"
+                    + " — report: " + reportFile.getFullPathName());
+}
+
+//==============================================================================
 class ForgeApplication : public JUCEApplication
 {
 public:
@@ -2068,25 +2363,39 @@ public:
     void initialise (const String& commandLine) override
     {
         // Logging comes up FIRST, before anything else can fail, so startup diagnostics are captured.
-        const auto modeDesc = commandLine.contains ("--screenshot")          ? "screenshot"
-                            : commandLine.contains ("--selftest-record")     ? "selftest-record"
-                            : commandLine.contains ("--selftest-session")    ? "selftest-session"
-                            : commandLine.contains ("--selftest-midilearn")  ? "selftest-midilearn"  // before -midi (substring)
-                            : commandLine.contains ("--selftest-midi")       ? "selftest-midi"
-                            : commandLine.contains ("--selftest")            ? "selftest-playback"
-                                                                             : "normal";
+        const auto modeDesc = commandLine.contains ("--screenshot")              ? "screenshot"
+                            : commandLine.contains ("--selftest-record")         ? "selftest-record"
+                            : commandLine.contains ("--selftest-session")        ? "selftest-session"
+                            : commandLine.contains ("--selftest-midilearn")      ? "selftest-midilearn"      // before -midi (substring)
+                            : commandLine.contains ("--selftest-midiinput")      ? "selftest-midiinput"      // before -midi (substring)
+                            : commandLine.contains ("--selftest-midi")           ? "selftest-midi"
+                            : commandLine.contains ("--selftest-controlsurface") ? "selftest-controlsurface" // before bare --selftest
+                            : commandLine.contains ("--selftest-lufs")           ? "selftest-lufs"           // before bare --selftest
+                            : commandLine.contains ("--selftest")                ? "selftest-playback"
+                                                                                 : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
         FORGE_LOG_INFO ("Forge starting");
 
+        // --selftest-lufs is a PURE analyzer gate (no engine / edit / device) — run it and quit before the
+        // window/engine machinery matters. Its report is written the same way as the other selftest gates.
+        if (commandLine.contains ("--selftest-lufs"))
+        {
+            runLufsSelfTest();
+            quit();
+            return;
+        }
+
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        const auto mode = commandLine.contains ("--screenshot")          ? SelfTest::screenshot
-                        : commandLine.contains ("--selftest-record")     ? SelfTest::record
-                        : commandLine.contains ("--selftest-session")    ? SelfTest::session
-                        : commandLine.contains ("--selftest-midilearn")  ? SelfTest::midilearn   // before -midi (substring)
-                        : commandLine.contains ("--selftest-midi")       ? SelfTest::midi
-                        : commandLine.contains ("--selftest")            ? SelfTest::playback
-                                                                         : SelfTest::none;
+        const auto mode = commandLine.contains ("--screenshot")              ? SelfTest::screenshot
+                        : commandLine.contains ("--selftest-record")         ? SelfTest::record
+                        : commandLine.contains ("--selftest-session")        ? SelfTest::session
+                        : commandLine.contains ("--selftest-midilearn")      ? SelfTest::midilearn      // before -midi (substring)
+                        : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)
+                        : commandLine.contains ("--selftest-midi")           ? SelfTest::midi
+                        : commandLine.contains ("--selftest-controlsurface") ? SelfTest::controlsurface // before bare --selftest
+                        : commandLine.contains ("--selftest")                ? SelfTest::playback
+                                                                             : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
 
         // Post-open device snapshot (Option A). The engine member opened its OUTPUT device during
@@ -2134,7 +2443,7 @@ private:
     };
 
     ForgeLookAndFeel lookAndFeel;
-    te::Engine engine { "Forge", nullptr, std::make_unique<ForgeEngineBehaviour>() };
+    te::Engine engine { "Forge", std::make_unique<ForgeUIBehaviour>(), std::make_unique<ForgeEngineBehaviour>() };
     std::unique_ptr<MainWindow> mainWindow;
 };
 

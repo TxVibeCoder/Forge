@@ -22,15 +22,24 @@
 
 #include <JuceHeader.h>
 
+#include "engine/dsp/LoudnessAnalyzer.h"
+
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace te = tracktion;
 
 namespace Exporter
 {
+    /** Integrated-loudness measurement of a completed whole-edit render (BS.1770-4). Surfaced
+        additively alongside the existing success surface. Only the whole-edit render carries the
+        master chain, so this is populated for whole-edit exports (sync + async), not per-track
+        stems. See forge::dsp::LoudnessAnalyzer. */
+    using LoudnessResult = forge::dsp::LoudnessAnalyzer::Result;
+
     //==============================================================================
     // Synchronous / blocking API (unchanged) ------------------------------------------------
 
@@ -41,8 +50,13 @@ namespace Exporter
         all tracks down to stereo at the Edit's current sample rate.
 
         Returns true on success. On failure returns false and sets `error` to an explanatory
-        message. An edit with no clips returns false with an explanatory error. */
-    bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& error);
+        message. An edit with no clips returns false with an explanatory error.
+
+        If `loudnessOut` is non-null and the render succeeds, the produced WAV is analysed for its
+        BS.1770-4 integrated loudness + true peak and the result is written there (additive — a null
+        pointer, the default, preserves the original behaviour exactly). */
+    bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& error,
+                          LoudnessResult* loudnessOut = nullptr);
 
     /** Renders each audio track in the edit to its own 24-bit WAV file inside outputDir.
 
@@ -115,6 +129,16 @@ namespace Exporter
             stem success ok is true and error carries the per-stem failures. */
         std::function<void (bool, juce::String)> onComplete;
 
+        /** Additive: fired on the message thread just BEFORE onComplete, only for a successful
+            whole-edit (non-stem) export, carrying the rendered file's BS.1770-4 integrated loudness.
+            Never fires for stems (they exclude the master chain) or for a failed/cancelled export.
+            Optional — leave unset to ignore. The same value is also available via getLoudness(). */
+        std::function<void (LoudnessResult)> onLoudness;
+
+        /** The whole-edit loudness measured at completion, if any (see onLoudness). Empty for
+            stems, failures, cancellations, or before completion. Message-thread read. */
+        std::optional<LoudnessResult> getLoudness() const  { return loudness; }
+
     private:
         void timerCallback() override;
         void startPass (int index);
@@ -148,6 +172,8 @@ namespace Exporter
         bool finished      = false;
         juce::StringArray failures;      // labelled per-pass failures (stems)
         juce::String      primaryError;  // the single error (whole-edit)
+
+        std::optional<LoudnessResult> loudness;   // whole-edit integrated loudness at completion
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AsyncRender)
     };

@@ -1,8 +1,10 @@
 #include "services/export/Exporter.h"
 
 #include "core/Log.h"
+#include "engine/dsp/LoudnessAnalyzer.h"
 
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -72,9 +74,31 @@ namespace
             candidate = baseName + " (" + juce::String (n) + ")";
         }
     }
+
+    // Human-readable one-liner for a loudness result: "-14.2 LUFS integrated, -1.0 dBTP".
+    // A -inf integrated value (silence / too short) reads as "silent".
+    juce::String describeLoudness (const forge::dsp::LoudnessAnalyzer::Result& r)
+    {
+        const juce::String lufs = std::isfinite (r.integratedLufs)
+            ? juce::String (r.integratedLufs, 2) + " LUFS integrated"
+            : juce::String ("silent (no gated program)");
+
+        return lufs + ", " + juce::String (r.truePeakDb, 2) + " dBTP";
+    }
+
+    // Analyses a freshly-rendered whole-edit WAV for its integrated loudness and logs it. Returns the
+    // result so callers can surface it. Whole-edit only — stems exclude the master chain, so their
+    // per-file LUFS is not a master measurement. Message/worker-thread; blocking file IO.
+    forge::dsp::LoudnessAnalyzer::Result analyseRenderedLoudness (const juce::File& wav)
+    {
+        const auto result = forge::dsp::LoudnessAnalyzer::analyzeFile (wav);
+        FORGE_LOG_INFO ("Export loudness (" + wav.getFileName() + "): " + describeLoudness (result));
+        return result;
+    }
 }
 
-bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& error)
+bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& error,
+                      LoudnessResult* loudnessOut)
 {
     error.clear();
 
@@ -174,6 +198,13 @@ bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& e
         error = "The render finished but no file was produced.";
         return false;
     }
+
+    // Analyse the finished master render for integrated loudness (BS.1770-4) and log it. Additive:
+    // this never affects the render's success — a null loudnessOut just skips surfacing it.
+    const auto loudness = analyseRenderedLoudness (outFile);
+
+    if (loudnessOut != nullptr)
+        *loudnessOut = loudness;
 
     return true;
 }
@@ -634,15 +665,34 @@ void AsyncRender::finishAll()
             error = primaryError.isNotEmpty() ? primaryError : "Export failed.";
     }
 
-    // Fire the user callback LAST, from a stack-local copy. The shell may destroy this handle from
-    // inside onComplete (resetting its owning unique_ptr) — which would free the std::function's own
-    // storage while the closure is still executing. Moving the callable onto the stack first makes
-    // the closure's state outlive ~AsyncRender; nothing below touches *this afterwards.
-    if (onComplete)
+    // Lifetime (load-bearing): snapshot onComplete to a stack local BEFORE either callback fires, so the
+    // two callbacks share one invariant — nothing below the snapshots reads a member of *this. A caller may
+    // destroy this handle from inside onLoudness OR onComplete (the shell resets its owning unique_ptr from
+    // onComplete); with the snapshot, finishAll never touches a freed member afterwards. (QC caught that the
+    // prior code fell through from onLoudness to `if (onComplete)`, reading `this` post-onLoudness — a UAF
+    // if a caller self-destructed from onLoudness.)
+    auto completeCb = std::move (onComplete);
+
+    // Additive loudness surfacing — whole-edit success only (stems exclude the master chain, so a per-stem
+    // LUFS is not a master measurement). We are on the message thread; the worker has joined and the file is
+    // fully written (currentTask.reset above flushed it), so this neither races teardown nor touches the
+    // audio thread. It IS synchronous: analyseRenderedLoudness reads + DSP-processes the whole rendered file
+    // here, which briefly blocks the UI at completion for a very long master (an accepted tradeoff for this
+    // offline/on-render feature; moving it to a background thread is a possible follow-up). getLoudness()
+    // exposes the result for a caller reading it from onComplete; onLoudness fires it directly here.
+    if (ok && ! isStems && ! passes.empty() && passes.front().destFile.existsAsFile())
     {
-        auto callback = std::move (onComplete);
-        callback (ok, error);
+        loudness = analyseRenderedLoudness (passes.front().destFile);   // writes the member BEFORE any callback
+
+        if (onLoudness)
+        {
+            auto loudnessCb = std::move (onLoudness);
+            loudnessCb (*loudness);   // may destroy *this — no member is read afterwards
+        }
     }
+
+    if (completeCb)
+        completeCb (ok, error);       // stack-local; safe even if onLoudness already destroyed *this
 }
 
 void AsyncRender::teardownEngineState()
