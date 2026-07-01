@@ -6,9 +6,9 @@
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
 **`main`**. **W02 shipped this session: three engine-facing feature seams (MIDI-learn hardware routing,
-a Forge-native grid control surface, offline LUFS) landed in ONE scoped commit `bb9ef5e`, COMMITTED LOCALLY on
-top of `1eb876d`. NOT yet pushed — `origin/main` is still `1eb876d`.** Working tree clean; sanitize before the
-push. Last build **clean** (MSVC Debug, 0 warnings) · **all EIGHT selftests PASS** — `--selftest`,
+a Forge-native grid control surface, offline LUFS) in `bb9ef5e` (code) + a docs commit — COMMITTED + PUSHED to
+`origin/main`, current tip `d5dbe1a` (on top of the `1eb876d` baseline). Working tree clean; the pushed set was
+sanitized (no machine-path / identity leaks).** Last build **clean** (MSVC Debug, 0 warnings) · **all EIGHT selftests PASS** — `--selftest`,
 `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, **`--selftest-midiinput`**,
 **`--selftest-controlsurface`**, **`--selftest-lufs`** — on the final binary; `--screenshot` renders 5 PNGs; a
 normal interactive launch is clean (control surface constructs inert). Three features shipped:
@@ -37,8 +37,8 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 ## What this session did — W02: MIDI-learn HW routing · control surface · offline LUFS
 
 Three engine-facing feature seams (roadmap items 2a / 3 / 4), built against source-verified Tracktion facts and
-proven headless, landed in **ONE scoped commit `bb9ef5e`** on top of `1eb876d`. **Committed LOCALLY, NOT pushed —
-`origin/main` is still `1eb876d`.** Process (same multi-phase pattern, single-commit wave): 3 parallel
+proven headless, landed in **`bb9ef5e` (code)** + a docs commit on top of `1eb876d`. **Committed + PUSHED to
+`origin/main` (tip `d5dbe1a`).** Process (same multi-phase pattern): 3 parallel
 source-verify spikes → an adversarial verification pass (4 skeptics) → 3 parallel file-disjoint implementation
 agents → orchestrator integration (`main.cpp` / `CMakeLists` + the 3 new selftest gates) → adversarial QC.
 Full record: [devlog/wave-02-features.md](devlog/wave-02-features.md).
@@ -168,23 +168,20 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W02 (three engine seams in `bb9ef5e`) is **committed LOCALLY on top of `1eb876d` but NOT pushed** —
-> `origin/main` is still `1eb876d`; **push (after a sanitize scan) is the first item**. The other flagged
-> next items are the **real-hardware Launchpad smoke test** (the one thing not headless-provable), the manual GUI
-> smoke pass of the new user-visible surfaces, and the deferred follow-ups.
+> W02 (three engine seams, `bb9ef5e` + docs) is **committed + PUSHED to `origin/main` (tip `d5dbe1a`).** The
+> flagged next items are the **real-hardware Launchpad smoke test** (the one thing not headless-provable), the
+> manual GUI smoke pass of the new user-visible surfaces, and the deferred follow-ups.
 
-1. **Push W02 (after sanitize) — START HERE (mechanically).** `bb9ef5e` is committed locally only; run the
-   pre-push scrub scan, then push to `origin/main`.
-2. **Real-hardware smoke test with an actual Launchpad — the one thing not headless-provable.** Proves BOTH the
-   MIDI-learn physical-CC routing (item 2a — a virtual device has no `controllerParser`, so only real hardware
-   exercises the `PhysicalMidiInputDevice` parser path) AND the control-surface driver's byte mapping / LED
-   palette (item 3 — built to the published spec, unconfirmed against a real device).
-3. **Manual GUI smoke pass — the new user-visible surfaces.** The one path that can't be driven headlessly here.
+1. **Real-hardware smoke test with an actual Launchpad — START HERE (the one thing not headless-provable).**
+   Proves BOTH the MIDI-learn physical-CC routing (item 2a — a virtual device has no `controllerParser`, so only
+   real hardware exercises the `PhysicalMidiInputDevice` parser path) AND the control-surface driver's byte
+   mapping / LED palette (item 3 — built to the published spec, unconfirmed against a real device).
+2. **Manual GUI smoke pass — the new user-visible surfaces.** The one path that can't be driven headlessly here.
    Click through the **export-done LUFS readout** (Export an edit, confirm the status strip shows the integrated
    LUFS), and **Ctrl+L** MIDI-learn now that the focused-Edit routing is in — plus the still-unsmoked Wave-01
    gestures (Click toggle + count-in, markers, aux sends, async export progress/cancel). `--screenshot` +
    the eight selftests cover the headless paths, but a human should click these once.
-4. **Deferred follow-ups (ticketed).** (a) **APC40 mkII driver** — its faders/transport/metering are where
+3. **Deferred follow-ups (ticketed).** (a) **APC40 mkII driver** — its faders/transport/metering are where
    Tracktion's `ControlSurface` framework adds real value, so it's a per-device architecture call (not a clone of
    the Launchpad driver). (b) **LUFS off the message thread for very large renders** — the QC minor; synchronous
    whole-file analysis currently blocks the UI on very large renders (the async fix would re-introduce the
@@ -192,9 +189,9 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    (audio slot-record) remains blocked — no audio slot-record path exists; today's slot record is MIDI-only,
    where `ClipFades` is a no-op. See [devlog/wave-02-features.md](devlog/wave-02-features.md) "Deferred
    follow-ups".
-5. **Remaining MIDI input roles** — **MIDI-clock / Ableton Link** sync. (MIDI-learn param mapping shipped in
+4. **Remaining MIDI input roles** — **MIDI-clock / Ableton Link** sync. (MIDI-learn param mapping shipped in
    Wave 01; its hardware-routing follow-up shipped as W02 item 2a.)
-6. **Carried-over polish** — automation (vol/pan/plugin-param) lanes; **comping**; an optional **live short-term
+5. **Carried-over polish** — automation (vol/pan/plugin-param) lanes; **comping**; an optional **live short-term
    LUFS meter** (would require forking the engine for a post-fader sample tap); macOS build; interactive-UI
    verification. (LUFS metering — offline/on-render — **shipped in W02**; buses/sends, async export, and markers
    **shipped in Wave 01**.)
@@ -277,7 +274,7 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **SessionView threading (load-bearing):** pads cache NO `te::ClipSlot*`/`Clip*` — only `(track,scene)`
   indices; the 25 Hz poll re-resolves via the **const** `getClipSlot` (never inserts). Any track-list change
   must rebuild the grid before a stale `TrackColumnComponent` derefs its `AudioTrack&` (the QC blocker).
-- **Scrolled-viewport relayout (this session's bug):** for a `juce::Viewport`, the **viewed component's
+- **Scrolled-viewport relayout (the session-scroll session's bug):** for a `juce::Viewport`, the **viewed component's
   top-left IS the scroll offset** — so in `SessionView::resized()` size the scrolled `columnHolder` with
   `setSize(w, h)`, **never** `setBounds(0, 0, w, h)` (the latter yanks the grid back to the top on any relayout
   while scrolled). The pinned scene column is offset by `-getViewPositionY()` in `syncSceneColumnToScroll()`.
@@ -286,10 +283,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed LOCALLY but NOT pushed.** W02 (three engine seams + the 3 new selftest gates) is at
-  `bb9ef5e`, committed on top of `1eb876d` — but **`origin/main` is still `1eb876d`**. The working tree is
-  **clean**; **push after a sanitize scan** (the first mechanical next step). Prior Wave 01 is already pushed
-  (`origin/main` history through `e3b8c7c`, then the `1eb876d` docs commit). Sanitizing is a live discipline, not
+- **Latest work is committed + PUSHED.** W02 (three engine seams + the 3 new selftest gates, `bb9ef5e`) + its
+  docs commit are on **`origin/main` (tip `d5dbe1a`)**; the working tree is **clean** and the pushed set was
+  **sanitized** (only placeholder `C:\Users\…` / `<user>` in doc text — no real machine paths / identity leaks).
+  Prior Wave 01 is already pushed (`origin/main` history through `e3b8c7c`, then the `1eb876d` docs commit).
+  Sanitizing is a live discipline, not
   a formality: a prior wave's CLI caught + scrubbed a stray sibling-project name in a comment before its commit —
   it would have been the first private-project-name leak into the public repo. **Public repo = sanitize before
   every push** (pseudonymous TxVibeCoder — keep the real email / personal `C:\Users\…` paths / prior-project names
@@ -314,7 +312,7 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   **QC** (12 confirmed, 3 refuted), and a **fix re-verify**. **W7's QC** found 0 blocker/major and 2 minor
   (swapProject MIDI-teardown; slot-arm error-message fallback) — both fixed — and the new `--selftest-midi`
   gate is the empirical proof of the verdict-A record path. They earn their keep.
-- **Log fallible seams as you build them — STANDING BUILD PRINCIPLE (new this session).** Every new feature
+- **Log fallible seams as you build them — STANDING BUILD PRINCIPLE (established in the logging session).** Every new feature
   routes its failure paths through `src/core/Log.*` (`FORGE_LOG_ERROR/WARN/INFO/DEBUG`) — **never** on the
   audio/RT thread, **never** per-tick in a poll/paint, autosave only on `save() == false`. The principle +
   cheat-sheet + a new-feature checklist live in [LOGGING.md](LOGGING.md); read it before adding a feature.
@@ -334,8 +332,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 ## Open decisions (waiting on you)
 
 - **Session grid layout — RESOLVED + BUILT (vertical scroll).** No longer open: vertical scroll with fixed
-  ~46 px pads shipped this session (built + verified, committed as `8d15234` + pushed). See "What this session
-  did" #1.
+  ~46 px pads shipped (a prior session, `8d15234` + pushed); see
+  [devlog/session-scroll-design.md](devlog/session-scroll-design.md).
 - **Double-click edit gesture** — currently double-click opens a clip AND launches it (first press launches);
   right-click "Edit clip" is the launch-free path. Kept as belt-and-suspenders this session; revisit if the
   double-launch bothers you.
