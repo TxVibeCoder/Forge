@@ -2,12 +2,12 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-06-30**, end of the
-> **"Session clip-launch grid — build + QC"** session.
+> **"Session clip-launch grid — build, QC, publish"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`session-grid`** (`main` last pushed `600f80f`) · **local commits ahead of `origin/main`, not yet pushed**
-(`git log --oneline main..session-grid`) · ~8,400 lines / 43 source files · last build **clean** ·
-**all four self-tests PASS** (`--selftest`, `--selftest-session`, `--selftest-record`).
+**`main`**, pushed to **`origin/main` @ `06f3cf6`** (the Session grid is merged + live) · working tree
+**clean** · ~8,400 lines / 43 source files · last build **clean** · **all four self-tests PASS**
+(`--selftest`, `--selftest-session`, `--selftest-record`).
 
 ---
 
@@ -17,7 +17,7 @@ Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (publ
 Session clip grid** (tracks × scenes of launchable clips), meant to be played from real **grid controllers**
 (Novation Launchpad, Akai APC40 mkII). The linear **Arrange** timeline is a **secondary** view.
 
-This is a **direction reset** made this session. Everything built before it was *arrangement-first* — that
+This was a **direction reset** (a recent prior session). Everything built before it was *arrangement-first* — that
 work is **not wasted** (clips, the 4OSC instrument, the piano-roll, the mixer, plugin hosting all become
 building blocks that live *inside* slots and scenes), but the **primary identity and next build have
 changed**. The authoritative brief is **[DIRECTION.md](DIRECTION.md)** — read it before planning anything.
@@ -30,8 +30,8 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ## What this session did — built the Session clip-launch grid
 
-The pivot from DIRECTION.md is **built, integrated, adversarially QC'd, and verified**. SessionView is the
-new default view. Committed on branch `session-grid` (`def1193` = the feature; a follow-up docs commit).
+The pivot from DIRECTION.md is **built, integrated, adversarially QC'd, verified, and published to `main`**.
+SessionView is the new default view (`origin/main` tip `06f3cf6`).
 
 1. **Design pass (workflow).** understand → source-verify the `ClipSlot` / `Scene` / `LaunchHandle` API
    against `libs/tracktion_engine` → design → 4-lens adversarial verify → reconcile. Output:
@@ -50,6 +50,14 @@ new default view. Committed on branch `session-grid` (`def1193` = the feature; a
 6. **Root-caused a playback-selftest failure (workflow)** that surfaced when the audio device hot-swapped
    (headset unplug → onboard fallback) — **test-only** fragility (the real Play button was fine); hardened
    the selftest to yield + wait-for-stream + bounded-poll. All four selftests now PASS.
+7. **Committed, docs updated, merged + pushed.** `feat` + `docs` commits; STATUS / HANDOFF / README brought
+   current, then merged to `main` and pushed. **Sanitized first** (pseudonymous public repo): author identity
+   is the `TxVibeCoder` noreply, a token scan + a 3-agent semantic audit came back clean, and a stray absolute
+   `C:\Users\…` build path in HANDOFF was scrubbed from ALL git history (`git filter-repo`, run as
+   `python -m git_filter_repo`) then force-pushed.
+8. **16-row layout — DECIDED, not yet built.** 16 scene rows at a readable pad height (~46 px) exceed a normal
+   window (~844 px of content). **Decision: vertical scroll** (keep full-size pads, Ableton-style) over
+   fit-to-window (shrink pads). Deferred by request — the implementation note is in "What's next" #1.
 
 > Prior session: **direction reset → DIRECTION.md** + the to-scale [mockups](../mockups/) (sheet 00 = the
 > Session grid) + a full doc audit. Before that: the **MIDI MVP (W1–W5) + W6 piano-roll polish**
@@ -81,20 +89,34 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-1. **Session-grid build — ✅ DONE this session** (see above; `def1193`). Carried-over pieces: the
-   **16-scene-rows-vs-window layout decision** (vertical scroll vs. shorter pads — the row *alignment* is
-   fixed; this sizing choice is not), and a **manual GUI smoke pass** of live mouse interaction (rendering is
-   already covered by `--screenshot`).
-2. **Control-surface layer ("one day") — now the next real build.** A device-agnostic driver on the
+1. **Vertical scroll for the 16-scene grid — DECIDED, START HERE.** The layout call is made (see "what this
+   session did" #8): **vertical scroll** — keep full-size ~46 px pads and scroll to reach scenes 10–16 —
+   NOT fit-to-window. Rationale: Ableton-idiomatic, pads stay readable, and it scales to 24/32/… scenes
+   (fit-to-window shrinks pads toward unusable). **Implementation is isolated to `SessionView` (~a few hours):**
+   - The grid `juce::Viewport` scrolls HORIZONTAL only today (`viewport.setScrollBarsShown(false, true)` in
+     `SessionView.cpp`). Turn on vertical scrolling and let `columnHolder` keep its natural content height
+     (`headerH + numScenes*kSlotH + stopRowH`, ~844 px) instead of the current clamp to the viewport height.
+   - **The load-bearing bit:** the `SceneColumnComponent` is **pinned OUTSIDE the viewport**, so it won't move
+     when the grid scrolls. Add a `juce::Viewport::Listener` (`visibleAreaChanged`) and offset the pinned scene
+     column's Y to match `viewport.getViewPositionY()` so scene launch rows stay aligned with their pads.
+     (Row *alignment within a frame* is already solved by the shared `SessionLayout::rowBand` — don't touch it.)
+   - Decide whether the track **header + stop footer** stay pinned while pads scroll (Ableton pins the track
+     row) or scroll with the column. Simplest first pass: scroll the whole column together, then refine.
+   - Verify with a fresh `--screenshot` at a normal window height (~700 px): all 16 rows must be reachable and
+     the scene column must track the pads while scrolling. Same file-disjoint-design-then-build pattern works,
+     but this is small enough to do directly.
+2. **Manual GUI smoke pass** — the one path that can't be driven headlessly here. Click through the Session
+   grid live (launch a pad / a scene / the right-click "Edit clip" + double-click gestures) and the MIDI
+   MVP draw→play path. `--screenshot` covers rendering and `--selftest-session` covers audibility, but a
+   human should click it once.
+3. **Control-surface layer ("one day") — the next real feature build.** A device-agnostic driver on the
    `ControlSurface` seam so real grid controllers drive the grid (Launchpad first, then APC40 mkII). The
    on-screen pad model is already hardware-ready: `SlotVisualState::toPadFeedback` emits the exact
    `(colourIdx, state)` LED encoding a driver would push. External hardware over MIDI; not an MVP gate.
    Reference: [mockups](../mockups/) sheet 09.
-3. **MIDI input roles** — note-record into clips (**W7**: own MIDI enable sequence + a runtime test with a
+4. **MIDI input roles** — note-record into clips (**W7**: own MIDI enable sequence + a runtime test with a
    physical controller, see [midi-design.md §5](devlog/midi-design.md)); **MIDI-learn** param mapping;
    **MIDI-clock / Ableton Link** sync.
-4. **GUI smoke test of the MIDI MVP + W6** — the one statically-verified-but-unclicked path (draw → play →
-   hear; multi-select / velocity / copy-paste). Worth a manual pass.
 5. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends; async export + progress; LUFS;
    markers; comping; macOS build; interactive-UI verification.
 
@@ -142,9 +164,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   must rebuild the grid before a stale `TrackColumnComponent` derefs its `AudioTrack&` (the QC blocker).
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Submodules are clean.** **Not pushed:** the Session-grid work is on branch **`session-grid`**, several
-  commits ahead of `origin/main` (`git log --oneline main..session-grid`). `git push -u origin session-grid`
-  (or merge to `main`) when ready.
+- **Submodules are clean. Published:** the Session grid is merged to `main` and pushed (`origin/main` @
+  `06f3cf6`); working tree clean. **Public repo = sanitize before every push** (pseudonymous TxVibeCoder —
+  keep the real email / personal `C:\Users\…` paths / prior-project names out). History was rewritten once
+  this session to scrub a stray path; `git-filter-repo` isn't on PATH here, so run **`python -m git_filter_repo`**
+  (it drops the `origin` remote as a safety step — re-add it before pushing).
 
 ---
 
@@ -163,8 +187,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 
 ## Open decisions (waiting on you)
 
-- **Session grid: 16 scene rows don't fit a short window** — vertical scroll (keep big pads) vs.
-  fit-to-window (shorter pads)? The row *alignment* is fixed; this sizing choice is not.
+- **Session grid layout — DECIDED (vertical scroll), implementation deferred.** No longer an open question;
+  see "What's next" #1 for the how. Just not built yet (deferred by request).
 - **Double-click edit gesture** — currently double-click opens a clip AND launches it (first press launches);
   right-click "Edit clip" is the launch-free path. Kept as belt-and-suspenders this session; revisit if the
   double-launch bothers you.
