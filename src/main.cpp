@@ -23,14 +23,15 @@
 #include "ui/browser/BrowserView.h"
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
+#include "ui/session/SessionView.h"
 #include "ui/ControlBar.h"
 #include "ui/ForgeLookAndFeel.h"
 
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record };
-enum class ViewMode { Arrange, Mixer };
+enum class SelfTest { none, playback, record, session, screenshot };
+enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
 //==============================================================================
@@ -172,6 +173,7 @@ public:
         addAndMakeVisible (controlBar);
         addAndMakeVisible (arrangeView);
         addAndMakeVisible (mixerView);
+        addAndMakeVisible (sessionView);
         addAndMakeVisible (browserPanel);
         addAndMakeVisible (detailView);
         addAndMakeVisible (pianoRoll);
@@ -185,8 +187,8 @@ public:
         // keyPressed returns false for keys it doesn't consume so they keep propagating.
         setWantsKeyboardFocus (true);
 
-        if (mode == SelfTest::playback)
-            importTestToneAndPlay();
+        // (The playback selftest's import + play is kicked off from the message loop below, NOT here in
+        // the ctor, so the audio graph is ready before it plays — see the SelfTest::playback dispatch.)
 
         controlBar.setEdit (session.getEdit());
 
@@ -197,7 +199,17 @@ public:
         // (add/delete/rename track, delete clip, colour, mute/solo). ArrangeView fires this after
         // it has already rebuilt itself, so we only need to save. (onClipSelected/onTrackSelected
         // -> Inspector are left unwired until that feature exists — see docs/devlog/integration.md.)
-        arrangeView.onEditMutated = [this] { session.save(); };
+        arrangeView.onEditMutated = [this]
+        {
+            session.save();
+
+            // A structural change in the Arrange view (e.g. delete track) can leave the Session grid's
+            // columns holding stale te::AudioTrack& refs. Rebuild it synchronously when the track count
+            // changed so a TrackColumnComponent never outlives its track (QC blocker fix; the 25 Hz poll
+            // also guards against any path that doesn't route through here).
+            if (sessionViewBinds() && session.getNumAudioTracks() != sessionView.getNumColumns())
+                sessionView.rebuild();
+        };
 
         // Authoritative arm state lives in the engine (the InputDeviceInstance targets), so the
         // lanes re-derive their R indicator from this on every rebuild and after each arm/disarm
@@ -292,11 +304,82 @@ public:
             rebind();
         };
 
+        // Session grid — mirror the arrange wiring. The view delegates all engine ops to ProjectSession;
+        // here we only route selection/creation to the shared piano-roll drawer and the record arm path.
+        sessionView.onEditMutated = [this] { session.save(); };
+
+        sessionView.onSlotSelected = [this] (te::Clip* c)
+        {
+            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+            {
+                pianoRoll.setMidiClip (mc);
+                bottomMode = BottomMode::PianoRoll;
+            }
+            else
+            {
+                detailView.setClip (c);
+                bottomMode = BottomMode::Detail;
+            }
+
+            if (c != nullptr && ! drawerVisible)
+                drawerVisible = true;
+
+            resized();
+        };
+
+        // The view already created + saved the new clip and rebuilt itself; we only open it for editing.
+        sessionView.onMidiClipCreated = [this] (te::MidiClip::Ptr clip)
+        {
+            if (clip != nullptr)
+            {
+                pianoRoll.setMidiClip (clip.get());
+                bottomMode    = BottomMode::PianoRoll;
+                drawerVisible = true;
+                resized();
+            }
+        };
+
+        sessionView.isTrackArmed = [this] (te::AudioTrack& t)
+        {
+            auto* ed = session.getEdit();
+            return ed != nullptr && recorder.isTrackArmed (*ed, t);
+        };
+
+        sessionView.onArmToggled = [this] (te::AudioTrack& track, bool arm)
+        {
+            if (auto* ed = session.getEdit())
+            {
+                if (arm)
+                {
+                    EngineHelpers::ensureRecordingInputOpen (engine);
+                    recorder.enableInputs();
+                }
+
+                const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
+                                    : recorder.disarmTrack (*ed, track);
+
+                if (! ok)
+                    setStatusMessage ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+
+                sessionView.refreshArmStates();
+                arrangeView.refreshArmStates();
+            }
+        };
+
         arrangeView.setEdit (session.getEdit());
         mixerView.setEdit (session.getEdit());
-        setViewMode (ViewMode::Arrange);
 
-        setSize (1040, 620);
+        // The Session grid is the default view. Keep it OFF the headless playback/record selftest path so
+        // the throwaway selftest edit stays pristine (no ensureScenes slot scaffolding perturbs the gates).
+        if (sessionViewBinds())
+            sessionView.setEdit (session.getEdit());
+
+        setViewMode (ViewMode::Session);
+
+        if (mode == SelfTest::screenshot)
+            setSize (1480, 940);   // tall enough to render all 16 scene rows for the snapshot
+        else
+            setSize (1040, 620);
 
         if (mode == SelfTest::record)
         {
@@ -305,8 +388,25 @@ public:
             // before we arm. A single blocking callback would never let that async run.
             MessageManager::callAsync ([this] { beginSelfTestRecording(); });
         }
+        else if (mode == SelfTest::session)
+        {
+            // Yield to the message loop, then create + launch a clip in a slot and confirm it
+            // becomes audible (the launcher playback path engages). See finishSessionSelftest().
+            MessageManager::callAsync ([this] { beginSessionSelftest(); });
+        }
+        else if (mode == SelfTest::screenshot)
+        {
+            // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
+            MessageManager::callAsync ([this] { beginScreenshot(); });
+        }
         else if (mode == SelfTest::playback)
-            startTimer (3000);
+        {
+            // Run the import + play AFTER yielding to the message loop (mirrors the record/session
+            // selftests), then poll for playback to actually engage. Front-loading this in the ctor and
+            // sampling at a blind fixed time raced a hot-swapped default output device — the IO callback
+            // stays suspended until the device-change async cascade drains, so the playhead never moved.
+            MessageManager::callAsync ([this] { importTestToneAndPlay(); playbackPollTicks = 0; startTimerHz (10); });
+        }
         else
             startTimerHz (5);
     }
@@ -364,8 +464,10 @@ public:
             drawerResizer.setBounds (centre.removeFromBottom (resizerThickness));
         }
 
+        sessionView.setVisible (viewMode == ViewMode::Session);
         arrangeView.setVisible (viewMode == ViewMode::Arrange);
         mixerView.setVisible (viewMode == ViewMode::Mixer);
+        sessionView.setBounds (centre);
         arrangeView.setBounds (centre);
         mixerView.setBounds (centre);
     }
@@ -380,6 +482,9 @@ private:
     te::WaveAudioClip::Ptr clip;
     File sineFile;
 
+    te::MidiClip::Ptr ssClip;       // session selftest: the MIDI clip launched in slot (0,0)
+    bool ssClipCreated = false;     // session selftest: whether that clip was created
+
     int  rcInputDeviceCount = 0;
     bool rcTrackArmed = false;
     bool rcRecordingStarted = false;
@@ -388,11 +493,13 @@ private:
     String rcDeviceAfter;      // open audio device name AFTER the lazy input-open attempt
     int  rcInputChansAfter = 0;// active input channels on that device AFTER the attempt
     int  recordPhase = 0;      // record-selftest state machine: 1 = input opened, 2 = recording
+    int  playbackPollTicks = 0;// playback-selftest bounded poll: 10 Hz ticks elapsed
 
     ControlBar controlBar;
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
     MixerView mixerView;
+    SessionView sessionView { session };   // primary view: tracks×scenes clip-launch grid (Sheet 00)
     BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
     DetailView  detailView;     // bottom drawer: audio-clip inspector
     PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
@@ -404,7 +511,7 @@ private:
     std::unique_ptr<FileChooser> openChooser, saveChooser, exportChooser, stemsChooser;
     TooltipWindow tooltipWindow;
 
-    ViewMode viewMode = ViewMode::Arrange;
+    ViewMode viewMode = ViewMode::Session;
     BottomMode bottomMode = BottomMode::Detail;   // Detail (audio) vs PianoRoll (MIDI) in the drawer
     bool browserVisible = false;   // lean default; toggled on demand
     bool drawerVisible  = false;
@@ -431,7 +538,9 @@ private:
         controlBar.onAudioSettings = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         controlBar.onToggleBrowser = [this] { browserVisible = ! browserVisible; resized(); };
         controlBar.onToggleDrawer  = [this] { drawerVisible  = ! drawerVisible;  resized(); };
-        controlBar.onViewMode      = [this] (int m) { setViewMode (m == 1 ? ViewMode::Mixer : ViewMode::Arrange); };
+        controlBar.onViewMode      = [this] (int m) { setViewMode (m == 0 ? ViewMode::Session
+                                                                  : m == 1 ? ViewMode::Arrange
+                                                                           : ViewMode::Mixer); };
     }
 
     void setupStatusStrip()
@@ -444,11 +553,24 @@ private:
         statusLabel.setBorderSize ({ 0, 10, 0, 10 });
     }
 
+    // Whether this run binds the live Session grid to the edit. The headless playback/record selftests
+    // skip it to keep their throwaway edit pristine; the interactive app, the session selftest, and the
+    // screenshot harness all bind it. Used identically at initial bind, rebind, and on track-list change.
+    bool sessionViewBinds() const
+    {
+        return mode == SelfTest::none || mode == SelfTest::session || mode == SelfTest::screenshot;
+    }
+
     void setViewMode (ViewMode m)
     {
         viewMode = m;
-        controlBar.setViewMode (m == ViewMode::Mixer ? 1 : 0);
+        controlBar.setViewMode (m == ViewMode::Session ? 0 : m == ViewMode::Arrange ? 1 : 2);
         resized();
+
+        // Give the Session grid keyboard focus when it becomes active so its arrow/Enter launch keys fire
+        // (the switch only toggles visibility; SessionView::visibilityChanged also covers this) — QC fix.
+        if (m == ViewMode::Session)
+            sessionView.grabKeyboardFocus();
     }
 
     void setupResizers()
@@ -488,6 +610,7 @@ private:
         }
 
         // Un-modified shortcuts.
+        if (code == KeyPress::F8Key)  { setViewMode (ViewMode::Session); return true; }
         if (code == KeyPress::F9Key)  { setViewMode (ViewMode::Arrange); return true; }
         if (code == KeyPress::F11Key) { setViewMode (ViewMode::Mixer);   return true; }
 
@@ -647,17 +770,28 @@ private:
 
         if (clip != nullptr)
         {
+            // We now run on the message loop (after the initial setEdit), so rebuild the arrange view to
+            // reflect the freshly-imported clip (the report reads its clip-component count).
+            arrangeView.rebuild();
+
             auto& transport = session.getEdit()->getTransport();
             transport.setLoopRange (clip->getEditTimeRange());
             transport.looping = true;
             transport.ensureContextAllocated();
-            transport.setPosition (te::TimePosition());
 
-            MessageManager::callAsync ([this]
-            {
-                if (auto* ed = session.getEdit())
-                    ed->getTransport().play (false);
-            });
+            // Drain the device-change async cascade so the output stream is actually rolling before we
+            // play — the output-side analog of the input flush the record path uses. Without this, a
+            // just-hot-swapped default device (a headset unplug falling back to onboard audio) leaves the
+            // IO callback suspended, so the playhead never advances (position stays 0.000).
+            engine.getDeviceManager().dispatchPendingUpdates();
+
+            transport.setPosition (te::TimePosition());
+            transport.play (false);
+
+            // Wait for the stream to actually be rolling (the exact idiom the clip-launcher path uses;
+            // blockUntilSyncPointChange bails after ~100ms).
+            if (auto* epc = transport.getCurrentPlaybackContext())
+                epc->blockUntilSyncPointChange();
         }
     }
 
@@ -809,6 +943,157 @@ private:
     }
 
     //==============================================================================
+    // Session-grid audibility selftest (wave-1 acceptance gate): headlessly prove that launching a
+    // clip in a slot is AUDIBLE — create a born-audible MIDI clip in slot (0,0), launch it (which
+    // starts the transport), and confirm its LaunchHandle reaches the playing state with the
+    // transport rolling, i.e. the playback graph engaged the launcher path.
+    void beginSessionSelftest()
+    {
+        if (session.getEdit() == nullptr)
+        {
+            finishSessionSelftest();
+            return;
+        }
+
+        session.ensureScenes (16);
+        ssClip = session.createMidiClipInSlot (0, 0, "SelfTest");
+        ssClipCreated = (ssClip != nullptr);
+
+        if (ssClipCreated)
+            session.launchSlot (0, 0);   // per-track exclusivity + starts the transport (audible)
+
+        startTimer (1500);   // let the transport roll and the launch handle advance to 'playing'
+    }
+
+    void finishSessionSelftest()
+    {
+        bool transportPlaying = false, slotHasClip = false, hasLaunchHandle = false, clipPlaying = false;
+
+        if (auto* t = session.getTransport())
+            transportPlaying = t->isPlaying();
+
+        if (auto* slot = session.getClipSlot (0, 0))
+            if (auto* c = slot->getClip())
+            {
+                slotHasClip = true;
+                if (auto lh = c->getLaunchHandle())
+                {
+                    hasLaunchHandle = true;
+                    clipPlaying = lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing;
+                }
+            }
+
+        if (auto* t = session.getTransport())
+            t->stop (false, false);
+
+        // PASS proves the launch PATH end-to-end: a born-audible clip created in a slot, launched,
+        // with the transport rolling AND the clip's launch handle actually in the playing state.
+        const bool pass = ssClipCreated && slotHasClip && hasLaunchHandle
+                          && transportPlaying && clipPlaying
+                          && session.getNumScenes() >= 16;
+
+        String report;
+        report << "mode=session" << newLine
+               << "numScenes="        << session.getNumScenes() << newLine
+               << "sessionColumns="   << sessionView.getNumColumns() << newLine
+               << "clipCreated="      << (ssClipCreated ? 1 : 0) << newLine
+               << "slotHasClip="      << (slotHasClip ? 1 : 0) << newLine
+               << "hasLaunchHandle="  << (hasLaunchHandle ? 1 : 0) << newLine
+               << "transportPlaying=" << (transportPlaying ? 1 : 0) << newLine
+               << "clipPlaying="      << (clipPlaying ? 1 : 0) << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine;
+
+        File::getSpecialLocation (File::tempDirectory)
+            .getChildFile ("forge_phase0_selftest.log")
+            .replaceWithText (report);
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
+    // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
+    // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
+    void populateDemoSession()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr)
+            return;
+
+        edit->ensureNumberOfAudioTracks (6);
+        session.ensureScenes (16);
+
+        auto tracks = te::getAudioTracks (*edit);
+        const char*  trackNames[] = { "Drums", "Bass", "Keys", "Lead", "Vox", "FX" };
+        const uint32 trackCols[]  = { 0xffe0625c, 0xff5c9fe0, 0xff5ce08f, 0xffe0c25c, 0xffb86ce0, 0xff5cd6e0 };
+
+        for (int i = 0; i < tracks.size() && i < 6; ++i)
+        {
+            tracks[i]->setName (trackNames[i]);
+            tracks[i]->setColour (Colour (trackCols[i]));
+        }
+
+        // Scatter born-audible MIDI clips across slots so the grid reads as a real session.
+        struct Cell { int track, scene; const char* name; };
+        const Cell cells[] = {
+            { 0, 0, "Beat A" }, { 0, 1, "Beat B" }, { 0, 3, "Fill" },
+            { 1, 0, "Sub" },    { 1, 2, "Walk" },
+            { 2, 1, "Pad" },    { 2, 3, "Stab" },   { 2, 4, "Chord" },
+            { 3, 2, "Hook" },   { 3, 5, "Solo" },
+            { 4, 0, "Verse" },  { 4, 3, "Chorus" },
+            { 5, 4, "Riser" }
+        };
+
+        for (auto& c : cells)
+            session.createMidiClipInSlot (c.track, c.scene, c.name);
+
+        // Launch scene 3 so the snapshot shows playing pads + an active scene row.
+        session.launchScene (3);
+    }
+
+    void beginScreenshot()
+    {
+        populateDemoSession();
+        sessionView.rebuild();    // pick up the new tracks/clips into columns + pads
+        startTimer (900);         // let the launched clips reach the playing state, then capture
+    }
+
+    void captureView (const String& name)
+    {
+        resized();
+        auto image = createComponentSnapshot (getLocalBounds());
+
+        auto file = File::getSpecialLocation (File::tempDirectory)
+                        .getChildFile ("forge_shot_" + name + ".png");
+        file.deleteFile();
+
+        if (auto out = std::unique_ptr<FileOutputStream> (file.createOutputStream()))
+        {
+            PNGImageFormat png;
+            png.writeImageToStream (image, *out);
+        }
+    }
+
+    void captureScreenshots()
+    {
+        sessionView.refreshSlotStates();   // push current pad states (playing/hasClip) before snapping
+
+        // The secondary views were bound before the demo tracks were added; re-bind so the Arrange/Mix
+        // snapshots reflect all demo tracks (not just the original track 0).
+        arrangeView.setEdit (nullptr);  arrangeView.setEdit (session.getEdit());
+        mixerView.setEdit (nullptr);    mixerView.setEdit (session.getEdit());
+
+        setViewMode (ViewMode::Session);   captureView ("session");
+        setViewMode (ViewMode::Arrange);   captureView ("arrange");
+        setViewMode (ViewMode::Mixer);     captureView ("mix");
+
+        if (auto* t = session.getTransport())
+            t->stop (false, false);
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     void swapProject (std::function<void()> doSwap)
     {
         PluginWindow::closeAll();    // plugin editors belong to the outgoing Edit
@@ -818,6 +1103,7 @@ private:
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
         mixerView.setEdit (nullptr);
+        sessionView.setEdit (nullptr);   // R4: stop the 25 Hz poll + drop state BEFORE the Edit is destroyed
         doSwap();
         clip = nullptr;
         rebind();
@@ -828,6 +1114,8 @@ private:
         controlBar.setEdit (session.getEdit());
         arrangeView.setEdit (session.getEdit());
         mixerView.setEdit (session.getEdit());
+        if (sessionViewBinds())
+            sessionView.setEdit (session.getEdit());
         repaint();
     }
 
@@ -852,6 +1140,20 @@ private:
 
     void timerCallback() override
     {
+        if (mode == SelfTest::screenshot)
+        {
+            stopTimer();
+            captureScreenshots();
+            return;
+        }
+
+        if (mode == SelfTest::session)
+        {
+            stopTimer();
+            finishSessionSelftest();
+            return;
+        }
+
         if (mode == SelfTest::record)
         {
             stopTimer();
@@ -882,8 +1184,15 @@ private:
 
         if (mode == SelfTest::playback)
         {
-            writePlaybackReport (playing);
-            JUCEApplication::getInstance()->systemRequestedQuit();
+            // Bounded poll (10 Hz): finish as soon as playback has demonstrably engaged, or after ~3s,
+            // so a slow-but-working device isn't failed by an unlucky fixed sample time.
+            const bool engaged = t != nullptr && (t->isPlaying() || t->getPosition().inSeconds() > 0.05);
+            if (engaged || ++playbackPollTicks >= 30)
+            {
+                stopTimer();
+                writePlaybackReport (t != nullptr && t->isPlaying());
+                JUCEApplication::getInstance()->systemRequestedQuit();
+            }
         }
     }
 
@@ -960,9 +1269,11 @@ public:
     {
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        const auto mode = commandLine.contains ("--selftest-record") ? SelfTest::record
-                        : commandLine.contains ("--selftest")        ? SelfTest::playback
-                                                                     : SelfTest::none;
+        const auto mode = commandLine.contains ("--screenshot")       ? SelfTest::screenshot
+                        : commandLine.contains ("--selftest-record")  ? SelfTest::record
+                        : commandLine.contains ("--selftest-session") ? SelfTest::session
+                        : commandLine.contains ("--selftest")         ? SelfTest::playback
+                                                                      : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
     }
 

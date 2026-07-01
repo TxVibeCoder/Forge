@@ -19,7 +19,7 @@ public:
     ControlBar();
 
     void setEdit (te::Edit*);
-    void setViewMode (int mode);          // 0 = Arrange, 1 = Mixer
+    void setViewMode (int mode);          // 0 = Session, 1 = Arrange, 2 = Mixer
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -42,7 +42,7 @@ private:
                      saveAsBtn { "Save As" }, importBtn { "Import" }, exportBtn { "Export" },
                      scanBtn { "Plugins" }, audioBtn { "Audio" };
     TransportBar transportBar;
-    juce::TextButton arrangeBtn { "Arrange" }, mixBtn { "Mix" };
+    juce::TextButton sessionBtn { "Session" }, arrangeBtn { "Arrange" }, mixBtn { "Mix" };
     juce::TextButton drawerBtn { "Editor" };
 
     int viewMode = 0;

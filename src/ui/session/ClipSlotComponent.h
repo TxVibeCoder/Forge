@@ -1,0 +1,77 @@
+/*
+    ClipSlotComponent — one clip-launch pad in the SessionView grid (the leaf component,
+    twin of ArrangeView's ClipComponent).
+
+    A pad renders the chrome for a single cell (trackIndex, sceneIndex) of the tracks×scenes
+    grid. Per the load-bearing threading rules (docs/devlog/session-design.md, R1), it holds
+    ONLY its grid coordinates, its track colour, a selection flag, the last visual state the
+    parent/poll PUSHED into it, and a display label. It NEVER caches a te::ClipSlot* / Clip*
+    pointer and NEVER reads the engine itself — the 25 Hz poll resolves a live slot each tick,
+    computes a SlotVisualState (SlotVisualState.h), and calls setVisualState() to push it here.
+
+    paint() draws the §(d) pad recipe (rounded laneBg base, track-colour@0.55 fill when the pad
+    has a clip, black@0.6 border, textPrim label, 2px accent outline when playing/queued/selected)
+    using ONLY ForgeLookAndFeel named colours and the one sanctioned laneBg literal.
+
+    Mouse intent is surfaced through null-guarded std::function callbacks; the parent (which knows
+    the resolved engine state) disambiguates launch vs. create vs. open.
+*/
+
+#pragma once
+
+#include <JuceHeader.h>
+
+#include "ui/session/SlotVisualState.h"
+#include "ui/session/SessionLayout.h"
+#include "ui/ForgeLookAndFeel.h"
+
+//==============================================================================
+/** A single clip-launch pad. Holds (trackIndex, sceneIndex) only — no cached engine pointer
+    (R1). Its display state is pushed in via setVisualState(); it never re-reads the engine. */
+class ClipSlotComponent : public juce::Component
+{
+public:
+    ClipSlotComponent (int trackIndex, int sceneIndex, juce::Colour trackColour);
+
+    /** Draws the pad chrome for the last-pushed SlotVisualState (§d). */
+    void paint (juce::Graphics&) override;
+
+    void mouseDown        (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    /** Stores the pushed state + label and repaints, but ONLY if either changed. Called by the
+        parent's poll on the message thread with a state derived from a freshly-resolved slot. */
+    void setVisualState (SlotVisualState newState, juce::String label);
+
+    /** Selection / keyboard-focus flag — rendered as the same 2px accent outline (§d). */
+    void setSelected (bool shouldBeSelected);
+    bool isSelected() const                  { return selected; }
+
+    /** Updates the pad's track colour (e.g. after a track recolour) and repaints if changed. */
+    void setTrackColour (juce::Colour newColour);
+
+    int getTrackIndex() const                { return trackIndex; }
+    int getSceneIndex() const                { return sceneIndex; }
+    SlotVisualState getVisualState() const    { return state; }
+
+    /** Fired on a left single-click (the parent decides: launch a filled slot, or create/import
+        into an empty one). */
+    std::function<void()> onClicked;
+    /** Fired on a left double-click (the parent opens a filled MIDI slot's clip in the drawer). */
+    std::function<void()> onDoubleClicked;
+    /** Fired on a right-click; param is the event for context-menu placement. */
+    std::function<void (const juce::MouseEvent&)> onRightClicked;
+
+private:
+    // R1: coordinates only — never a te::ClipSlot* / Clip*.
+    const int trackIndex;
+    const int sceneIndex;
+
+    juce::Colour trackColour;
+    bool selected = false;
+
+    SlotVisualState state = SlotVisualState::empty;   // last state pushed by the parent/poll
+    juce::String label;                               // clip name (or empty)
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipSlotComponent)
+};

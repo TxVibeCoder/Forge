@@ -40,6 +40,10 @@ target_sources(Forge PRIVATE
     src/ui/pianoroll/MidiNoteComponent.cpp
     src/ui/pianoroll/VelocityLane.cpp
     src/ui/mixer/MixerView.cpp
+    src/ui/session/ClipSlotComponent.cpp
+    src/ui/session/SceneColumnComponent.cpp
+    src/ui/session/TrackColumnComponent.cpp
+    src/ui/session/SessionView.cpp
     src/ui/plugins/PluginWindow.cpp
     src/ui/browser/BrowserView.cpp
     src/ui/detail/DetailView.cpp

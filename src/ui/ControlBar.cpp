@@ -6,8 +6,14 @@ using namespace juce;
 ControlBar::ControlBar()
 {
     for (auto* b : { &browserBtn, &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn,
-                     &scanBtn, &audioBtn, &arrangeBtn, &mixBtn, &drawerBtn })
+                     &scanBtn, &audioBtn, &sessionBtn, &arrangeBtn, &mixBtn, &drawerBtn })
         addAndMakeVisible (b);
+
+    // The view-switch buttons must NOT retain keyboard focus: otherwise Enter (SessionView's "launch the
+    // focused slot" key) would re-fire the focused button's click instead of reaching the grid (QC fix).
+    sessionBtn.setWantsKeyboardFocus (false);
+    arrangeBtn.setWantsKeyboardFocus (false);
+    mixBtn    .setWantsKeyboardFocus (false);
 
     addAndMakeVisible (transportBar);
 
@@ -23,8 +29,9 @@ ControlBar::ControlBar()
     scanBtn.onClick    = [this] { if (onScanPlugins) onScanPlugins(); };
     audioBtn.onClick   = [this] { if (onAudioSettings) onAudioSettings(); };
 
-    arrangeBtn.onClick = [this] { setViewMode (0); if (onViewMode) onViewMode (0); };
-    mixBtn.onClick     = [this] { setViewMode (1); if (onViewMode) onViewMode (1); };
+    sessionBtn.onClick = [this] { setViewMode (0); if (onViewMode) onViewMode (0); };
+    arrangeBtn.onClick = [this] { setViewMode (1); if (onViewMode) onViewMode (1); };
+    mixBtn.onClick     = [this] { setViewMode (2); if (onViewMode) onViewMode (2); };
 
     updateViewButtons();
 }
@@ -42,8 +49,9 @@ void ControlBar::setViewMode (int mode)
 
 void ControlBar::updateViewButtons()
 {
-    arrangeBtn.setToggleState (viewMode == 0, dontSendNotification);
-    mixBtn.setToggleState     (viewMode == 1, dontSendNotification);
+    sessionBtn.setToggleState (viewMode == 0, dontSendNotification);
+    arrangeBtn.setToggleState (viewMode == 1, dontSendNotification);
+    mixBtn.setToggleState     (viewMode == 2, dontSendNotification);
 }
 
 void ControlBar::showExportMenu()
@@ -71,11 +79,12 @@ void ControlBar::resized()
         r.removeFromLeft (3);
     }
 
-    // Right side, laid out from the right edge inward.
+    // Right side, laid out from the right edge inward: Editor | Mix | Arrange | Session.
     drawerBtn.setBounds (r.removeFromRight (62));
     r.removeFromRight (10);
-    mixBtn.setBounds (r.removeFromRight (52));
-    arrangeBtn.setBounds (r.removeFromRight (66));
+    mixBtn.setBounds (r.removeFromRight (48));
+    arrangeBtn.setBounds (r.removeFromRight (62));
+    sessionBtn.setBounds (r.removeFromRight (62));
     r.removeFromRight (12);
 
     transportBar.setBounds (r);   // center fills the remainder
