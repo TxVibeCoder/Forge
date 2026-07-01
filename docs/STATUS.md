@@ -1,18 +1,16 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-01 (this session: **W7 — MIDI record into Session clip slots** —
-a track can be MIDI record-armed and an empty slot on a MIDI-armed track can be captured (**Ctrl+Enter** or
-right-click **"Record into slot"**) → a live-played MIDI loop is recorded straight into that slot as a new
-born-audible (4OSC) `MidiClip`. Recording is **transport-driven** (`transport.record()`), not launch-driven —
-this is **verdict (A): direct `ClipSlot` recording**, now **empirically proven** by the new
-`--selftest-midi` gate. **Built + verified, committed as `160f6cc` + pushed** to `origin/main` (working tree
-clean, sanitized): clean MSVC Debug build (0 warnings); **all four selftests PASS** — `--selftest`,
-`--selftest-record`, `--selftest-session`, `--selftest-midi`. The prior session shipped **Session-grid
-vertical scroll** — the 16-scene grid scrolls Ableton-style with fixed ~46 px pads and a pinned scene column
-that tracks the pads; and an **app-wide logging + error-handling subsystem** (`src/core/Log.*`) with
-logging-at-the-seam a standing build principle (`8d15234`). The session before that shipped the **Session
-clip-launch grid** — the DEFAULT view (Session ∣ Arrange ∣ Mix) on Tracktion's Scene / ClipSlot /
-LaunchHandle; playable with mouse + keyboard, launch audible + bar-quantised).*
+*Living status document. Last updated 2026-07-01 (this session: **Wave 01 — six parallel feature seams**, Forge's
+first multi-CLI wave — **metronome + count-in · MIDI-learn (Ctrl+L) · buses/sends (A/B aux) · async export +
+progress · markers · anti-click clip edge-fade** — six file-disjoint CLI commits + orchestrator consolidation,
+**committed (tip `e3b8c7c`) + pushed** to `origin/main` (working tree clean, sanitized): clean MSVC Debug build
+(0 warnings); **all five selftests PASS** — `--selftest`, `--selftest-record`, `--selftest-session`,
+`--selftest-midi`, `--selftest-midilearn`; full record → [devlog/wave-01-features.md](devlog/wave-01-features.md).
+Earlier this session: **W7 — MIDI record into Session clip slots** (a MIDI-armed track captures an empty slot via
+**Ctrl+Enter** / right-click "Record into slot" → a live loop straight into a born-audible `MidiClip`;
+transport-driven, verdict A, proven by `--selftest-midi`; `160f6cc`), and **Session-grid vertical scroll** + an
+**app-wide logging + error-handling subsystem** (`src/core/Log.*`, logging-at-the-seam a standing build
+principle; `8d15234`).)*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*

@@ -183,6 +183,26 @@ forge/
 └── docs/
 ```
 
+> **As-built seam inventory (kept current with the code).** The layout above is the original plan; the
+> shipped `src/` tree groups its non-RT machinery into a small set of seams (views route engine ops through
+> these rather than making raw `te::` calls):
+> - **`services/files/ProjectSession`** — owns the Edit (create/open/save/import; `createMidiClip`), plus the
+>   **aux buses / sends** seam (`ensureAuxBus`, `addOrUpdateAuxSend`, `getAuxReturnTrack` — an aux bus is a plain
+>   `AudioTrack` hosting an `AuxReturnPlugin`) and the **markers / cue points** seam (`addMarker` / `moveMarker` /
+>   `renameMarker` / `removeMarker` / `getMarkers`, keyed by stable `te::EditItemID`).
+> - **`services/export/Exporter`** — WAV mixdown + per-track stems, with **async** off-message-thread variants
+>   (`renderEditToWavAsync` / `renderStemsAsync`, progress + cancel) alongside the preserved sync API.
+> - **`engine/`** — `EngineHelpers` · `RecordController` · `PluginHost` (incl. the 4OSC seam) · `PluginScanner`,
+>   plus **`Metronome`** (engine click + native count-in), **`MidiLearn`** (CC→param over Tracktion's native
+>   `ParameterControlMappings`), and **`ClipFades`** (automatic short linear edge-fade — anti-click on imported audio).
+> - **`ui/`** — the views (session/ · arrange/ · mixer/ · pianoroll/ · plugins/ · browser/ · transport/ · detail/),
+>   plus **`ui/markers/MarkerBar`** (the timeline cue-point strip) and **`ui/export/ExportProgress`** (the
+>   async-export progress + cancel panel).
+>
+> **Headless verification** is **five** PASS/FAIL selftests — `--selftest` (playback), `--selftest-record`,
+> `--selftest-session`, `--selftest-midi`, `--selftest-midilearn` — plus `--screenshot` (renders each view to a
+> PNG; not a gate). Field contracts in [`../tests/SELFTEST.md`](../tests/SELFTEST.md).
+
 ---
 ## 11. Build roadmap
 

@@ -123,6 +123,37 @@ notes.
 > (`capturedNoteCount == notesInjected == 4`, `preExistingNotes == 0`), the first in-engine proof that Forge
 > records MIDI directly into a Session `ClipSlot` (verdict A).
 
+## `Forge --selftest-midilearn` (MIDI-learn CC → plugin param bind)
+
+The acceptance gate for **Wave 01 P2 — MIDI-learn** (design: [../docs/devlog/wave-01-features.md](../docs/devlog/wave-01-features.md)).
+First runtime proof that the `MidiLearn` seam binds a MIDI CC to a plugin parameter over Tracktion's native
+`ParameterControlMappings` **with no focused Edit** — the crux of the seam's design (the default `te::UIBehaviour`
+returns a null focused Edit, so the seam drives an *explicit* Edit's mappings). Injection goes **through the seam**
+(`MidiLearn::handleIncomingController`), not a virtual MIDI device — a virtual device's CC never reaches the
+engine's controller parser, so the seam is the same entry a real MIDI-input listener would use.
+
+- Ensures a born-audible 4OSC on track 0 and picks its first automatable param (`Tune 1`).
+- Arms a learn on that param, then injects **CC 74 / channel 1** through `handleIncomingController`.
+- Yields for the native `AsyncUpdater` bind, then asserts the param is mapped to exactly CC 74 / channel 1.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `wasMappedBefore` | param already mapped before the learn | **0** |
+| `learnArmed` | 1 if `beginLearn` armed on the target param | 1 |
+| `isMappedAfter` | 1 if the param is mapped after injecting the CC | 1 |
+| `mappedCc` | the CC number the param bound to | **74** |
+| `mappedChannel` | the MIDI channel the param bound to | **1** |
+
+### PASS criteria (all must hold)
+```
+learnArmed && wasMappedBefore == 0 && isMappedAfter && mappedCc == 74 && mappedChannel == 1
+```
+
+> Verified 2026-07-01: **PASS** — the param binds to exactly CC 74 / ch 1 with no focused Edit. **Mode-detection
+> note:** the parse ternaries check `--selftest-midilearn` **before** `--selftest-midi` (the latter is a substring
+> of the former). **Not covered headlessly:** completion from *real hardware* CC — the deferred `ForgeUIBehaviour`
+> / MIDI-input-listener follow-up; this gate proves the seam's bind, and Ctrl+L arms it live in the app.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

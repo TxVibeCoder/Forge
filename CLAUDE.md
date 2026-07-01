@@ -175,7 +175,7 @@ orchestrator decides push timing at consolidation.
 **Orchestrator runbook.** *Start:* write the README + packets (disjoint territories, max 2/file), record the
 baseline hash + selftest floor, launch the CLIs. *Runs:* CLIs verify → edit → self-review → scoped-commit →
 `P#-results.md` → one-line status. *Consolidation* (after all report DONE/ABSTAIN/SKIPPED): apply the flagged
-`main.cpp`/CMake/seam wiring, run the **single integration build + the four-selftest floor** against the baseline,
+`main.cpp`/CMake/seam wiring, run the **single integration build + the selftest floor** against the baseline,
 fix regressions, then the consolidation commit (docs/devlog), **sanitize**, and push.
 
 ---

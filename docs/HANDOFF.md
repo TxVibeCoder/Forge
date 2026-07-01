@@ -6,8 +6,9 @@
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
 **`main`**. **Wave 01 shipped this session: six file-disjoint feature CLIs (P1–P6) each landed a scoped commit,
-and the orchestrator (P7) consolidation is COMMITTED as `17d335c` (this docs commit sits on top) and PUSHED to
-`origin/main`; working tree clean, sanitized before the push. Baseline before the wave was `6100fb9`.** Last
+and the orchestrator (P7) consolidation + the `--selftest-midilearn` gate are COMMITTED and PUSHED to
+`origin/main` — **current tip `e3b8c7c`**; working tree clean, sanitized before the push. Baseline before the
+wave was `6100fb9`.** Last
 build **clean** (MSVC Debug, 0 warnings) · **all five selftests PASS** — `--selftest`, `--selftest-record`,
 `--selftest-session`, `--selftest-midi`, `--selftest-midilearn` — on the final binary; `--screenshot` renders. Six features shipped:
 **metronome + count-in, MIDI-learn, buses/sends (aux A/B), async export + progress, markers, anti-click
@@ -37,7 +38,7 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 Forge's **first flat parallel multi-CLI wave**: six file-disjoint feature CLIs (P1–P6) built against
 contract-first seams and each committed a scoped commit, then the orchestrator (P7) implemented the two shared
 `ProjectSession` seams, wired everything into the single integration build, and ran adversarial QC. All
-**built + verified + COMMITTED (`17d335c` + this docs commit) + PUSHED** to `origin/main` (working tree clean;
+**built + verified + COMMITTED (tip `e3b8c7c`) + PUSHED** to `origin/main` (working tree clean;
 sanitized before the push). Full record: [devlog/wave-01-features.md](devlog/wave-01-features.md).
 
 - **P1 metronome + count-in** (`096c9bd`): `engine/Metronome` seam over the engine's `Edit::clickTrackEnabled`
@@ -119,7 +120,8 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> Wave 01 (six feature seams) is **committed (`17d335c` + this docs commit) + pushed** (sanitized). The flagged
+> Wave 01 (six feature seams + the `--selftest-midilearn` gate) is **committed (tip `e3b8c7c`) + pushed**
+> (sanitized). The flagged
 > next items are the manual GUI smoke pass of the new gestures, the **deferred Wave-01 follow-ups**, and then the
 > control-surface layer.
 
@@ -219,15 +221,16 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **This session IS committed + pushed.** W7 (MIDI record into Session slots) is committed as `160f6cc` and
-  pushed to `origin/main` (previous tip `2589c42`); the working tree is **clean** and the pushed set was
-  **sanitized** (a privacy scan found no real email / personal `C:\Users\…` paths / private side-project names).
+- **Latest work IS committed + pushed.** Wave 01 (six feature seams + the `--selftest-midilearn` gate) is at
+  `origin/main @ e3b8c7c`; the working tree is **clean** and the pushed set was **sanitized** — and this is a
+  live discipline, not a formality: the **P6 CLI caught + scrubbed a stray "ClipKit" sibling-project name in a
+  comment before its commit**, which would have been the first private-project-name leak into the public repo.
   **Public repo = sanitize before every push** (pseudonymous TxVibeCoder — keep the real email / personal
-  `C:\Users\…` paths / prior-project names
-  out; note `.gitignore` now excludes `*.log` / `forge.log*` so the log sink never gets committed). History was
-  rewritten once (a prior session) to scrub a stray path; `git-filter-repo` isn't on PATH here, so run
-  **`python -m git_filter_repo`** if it's ever needed again (it drops the `origin` remote as a safety step —
-  re-add it before pushing). Submodules are clean.
+  `C:\Users\…` paths / prior-project names out). `.gitignore` excludes `*.log` / `forge.log*` (the log sink never
+  gets committed) and `wave-*-cli-prompts/` (the wave packets embed machine-local paths → stay local). History
+  was rewritten once (a prior session) to scrub a stray path; `git-filter-repo` isn't on PATH, so run
+  **`python -m git_filter_repo`** if ever needed (it drops the `origin` remote — re-add before pushing).
+  Submodules are clean.
 
 ---
 
@@ -249,6 +252,16 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   routes its failure paths through `src/core/Log.*` (`FORGE_LOG_ERROR/WARN/INFO/DEBUG`) — **never** on the
   audio/RT thread, **never** per-tick in a poll/paint, autosave only on `save() == false`. The principle +
   cheat-sheet + a new-feature checklist live in [LOGGING.md](LOGGING.md); read it before adding a feature.
+- **Multi-CLI parallel waves — the scaled build pattern (established this session).** For a file-disjoint feature
+  set, the orchestrator writes per-CLI **handoff packets** in `wave-<N>-cli-prompts/` (gitignored — they embed
+  local paths): a `README` control doc + one self-contained `P#-<slug>.md` per CLI (its territory, "take-as-given"
+  facts, *propose-don't-edit* for shared files, scoped commits, and **CLIs do NOT build**) + a `P#-consolidation`
+  packet for the orchestrator role (owns `main.cpp`/`CMakeLists`/`ProjectSession`; runs the single build + the
+  five-selftest floor + adversarial QC + docs + sanitize + push). Full rule: **`CLAUDE.md` → Wave Orchestration
+  Rule**. **Wave 01 shipped six features this way** (~35 min of parallel build vs. ~2 h serial); the CLAUDE.md
+  nested-comment gotcha caught its own predicted bug at consolidation, and QC caught two integration UAFs no
+  single CLI could see. No `.wave-active` sentinel (Forge has no auto-sync) — the load-bearing guard is **scoped
+  commits** (`git add -- <paths>` **and** `git commit -- <paths>`, never `-A`).
 
 ---
 
@@ -270,6 +283,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 
 ## Key references
 
+- **[../CLAUDE.md](../CLAUDE.md)** — the working agreement: tenets, engineering principles, build discipline, the
+  Forge gotchas, and the multi-CLI **Wave Orchestration Rule** (auto-loaded by Claude Code; linked here for humans).
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [devlog/midi-record-design.md](devlog/midi-record-design.md) — **the W7 MIDI-slot-record design + the frozen recipe (this session)**.

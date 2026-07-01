@@ -17,7 +17,7 @@ The **Session clip-launch grid** — the primary, scene-based surface from DIREC
 QC'd, and verified**: an Ableton-style tracks × scenes grid on Tracktion's `ClipSlot` / `Scene` /
 `LaunchHandle`, playable with mouse + keyboard, with audible bar-quantised launch. It rides on top of
 the arrangement-first foundation (Phases 0–4 + a MIDI MVP + piano-roll), whose clips / instruments /
-piano-roll / mixer now live inside slots and scenes. Building clean; **all four headless self-tests
+piano-roll / mixer now live inside slots and scenes. Building clean; **all five headless self-tests
 PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 
 **What works today:**
@@ -35,12 +35,19 @@ PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
   lazily on first arm.
 - **MIDI** — MIDI clips on any track, **born audible** via a default **4OSC** synth at the head
   of the chain; a **piano-roll** editor (draw / move / resize / delete, **velocity lane**,
-  **multi-select**, **copy/paste**). Draw a clip and hear it.
+  **multi-select**, **copy/paste**). Draw a clip and hear it. **Record MIDI straight into a Session
+  slot** — arm a track, then **Ctrl+Enter** (or right-click ▸ "Record into slot") on an empty pad
+  captures a live loop into it as a born-audible `MidiClip`. **MIDI-learn** (**Ctrl+L**) binds a CC
+  to a track ▸ plugin ▸ param over Tracktion's native mappings.
 - **Mixer** — channel strips (dB fader, pan, mute/solo, colour), per-track **plugin inserts**
-  (bypass + reorder), a master strip with a post-fader meter.
+  (bypass + reorder), per-track **A/B aux sends** feeding **aux-return strips**, a master strip with
+  a post-fader meter.
 - **Plugins** — built-in effects + **VST3/AU** scanning & hosting, with floating editor windows.
 - **Browser** (file tree, double-click to import) and a **clip Inspector** (name/gain/fades/waveform).
-- **Export** — WAV mixdown + per-track **stems**.
+- **Metronome** — an engine **click** with a native **count-in** (TransportBar toggle + count-in selector).
+- **Markers** — a timeline marker strip: add / move / rename / delete cue points, click to jump the transport.
+- **Export** — WAV mixdown + per-track **stems**, now **async / off the message thread** with a
+  progress + cancel panel (mixdown and stems both).
 - **Logging + error handling** — an app-wide logger (`src/core/Log.*`) with a crash handler, level macros,
   and a rolling file sink at `%APPDATA%\Forge\logs\forge.log` (plus stderr); logging fallible seams as you
   build them is a standing build principle ([`docs/LOGGING.md`](docs/LOGGING.md)).
@@ -48,8 +55,9 @@ PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 **Coming next (per DIRECTION.md):** a device-agnostic **control-surface layer** so real grid
 controllers (Launchpad, APC40 mkII) drive the grid — a "one day" hardware goal; the grid is fully
 playable with mouse + keyboard without it, and the on-screen pad model already emits the LED encoding
-a driver would push. Plus richer MIDI input (note-record into clips, MIDI-learn, MIDI-clock / Ableton
-Link). *(The 16-scene-rows-vs-window layout question is settled — vertical scroll shipped.)*
+a driver would push. Plus richer MIDI sync (MIDI-clock / Ableton Link). *(The 16-scene-rows-vs-window
+layout question is settled — vertical scroll shipped; MIDI-learn and note-record-into-clips have shipped
+— see "What works today".)*
 
 A to-scale **UI mockup set** of the envisioned product lives in [`mockups/`](mockups/) (open
 `mockups/preview/forge-ui-storyboard.png`).
@@ -70,6 +78,12 @@ cmake --build build --config Debug
   playhead, writes a PASS/FAIL report to `%TEMP%\forge_phase0_selftest.log`, quits.
 - `Forge --selftest-record` — opens the input lazily, arms + records ~1 s, verifies a real take
   was captured to disk (reports a device diagnostic if the box exposes no capture endpoint).
+- `Forge --selftest-session` — grows the grid, launches a born-audible clip in a slot, verifies the
+  launch handle reaches `playing` with the transport rolling (proves clip launch is audible).
+- `Forge --selftest-midi` — arms an empty slot, injects notes while rolling, verifies they land
+  **exactly** in a new `MidiClip` in that slot (W7 slot-record gate; zero hardware).
+- `Forge --selftest-midilearn` — arms a learn on a plugin param, injects a CC through the `MidiLearn`
+  seam, verifies the param binds to exactly that CC / channel with no focused Edit.
 
 See [`tests/SELFTEST.md`](tests/SELFTEST.md) for the full field contract.
 
@@ -83,12 +97,15 @@ forge/
 │   ├── main.cpp                # ForgeApplication (owns the Engine) + MainComponent (shell)
 │   ├── core/                   # Log — app-wide logger + crash handler (file sink + stderr, FORGE_LOG_* macros)
 │   ├── services/
-│   │   ├── files/              # ProjectSession — owns the Edit; create/open/save/import; createMidiClip
-│   │   └── export/             # Exporter — WAV mixdown + per-track stems
+│   │   ├── files/              # ProjectSession — owns the Edit; create/open/save/import; createMidiClip; aux + marker seams
+│   │   └── export/             # Exporter — WAV mixdown + per-track stems (sync + async)
 │   ├── engine/                 # EngineHelpers · RecordController · PluginHost (incl. 4OSC seam) · PluginScanner
+│   │                           #   · Metronome (click + count-in) · MidiLearn (CC→param) · ClipFades (edge anti-click)
 │   └── ui/
 │       ├── ForgeLookAndFeel.h  # dark amber theme (all colours via colour IDs)
 │       ├── ControlBar · transport/ · arrange/ · mixer/ · plugins/ · browser/ · detail/
+│       ├── markers/            # MarkerBar — timeline cue-point strip (add/move/rename/delete, jump transport)
+│       ├── export/             # ExportProgress — async-export progress + cancel panel
 │       ├── pianoroll/          # PianoRollView + MidiNoteComponent + VelocityLane
 │       └── session/            # PRIMARY view: SessionView clip grid + Track/Scene columns + ClipSlot pad
 ├── docs/                       # DIRECTION (the brief) · STATUS · ARCHITECTURE · INTERFACE · FEATURE_CATALOG · devlog/
@@ -108,5 +125,6 @@ forge/
 - **Interactive UI not headlessly verified** — the full shell builds and constructs in the
   selftest, but menus / drag / the MIDI draw→play path need a manual pass (the dev-built window
   can't be GUI-driven headlessly).
-- Export (mixdown + stems) currently blocks the message thread (fine for short edits).
+- **MIDI-learn** arms and binds (Ctrl+L), but routing a *real* hardware CC to the bound param is a
+  deferred follow-up (the seam binds; the live-hardware listener is not yet wired).
 - Beat-based looped-clip waveform rendering and timeline zoom/scroll are later adds.
