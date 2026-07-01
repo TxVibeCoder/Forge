@@ -48,6 +48,23 @@ namespace PluginHost
         built-ins (volume&pan, level meter) so the UI only shows real inserts. */
     juce::Array<te::Plugin*> getTrackInserts (te::AudioTrack& track);
 
+    /** One automatable parameter exposed for a MIDI-learn / mapping target picker: its display name
+        (the plugin-local parameter name, e.g. "Frequency") plus the live parameter pointer the
+        binding is made against. The pointer is owned by the plugin — valid only while the plugin
+        lives; the caller must not outlive it (message-thread, transient use). */
+    struct LearnableParam
+    {
+        juce::String name;
+        te::AutomatableParameter* param = nullptr;
+    };
+
+    /** Lists a plugin's automatable parameters as (name, parameter*) pairs, in the plugin's own
+        parameter order — the candidate targets a "Learn" UI offers for CC mapping. Read-only and
+        additive: it does not touch the plugin or the chain. Excludes any null entries; includes
+        both active and inactive parameters (the caller can filter on AutomatableParameter state if
+        it wants to grey out inactive ones, mirroring Tracktion's own mappings menu). */
+    juce::Array<LearnableParam> getAutomatableParameters (te::Plugin& plugin);
+
     /** Removes a plugin from its parent and fully deletes it from the Edit (closing any
         editor window first via PluginWindow). */
     void removePlugin (te::Plugin&);

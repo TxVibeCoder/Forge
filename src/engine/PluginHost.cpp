@@ -260,6 +260,22 @@ namespace PluginHost
     }
 
     //==============================================================================
+    juce::Array<LearnableParam> getAutomatableParameters (te::Plugin& plugin)
+    {
+        Array<LearnableParam> params;
+
+        // Plugin is an AutomatableEditItem; getAutomatableParameters() returns the plugin's flat
+        // parameter list (tracktion_AutomatableEditItem.cpp:32). getParameterName() is the
+        // plugin-local name (tracktion_AutomatableParameter.h:49) — right for a per-plugin picker
+        // (getFullName() would prepend "track / plugin /").
+        for (auto* p : plugin.getAutomatableParameters())
+            if (p != nullptr)
+                params.add ({ p->getParameterName(), p });
+
+        return params;
+    }
+
+    //==============================================================================
     void removePlugin (te::Plugin& plugin)
     {
         // Close any editor window we opened for it first so the window doesn't outlive the
