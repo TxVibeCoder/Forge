@@ -154,6 +154,49 @@ learnArmed && wasMappedBefore == 0 && isMappedAfter && mappedCc == 74 && mappedC
 > of the former). **Not covered headlessly:** completion from *real hardware* CC — the deferred `ForgeUIBehaviour`
 > / MIDI-input-listener follow-up; this gate proves the seam's bind, and Ctrl+L arms it live in the app.
 
+## `Forge --selftest-midiinput` (focused-Edit MIDI-learn hardware routing)
+
+The acceptance gate for **W02 item 2a — MIDI-learn hardware routing** (design:
+[../docs/devlog/wave-02-features.md](../docs/devlog/wave-02-features.md)). Asserts the `ForgeUIBehaviour`
+`te::UIBehaviour` subclass reports the app's open Edit as the **focused Edit** (the missing link the engine's
+native CC→param routing keys off — the default returned null), and that a CC→param bind lands through it. This
+closes the Wave-01 deferral so a focused Edit exists for the engine's `ParameterControlMappings` to route into.
+
+**Asserts (both must hold):** `ForgeUIBehaviour::getLastFocusedEdit()` reports the app's open Edit, and a
+CC→param bind lands through that focused-Edit path.
+
+> **Not covered headlessly:** a real hardware CC actually driving a param — a `VirtualMidiInputDevice` has NO
+> `controllerParser` (only `PhysicalMidiInputDevice` does), so the physical-CC path is a **real-hardware smoke
+> item**. This gate proves the focused-Edit plumbing the routing depends on.
+
+## `Forge --selftest-controlsurface` (Forge-native grid control surface)
+
+The acceptance gate for **W02 item 3 — the Forge-native control surface** (design:
+[../docs/devlog/wave-02-features.md](../docs/devlog/wave-02-features.md)). Proves the driver seam end-to-end with
+**zero hardware**: a virtual pad-press launches slot `(0,0)` (via `ProjectSession::launchSlot` directly — Option
+B, since Tracktion's `ControlSurface` clip-launch is an unwired `std::function`), and one LED poll emits the exact
+expected note-on from `SlotVisualState::toPadFeedback`.
+
+**Asserts (both must hold):** a virtual pad-press launches slot `(0,0)`, and one LED poll emits the exact expected
+note-on for that pad.
+
+> **Not covered headlessly:** the real-device byte mapping / LED palette — the Launchpad driver is built to the
+> published MIDI spec with no hardware on hand, so the exact bytes are a **real-hardware smoke item**.
+
+## `Forge --selftest-lufs` (offline BS.1770-4 loudness)
+
+The acceptance gate for **W02 item 4 — offline LUFS** (design:
+[../docs/devlog/wave-02-features.md](../docs/devlog/wave-02-features.md)). Runs the self-contained BS.1770-4
+integrated-loudness analyzer (K-weighting biquads, 400 ms/75%-overlap gating, −70 LUFS abs + −10 LU rel gates) on
+a known signal and checks it against the spec reference: a mono full-scale 1 kHz sine measures **−3.00 LUFS**.
+
+**Asserts:** the analyzer's integrated loudness for a mono full-scale 1 kHz sine is **−3.00 LUFS within ±0.5 LU**.
+
+> The ±0.5 LU tolerance is the BS.1770-4 reference-signal check. **Live master LUFS is not offered:** the
+> read-only `tracktion_engine` submodule exposes no post-fader sample tap and JUCE sums secondary callbacks, and
+> integrated loudness is a whole-program measurement — so the analysis runs on the export render (offline), which
+> is the correct tool. The measured integrated LUFS is surfaced in the export-done status strip.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a
