@@ -39,7 +39,8 @@ enum class SlotVisualState
     queued,     // clip queued to start playing (playQueued)
     playing,    // clip playing, not queued
     stopping,   // clip queued to stop (stopQueued)
-    recArmed    // track is record-armed (derived from track arm, not the launch handle)
+    recArmed,   // track is record-armed (derived from track arm, not the launch handle)
+    recording   // this slot is the one currently CAPTURING MIDI (dominates all clip/queue states)
 };
 
 //==============================================================================
@@ -50,13 +51,22 @@ enum class SlotVisualState
                              while playing, so getQueuedStatus() (spin_mutex-guarded) is read only
                              when true — empty/stopped pads skip the lock entirely (§e).
     @param armed             whether the owning track is record-armed.
+    @param recordingHere     whether THIS slot is the one currently capturing MIDI. DOMINATES all
+                             clip/queue/arm states — checked FIRST so a mid-capture pad reads "hot"
+                             regardless of any clip that may already resolve in the slot.
 
-    Mapping (§d): empty when no clip. With a clip, queued/stopping take priority over the play
-    state (only read while transportRunning); otherwise playing vs has-clip. rec-armed applies
-    only to an empty pad on an armed track (an armed track with a clip still shows its clip state).
+    Mapping (§d): recording dominates (checked first). Otherwise empty when no clip. With a clip,
+    queued/stopping take priority over the play state (only read while transportRunning); otherwise
+    playing vs has-clip. rec-armed applies only to an empty pad on an armed track (an armed track
+    with a clip still shows its clip state).
 */
-inline SlotVisualState computeSlotState (te::ClipSlot* slot, bool transportRunning, bool armed)
+inline SlotVisualState computeSlotState (te::ClipSlot* slot, bool transportRunning,
+                                         bool armed, bool recordingHere)
 {
+    // recording DOMINATES every other state for this one pad (§1d): checked FIRST.
+    if (recordingHere)
+        return SlotVisualState::recording;
+
     if (slot == nullptr)
         return armed ? SlotVisualState::recArmed : SlotVisualState::empty;
 
@@ -141,6 +151,7 @@ inline PadFeedback toPadFeedback (int trackIndex, int sceneIndex,
         case SlotVisualState::playing:   fb.colourIdx = trackHueIdx(); fb.state = 2; break;  // hue, pulse
         case SlotVisualState::stopping:  fb.colourIdx = trackHueIdx(); fb.state = 1; break;  // hue, blink
         case SlotVisualState::recArmed:  fb.colourIdx = redHueIdx;     fb.state = 0; break;  // red, solid
+        case SlotVisualState::recording: fb.colourIdx = redHueIdx;     fb.state = 2; break;  // red, pulse
         default:                         fb.colourIdx = 0;             fb.state = 0; break;
     }
 

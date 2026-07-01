@@ -78,7 +78,8 @@ void ClipSlotComponent::paint (Graphics& g)
     const auto b = getLocalBounds().toFloat().reduced ((float) SessionLayout::slotPad);
     constexpr float corner = 3.0f;
 
-    const bool hasClip  = (state != SlotVisualState::empty && state != SlotVisualState::recArmed);
+    const bool hasClip  = (state != SlotVisualState::empty && state != SlotVisualState::recArmed
+                                                           && state != SlotVisualState::recording);
     const bool queued   = (state == SlotVisualState::queued || state == SlotVisualState::stopping);
     const bool playing  = (state == SlotVisualState::playing);
 
@@ -97,6 +98,15 @@ void ClipSlotComponent::paint (Graphics& g)
         // Empty pad on an armed track: a record-tinted target so the column reads as "armed".
         g.setColour (Colour (ForgeLookAndFeel::recordRed).withAlpha (0.85f));
         g.drawRoundedRectangle (b.reduced (3.0f), corner, 1.5f);
+    }
+    else if (state == SlotVisualState::recording)
+    {
+        // The ONE slot currently capturing: a FILLED pulsing-red body (distinct from recArmed's
+        // thin outline) so a mid-capture pad reads unmistakably "hot". Solid fill + a heavier ring.
+        g.setColour (Colour (ForgeLookAndFeel::recordRed).withAlpha (0.45f));
+        g.fillRoundedRectangle (b, corner);
+        g.setColour (Colour (ForgeLookAndFeel::recordRed));
+        g.drawRoundedRectangle (b.reduced (1.5f), corner, 2.0f);
     }
 
     // Border (black @ 0.6, mirrors ClipComponent).

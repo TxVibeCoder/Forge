@@ -17,6 +17,7 @@
 #include "engine/EngineHelpers.h"
 #include "engine/RecordController.h"
 #include "engine/PluginScanner.h"
+#include "engine/PluginHost.h"
 #include "ui/arrange/ArrangeView.h"
 #include "ui/mixer/MixerView.h"
 #include "ui/plugins/PluginWindow.h"
@@ -31,7 +32,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot };
+enum class SelfTest { none, playback, record, session, screenshot, midi };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
@@ -377,6 +378,7 @@ public:
                 {
                     EngineHelpers::ensureRecordingInputOpen (engine);
                     recorder.enableInputs();
+                    recorder.disarmMidiTrack (*ed, track);   // v1: audio/MIDI arm mutually exclusive per track
                 }
 
                 const bool ok = arm ? recorder.armFirstInputToTrack (*ed, track)
@@ -392,6 +394,82 @@ public:
                 arrangeView.refreshArmStates();
             }
         };
+
+        // ---- W7: MIDI record into Session slots (docs/devlog/midi-record-design.md) ----
+        // ProjectSession delegates the RecordController MIDI calls through these injected seams, so it
+        // keeps no hard RecordController dependency (both are MainComponent members, same lifetime).
+        session.recorderArmSlot     = [this] (te::Edit& e, te::ClipSlot& s) { return recorder.armFirstMidiInputToSlot (e, s); };
+        session.recorderDisarmSlot  = [this] (te::Edit& e, te::ClipSlot& s) { return recorder.disarmSlot (e, s); };
+        session.recorderIsSlotArmed = [this] (te::Edit& e, te::ClipSlot& s) { return recorder.isSlotMidiArmed (e, s); };
+
+        sessionView.isTrackMidiArmed = [this] (te::AudioTrack& t)
+        {
+            auto* ed = session.getEdit();
+            return ed != nullptr && recorder.isTrackMidiArmed (*ed, t);
+        };
+
+        sessionView.onMidiArmToggled = [this] (te::AudioTrack& track, bool arm)
+        {
+            if (auto* ed = session.getEdit())
+            {
+                if (arm)
+                {
+                    EngineHelpers::ensureRecordingInputOpen (engine);
+                    recorder.enableMidiInputs();
+                    recorder.disarmTrack (*ed, track);   // v1: mutual exclusion with the audio arm
+                }
+
+                const bool ok = arm ? recorder.armFirstMidiInputToTrack (*ed, track)
+                                    : recorder.disarmMidiTrack (*ed, track);
+
+                if (! ok)
+                {
+                    setStatusMessage ((arm ? "MIDI arm failed: " : "MIDI disarm failed: ") + recorder.getLastError());
+                    FORGE_LOG_ERROR ((arm ? "MIDI arm failed: " : "MIDI disarm failed: ") + recorder.getLastError());
+                }
+
+                sessionView.refreshArmStates();
+                arrangeView.refreshArmStates();
+            }
+        };
+
+        sessionView.onSlotRecord = [this] (int t, int s)
+        {
+            // Slot capture is slot-ONLY: drop any track-level MIDI record target first, otherwise the
+            // notes would ALSO land as a linear clip on the track (both targets are recordEnabled).
+            if (auto* ed = session.getEdit())
+            {
+                auto tracks = te::getAudioTracks (*ed);
+                if (t >= 0 && t < tracks.size())
+                    if (auto* track = tracks[t])
+                        recorder.disarmMidiTrack (*ed, *track);
+            }
+
+            if (! session.recordArmSlot (t, s))
+            {
+                // recordArmSlot's engine-arm failure sets recorder.getLastError(); its internal early
+                // returns (slot/track unresolvable) log their own reason and leave the recorder error
+                // empty — so fall back to a generic message rather than surfacing a stale one.
+                const auto err = recorder.getLastError();
+                const auto msg = err.isEmpty() ? String ("Slot record-arm failed — see the log")
+                                               : "Slot record-arm failed: " + err;
+                setStatusMessage (msg);
+                FORGE_LOG_ERROR (msg);
+                return;
+            }
+
+            session.beginSlotRecord (t, s);
+            sessionView.refreshArmStates();
+        };
+
+        sessionView.onSlotRecordStop = [this] (int t, int s)
+        {
+            if (session.commitSlotRecord (t, s) != nullptr)
+                session.save();
+            sessionView.rebuild();   // the captured clip now resolves in the slot; refresh grid + arm tints
+        };
+
+        sessionView.isSlotRecording = [this] (int t, int s) { return session.isSlotRecording (t, s); };
 
         arrangeView.setEdit (session.getEdit());
         mixerView.setEdit (session.getEdit());
@@ -420,6 +498,14 @@ public:
             // Yield to the message loop, then create + launch a clip in a slot and confirm it
             // becomes audible (the launcher playback path engages). See finishSessionSelftest().
             MessageManager::callAsync ([this] { beginSessionSelftest(); });
+        }
+        else if (mode == SelfTest::midi)
+        {
+            // Headless synthetic-MIDI capture-into-slot gate (verdict-A proof). Event-driven like the
+            // record selftest: create a virtual MIDI in → yield → enable → yield → arm slot (0,0) + roll →
+            // yield → inject note-ons → yield → note-offs → yield → stop + verify. See §4 of
+            // docs/devlog/midi-record-design.md.
+            MessageManager::callAsync ([this] { beginSelfTestMidi(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -521,6 +607,19 @@ private:
     int  rcInputChansAfter = 0;// active input channels on that device AFTER the attempt
     int  recordPhase = 0;      // record-selftest state machine: 1 = input opened, 2 = recording
     int  playbackPollTicks = 0;// playback-selftest bounded poll: 10 Hz ticks elapsed
+
+    // --selftest-midi state machine (event-driven; mirrors the record selftest's yield discipline).
+    static constexpr const char* kSelfTestMidiName = "Forge SelfTest MIDI";
+    int  miPhase = 0;                                   // 1=created 2=enabled 3=armed+rolling 4=on 5=off
+    te::VirtualMidiInputDevice* miDevice = nullptr;     // the virtual MIDI in we inject through (engine-owned)
+    String miAvailableMidiIns;                          // MIDI-in device names after create (diagnostic)
+    bool miDeviceEnabled   = false;
+    bool miSlotArmed       = false;                     // slot (0,0) became a MIDI record target
+    bool miRecordingStarted = false;
+    int  miNotesInjected   = 0;
+    int  miPreExistingNotes = -1;                       // notes in slot (0,0) BEFORE capture (must be 0)
+    bool miClipCreated     = false;
+    int  miCapturedNotes   = 0;
 
     ControlBar controlBar;
     TimelineView timelineView;
@@ -1094,6 +1193,216 @@ private:
     }
 
     //==============================================================================
+    // --selftest-midi (docs/devlog/midi-record-design.md §4): prove MIDI capture straight into a Session
+    // ClipSlot with ZERO hardware, by creating a virtual MIDI input, arming slot (0,0), rolling the
+    // transport, injecting synthetic notes, then verifying the slot's committed clip captured exactly
+    // those notes. Event-driven with the record selftest's yield discipline: each async device op must
+    // settle before the next step, or the isEnabled()&&isAvailableToEdit() gate / record graph isn't ready.
+
+    // Find our engine-owned virtual MIDI-in by name and downcast so we can inject through it.
+    te::VirtualMidiInputDevice* findSelfTestMidiInput() const
+    {
+        for (auto& mi : engine.getDeviceManager().getMidiInDevices())
+            if (mi != nullptr && mi->getName() == kSelfTestMidiName)
+                return dynamic_cast<te::VirtualMidiInputDevice*> (mi.get());
+        return nullptr;
+    }
+
+    // Phase 1: assert slot (0,0) empty, ensure a born-audible instrument, create the virtual MIDI in,
+    // then YIELD so the create's async rescanMidiDeviceList delivers the device.
+    void beginSelfTestMidi()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishSelfTestMidi(); return; }
+
+        FORGE_LOG_INFO ("selftest-midi: creating virtual MIDI input + arming slot (0,0)");
+
+        session.ensureScenes (16);
+
+        // The target slot MUST start empty, else capturedNoteCount could count pre-seeded notes.
+        miPreExistingNotes = 0;
+        if (auto* slot = session.getClipSlot (0, 0))
+            if (auto* c = slot->getClip())
+                if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+                    miPreExistingNotes = mc->getSequence().getNumNotes();
+
+        // Born-audible target track (4OSC); do NOT pre-insert a clip in slot (0,0).
+        if (auto* track = te::getAudioTracks (*edit)[0])
+            PluginHost::ensureDefaultInstrument (*track);
+
+        // Drop any leaked device of the same name from a prior aborted run, then create fresh.
+        if (auto* stale = findSelfTestMidiInput())
+            engine.getDeviceManager().deleteVirtualMidiDevice (*stale);
+
+        const auto r = engine.getDeviceManager().createVirtualMidiDevice (kSelfTestMidiName);
+        if (r.failed())
+            FORGE_LOG_ERROR ("selftest-midi: createVirtualMidiDevice failed: " + r.getErrorMessage());
+
+        miPhase = 1;
+        startTimer (300);   // YIELD: let the create's async rescan deliver the device
+    }
+
+    // Phase 2: find + enable the virtual device (automatic monitoring), then YIELD so the enable's async
+    // rescan settles before ensureContextAllocated reads the isEnabled()&&isAvailableToEdit() gate.
+    void midiSelftestEnableDevice()
+    {
+        miDevice = findSelfTestMidiInput();
+
+        juce::StringArray names;
+        for (auto& mi : engine.getDeviceManager().getMidiInDevices())
+            if (mi != nullptr) names.add (mi->getName());
+        miAvailableMidiIns = names.joinIntoString ("|");
+
+        if (miDevice != nullptr)
+        {
+            miDevice->setEnabled (true);
+            miDevice->setMonitorMode (te::InputDevice::MonitorMode::automatic);
+            miDeviceEnabled = miDevice->isEnabled();
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("selftest-midi: virtual MIDI input not found after create");
+        }
+
+        miPhase = 2;
+        startTimer (300);   // YIELD: let setEnabled's async rescan settle before arming
+    }
+
+    // Phase 3: allocate the context (AFTER the device is enabled), arm ONLY slot (0,0) as the record
+    // target (never the track — two targets would double-capture and mask a wrong-target bug), roll the
+    // transport, then YIELD so the record graph is live before injection.
+    void midiSelftestArmAndRoll()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr || miDevice == nullptr) { finishSelfTestMidi(); return; }
+
+        edit->getTransport().ensureContextAllocated();
+
+        if (auto* slot = session.getClipSlot (0, 0))
+        {
+            for (auto* instance : edit->getAllInputDevices())
+            {
+                if (instance == nullptr || &instance->getInputDevice() != miDevice)
+                    continue;   // arm ONLY our virtual device's instance
+
+                auto res = instance->setTarget (slot->itemID, /*moveToTrack=*/false, &edit->getUndoManager(), 0);
+                if (res && res.value() != nullptr)
+                {
+                    instance->setRecordingEnabled (slot->itemID, true);
+                    miSlotArmed = true;
+                }
+            }
+        }
+
+        edit->restartPlayback();
+
+        if (auto* t = session.getTransport())
+        {
+            t->record (false);
+            miRecordingStarted = t->isRecording();
+        }
+
+        miPhase = 3;
+        startTimer (300);   // YIELD: record graph live before we inject
+    }
+
+    // Phase 4: inject 4 note-ons; YIELD so the notes have real (non-zero) length before the note-offs
+    // (a zero-length note can be dropped, which would fail the exact capturedNoteCount==injected gate).
+    void midiSelftestInjectOn()
+    {
+        if (miDevice != nullptr)
+            for (int n : { 60, 64, 67, 72 })   // C4 E4 G4 C5
+            {
+                miDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOn (1, n, 0.8f), miDevice->getMPESourceID());
+                ++miNotesInjected;
+            }
+
+        miPhase = 4;
+        startTimer (300);   // hold the notes so each has real length
+    }
+
+    // Phase 5-prep: inject the matching note-offs, then YIELD so the take finalises before stop.
+    void midiSelftestInjectOff()
+    {
+        if (miDevice != nullptr)
+            for (int n : { 60, 64, 67, 72 })
+                miDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOff (1, n), miDevice->getMPESourceID());
+
+        miPhase = 5;
+        startTimer (500);   // let the note-offs + take settle before we stop
+    }
+
+    // Phase 5: stop (the engine commits the captured notes into a MidiClip in the slot via
+    // addMidiAsTransaction), disarm the slot, verify the note count, delete the virtual device, report.
+    void finishSelfTestMidi()
+    {
+        auto* edit = session.getEdit();
+
+        if (auto* t = session.getTransport())
+            t->stop (false, false);
+
+        // Disarm slot (0,0) on our virtual device's instance(s) (transport already stopped above).
+        if (edit != nullptr)
+            if (auto* slot = session.getClipSlot (0, 0))
+                for (auto* instance : edit->getAllInputDevices())
+                {
+                    if (instance == nullptr || (miDevice != nullptr && &instance->getInputDevice() != miDevice))
+                        continue;
+                    instance->setRecordingEnabled (slot->itemID, false);
+                    [[maybe_unused]] const auto removed = instance->removeTarget (slot->itemID, &edit->getUndoManager());
+                }
+
+        // Verify the captured clip landed in the SLOT with the expected note count.
+        if (auto* slot = session.getClipSlot (0, 0))
+            if (auto* c = slot->getClip())
+                if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+                {
+                    miClipCreated  = true;
+                    miCapturedNotes = mc->getSequence().getNumNotes();
+                }
+
+        // MANDATORY cleanup: the virtual device name persists in engine storage; a leak fails the NEXT
+        // run's createVirtualMidiDevice ("name already in use").
+        if (miDevice != nullptr)
+        {
+            engine.getDeviceManager().deleteVirtualMidiDevice (*miDevice);
+            miDevice = nullptr;
+        }
+
+        // PASS proves end-to-end capture INTO THE SLOT: device enabled, slot (not track) armed, transport
+        // rolled, notes injected, a clip materialised in the slot, and it holds EXACTLY the injected notes
+        // (exact count rules out an empty clip, pre-seeded notes, or notes leaking to the wrong target).
+        const bool pass = miDeviceEnabled && miSlotArmed && miRecordingStarted
+                          && miPreExistingNotes == 0
+                          && miNotesInjected >= 4
+                          && miClipCreated
+                          && miCapturedNotes == miNotesInjected;
+
+        String report;
+        report << "mode=midi" << newLine
+               << "availableMidiInputs=" << (miAvailableMidiIns.isEmpty() ? String ("(none)") : miAvailableMidiIns) << newLine
+               << "midiDeviceEnabled="   << (miDeviceEnabled ? 1 : 0) << newLine
+               << "preExistingNotes="    << miPreExistingNotes << newLine
+               << "trackArmed="          << (miSlotArmed ? 1 : 0) << newLine
+               << "recordingStarted="    << (miRecordingStarted ? 1 : 0) << newLine
+               << "notesInjected="       << miNotesInjected << newLine
+               << "clipCreated="         << (miClipCreated ? 1 : 0) << newLine
+               << "capturedNoteCount="   << miCapturedNotes << newLine
+               << "result="              << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="             << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write midi selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("MIDI selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -1205,6 +1514,19 @@ private:
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
         mixerView.setEdit (nullptr);
+
+        // Drop any MIDI record-arm before the outgoing Edit is torn down (stop the transport first —
+        // removeTarget fails while recording). The Edit owns the input-device targets, so this is
+        // hygiene rather than a correctness requirement, but it keeps arm state from surviving a swap.
+        if (auto* ed = session.getEdit())
+        {
+            if (auto* t = session.getTransport())
+                t->stop (false, false);
+            for (auto* track : te::getAudioTracks (*ed))
+                if (track != nullptr)
+                    recorder.disarmMidiTrack (*ed, *track);
+        }
+
         sessionView.setEdit (nullptr);   // R4: stop the 25 Hz poll + drop state BEFORE the Edit is destroyed
         doSwap();
         clip = nullptr;
@@ -1268,6 +1590,20 @@ private:
             else
             {
                 finishSelfTestRecording();
+            }
+            return;
+        }
+
+        if (mode == SelfTest::midi)
+        {
+            stopTimer();
+            switch (miPhase)
+            {
+                case 1:  midiSelftestEnableDevice(); break;   // device created → find + enable, yield
+                case 2:  midiSelftestArmAndRoll();   break;   // enabled → alloc ctx, arm slot, roll, yield
+                case 3:  midiSelftestInjectOn();     break;   // rolling → inject note-ons, yield
+                case 4:  midiSelftestInjectOff();    break;   // → inject note-offs, yield
+                default: finishSelfTestMidi();       break;   // phase 5 → stop, verify, report, quit
             }
             return;
         }
@@ -1378,6 +1714,7 @@ public:
         const auto modeDesc = commandLine.contains ("--screenshot")       ? "screenshot"
                             : commandLine.contains ("--selftest-record")  ? "selftest-record"
                             : commandLine.contains ("--selftest-session") ? "selftest-session"
+                            : commandLine.contains ("--selftest-midi")    ? "selftest-midi"
                             : commandLine.contains ("--selftest")         ? "selftest-playback"
                                                                           : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -1388,6 +1725,7 @@ public:
         const auto mode = commandLine.contains ("--screenshot")       ? SelfTest::screenshot
                         : commandLine.contains ("--selftest-record")  ? SelfTest::record
                         : commandLine.contains ("--selftest-session") ? SelfTest::session
+                        : commandLine.contains ("--selftest-midi")    ? SelfTest::midi
                         : commandLine.contains ("--selftest")         ? SelfTest::playback
                                                                       : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));

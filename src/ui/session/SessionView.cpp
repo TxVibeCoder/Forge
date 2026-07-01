@@ -133,8 +133,23 @@ void SessionView::wireColumn (TrackColumnComponent& column)
     column.onArm = [this] (int t)
     {
         if (auto* track = getTrackAt (t))
-            if (onArmToggled != nullptr)
-                onArmToggled (*track, ! trackArmed (t));
+        {
+            // Branch on the track's plugin content: a MIDI/instrument track arms through the
+            // MIDI record path; an audio track keeps the existing audio arm path (design §3).
+            if (trackIsMidi (t))
+            {
+                // Invert the MIDI-arm truth (mutually exclusive with audio arm, v1), so the
+                // toggle disarms an already-MIDI-armed track and arms an unarmed one.
+                const bool midiArmed = (isTrackMidiArmed != nullptr && isTrackMidiArmed (*track));
+                if (onMidiArmToggled != nullptr)
+                    onMidiArmToggled (*track, ! midiArmed);
+            }
+            else
+            {
+                if (onArmToggled != nullptr)
+                    onArmToggled (*track, ! trackArmed (t));
+            }
+        }
     };
 
     column.isTrackArmed = [this] (te::AudioTrack& tr) -> bool
@@ -329,7 +344,13 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     PopupMenu menu;
     const bool filled = session.isSlotFilled (trackIdx, sceneIdx);
 
-    enum { idLaunch = 1, idStop, idEdit, idImport };
+    // New W7 ids come AFTER the existing set so they never collide with {idLaunch=1,idStop,idEdit,idImport}.
+    enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord };
+
+    // Re-derive record eligibility from engine truth on demand (never cached, R1).
+    auto* track = getTrackAt (trackIdx);
+    const bool trackMidiArmed = (track != nullptr && isTrackMidiArmed != nullptr && isTrackMidiArmed (*track));
+    const bool recordingHere  = (isSlotRecording != nullptr && isSlotRecording (trackIdx, sceneIdx));
 
     if (filled)
     {
@@ -338,6 +359,14 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idEdit,   "Edit clip");   // launch-free edit path (mirrors double-click, without launching)
         menu.addSeparator();
     }
+
+    // Record gestures: offer "Record into slot" on an empty slot of a MIDI-armed track, and
+    // "Stop recording" while this slot is the one capturing (design §3).
+    if (recordingHere)
+        menu.addItem (idStopRecord, "Stop recording");
+    else if (! filled && trackMidiArmed)
+        menu.addItem (idRecordSlot, "Record into slot");
+
     menu.addItem (idImport, "Import audio...");
 
     Component::SafePointer<SessionView> safeThis (this);
@@ -354,6 +383,14 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                 case idStop:   safeThis->session.stopSlot   (trackIdx, sceneIdx); break;
                                 case idEdit:   safeThis->openSlotForEdit    (trackIdx, sceneIdx); break;
                                 case idImport: safeThis->importAudioInto    (trackIdx, sceneIdx); break;
+                                case idRecordSlot:
+                                    if (safeThis->onSlotRecord != nullptr)
+                                        safeThis->onSlotRecord (trackIdx, sceneIdx);
+                                    break;
+                                case idStopRecord:
+                                    if (safeThis->onSlotRecordStop != nullptr)
+                                        safeThis->onSlotRecordStop (trackIdx, sceneIdx);
+                                    break;
                                 default: break;
                             }
                         });
@@ -401,6 +438,22 @@ bool SessionView::keyPressed (const KeyPress& key)
     if (key.isKeyCode (KeyPress::rightKey))  { setFocus (focusTrack + 1, focusScene); return true; }
     if (key.isKeyCode (KeyPress::upKey))     { setFocus (focusTrack, focusScene - 1); return true; }
     if (key.isKeyCode (KeyPress::downKey))   { setFocus (focusTrack, focusScene + 1); return true; }
+
+    // Ctrl+Enter on the focused empty slot of a MIDI-armed track begins a slot record (design §3).
+    // MUST come BEFORE the plain-returnKey handler below so the modifier combo is consumed first.
+    if (key.isKeyCode (KeyPress::returnKey) && key.getModifiers().isCommandDown())
+    {
+        if (auto* track = getTrackAt (focusTrack))
+        {
+            const bool midiArmed = (isTrackMidiArmed != nullptr && isTrackMidiArmed (*track));
+            const bool slotEmpty = ! session.isSlotFilled (focusTrack, focusScene);
+
+            if (midiArmed && slotEmpty && onSlotRecord != nullptr)
+                onSlotRecord (focusTrack, focusScene);
+        }
+
+        return true;
+    }
 
     if (key.isKeyCode (KeyPress::returnKey))
     {
@@ -513,7 +566,10 @@ void SessionView::timerCallback()
         if (track != nullptr)
         {
             tp.slots = track->getClipSlotList().getClipSlots();
-            tp.armed = (isTrackArmed != nullptr && isTrackArmed (*track));
+            // OR in the MIDI arm so a MIDI-armed (audio-disarmed) track still tints its empty
+            // slots recArmed (design §3). Pure engine reads — no logging on this hot path.
+            tp.armed = (isTrackArmed     != nullptr && isTrackArmed     (*track))
+                    || (isTrackMidiArmed != nullptr && isTrackMidiArmed (*track));
         }
         perTrack.add (std::move (tp));
     }
@@ -529,7 +585,12 @@ void SessionView::timerCallback()
 
             // R1/R2: live slot read fresh from the once-resolved per-track list; never stored.
             te::ClipSlot* slot = (s < tp.slots.size()) ? tp.slots.getUnchecked (s) : nullptr;
-            const SlotVisualState state = computeSlotState (slot, transportRunning, tp.armed);
+
+            // Resolve recording-here once per pad from the shell seam (cheap engine read; R1
+            // preserved — no ClipSlot* cached). No logging on this poll path.
+            const bool recordingHere = (isSlotRecording != nullptr && isSlotRecording (t, s));
+
+            const SlotVisualState state = computeSlotState (slot, transportRunning, tp.armed, recordingHere);
 
             if (state == SlotVisualState::playing)  anyPlaying = true;
             if (state == SlotVisualState::queued || state == SlotVisualState::stopping) anyQueued = true;

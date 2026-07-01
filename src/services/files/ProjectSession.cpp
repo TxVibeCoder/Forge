@@ -595,3 +595,162 @@ void ProjectSession::launchScene (int sceneIndex)
 
     launchSceneClips (*edit, sceneIndex);
 }
+
+//==============================================================================
+// Session MIDI-record seam (W7). Message-thread only.
+//
+// ProjectSession orchestrates the born-audible + arm recipe on top of the injected recorder
+// std::function seams (recorderArmSlot / recorderDisarmSlot / recorderIsSlotArmed), so it holds no
+// hard RecordController dependency and never touches raw engine record APIs itself apart from the
+// transport roll/stop. The single active record slot is tracked here (activeRecordTrack/Scene).
+
+bool ProjectSession::recordArmSlot (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr || trackIndex < 0 || sceneIndex < 0)
+    {
+        FORGE_LOG_ERROR ("recordArmSlot: no edit or out-of-range cell "
+                         + juce::String (trackIndex) + "," + juce::String (sceneIndex));
+        return false;
+    }
+
+    // Ensure the track and the grid row exist (mutating path — may grow tracks/scenes).
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("recordArmSlot: failed to create or access track at index " + juce::String (trackIndex));
+        return false;
+    }
+
+    ensureScenes (sceneIndex + 1);
+    track->getClipSlotList().ensureNumberOfSlots (sceneIndex + 1);   // pad a slot-deficient loaded track
+
+    // Born-audible: the engine materialises the captured clip on stop; the track must already host an
+    // instrument for that clip to sound (omit -> silent captured clip). Idempotent — never stacks synths.
+    PluginHost::ensureDefaultInstrument (*track);
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+
+    if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("recordArmSlot: clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex)
+                         + " could not be resolved after grid growth");
+        return false;
+    }
+
+    // Delegate the actual engine arm to the injected recorder seam. Do NOT pre-insert a clip — the
+    // engine creates the born-audible MidiClip in the slot at commit (addMidiAsTransaction on stop).
+    if (! recorderArmSlot)
+    {
+        FORGE_LOG_ERROR ("recordArmSlot: recorder arm-slot seam not wired");
+        return false;
+    }
+
+    if (! recorderArmSlot (*edit, *slot))
+        return false;   // recorder logs / sets its own lastError; the shell surfaces getLastError()
+
+    activeRecordTrack = trackIndex;
+    activeRecordScene = sceneIndex;
+    return true;
+}
+
+void ProjectSession::recordDisarmSlot (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return;
+
+    // removeTarget fails while recording — stop the transport FIRST if this is the capturing slot.
+    if (auto* transport = getTransport())
+        if (transport->isRecording())
+            transport->stop (false, false);
+
+    if (auto* slot = getClipSlot (trackIndex, sceneIndex))
+    {
+        if (recorderDisarmSlot)
+            recorderDisarmSlot (*edit, *slot);
+    }
+    else
+    {
+        FORGE_LOG_ERROR ("recordDisarmSlot: clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex)
+                         + " could not be resolved");
+    }
+
+    if (trackIndex == activeRecordTrack && sceneIndex == activeRecordScene)
+    {
+        activeRecordTrack = -1;
+        activeRecordScene = -1;
+    }
+}
+
+bool ProjectSession::isSlotRecordArmed (int trackIndex, int sceneIndex) const
+{
+    // Pure read (25 Hz poll) — re-derived from engine targets via the injected seam, no cached flag,
+    // never logs. getClipSlot is the const, non-mutating resolve.
+    if (edit == nullptr || ! recorderIsSlotArmed)
+        return false;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    return slot != nullptr && recorderIsSlotArmed (*edit, *slot);
+}
+
+void ProjectSession::beginSlotRecord (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return;
+
+    // No-op unless this is the currently-armed active record slot.
+    if (trackIndex != activeRecordTrack || sceneIndex != activeRecordScene)
+        return;
+
+    // Ensure the track is born-audible before rolling (idempotent). Resolve the track without
+    // growing structure — the slot was already ensured/armed by recordArmSlot.
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= 0 && trackIndex < tracks.size())
+        if (auto* track = tracks[trackIndex])
+            PluginHost::ensureDefaultInstrument (*track);
+
+    // Roll: the armed slot's recordEnabled destination is what startRecording captures. NO launchSlot
+    // (recording is transport-driven; there is no clip to launch yet — §0/§6).
+    if (auto* transport = getTransport())
+        transport->record (false);
+}
+
+te::MidiClip::Ptr ProjectSession::commitSlotRecord (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return {};
+
+    // Stop first: the engine commits the captured notes into a new MidiClip in the slot via
+    // addMidiAsTransaction on stop.
+    if (auto* transport = getTransport())
+        transport->stop (false, false);
+
+    // Disarm the slot (removeTarget now succeeds — transport stopped). This also clears the active
+    // record slot when it matches.
+    recordDisarmSlot (trackIndex, sceneIndex);
+
+    // Re-resolve the slot and return the captured MidiClip, if any.
+    if (auto* slot = getClipSlot (trackIndex, sceneIndex))
+        if (auto* clip = dynamic_cast<te::MidiClip*> (slot->getClip()))
+            return te::MidiClip::Ptr (clip);
+
+    return {};
+}
+
+bool ProjectSession::isSlotRecording (int trackIndex, int sceneIndex) const
+{
+    // Pure engine read (drives the recording pad in the 25 Hz poll) — never logs. A slot is capturing
+    // iff it is the armed record target AND the transport is recording. NOT "LaunchHandle playing"
+    // (unreachable for an empty capturing slot).
+    if (edit == nullptr || ! recorderIsSlotArmed)
+        return false;
+
+    auto* transport = getTransport();
+
+    if (transport == nullptr || ! transport->isRecording())
+        return false;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    return slot != nullptr && recorderIsSlotArmed (*edit, *slot);
+}

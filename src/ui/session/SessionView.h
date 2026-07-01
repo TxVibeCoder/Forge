@@ -102,6 +102,28 @@ public:
     /** Reflects/toggles a track's arm state; real input arming wired by the record path. */
     std::function<void (te::AudioTrack&, bool)> onArmToggled;
 
+    //==============================================================================
+    // W7 MIDI-record seams (design §1c) — mirror the audio arm pair above. Null => no-op.
+
+    /** Engine-truth: is this track MIDI record-armed? Set by the shell. ORed with the audio
+        isTrackArmed in the 25 Hz poll to drive the recArmed pad tint (a MIDI-armed track must
+        tint its empty slots too). */
+    std::function<bool (te::AudioTrack&)> isTrackMidiArmed;
+
+    /** Toggle MIDI record-arm on a track (routes to the RecordController MIDI path). */
+    std::function<void (te::AudioTrack&, bool arm)> onMidiArmToggled;
+
+    /** Arm a SPECIFIC empty slot as the record destination and begin capture (arm slot + roll
+        transport; NO launch). (trackIdx, sceneIdx) identify the slot. */
+    std::function<void (int trackIdx, int sceneIdx)> onSlotRecord;
+
+    /** Stop the active slot recording (commit). */
+    std::function<void (int trackIdx, int sceneIdx)> onSlotRecordStop;
+
+    /** True iff (trackIdx, sceneIdx) is the slot currently capturing MIDI. Set by shell →
+        session.isSlotRecording. Drives SlotVisualState::recording. */
+    std::function<bool (int trackIdx, int sceneIdx)> isSlotRecording;
+
 private:
     void timerCallback() override;
 

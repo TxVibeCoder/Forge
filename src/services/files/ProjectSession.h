@@ -109,6 +109,55 @@ public:
         scene is audible. App logic (no engine "launch scene" call) — mirrors the demo. */
     void launchScene (int sceneIndex);
 
+    //==============================================================================
+    // Session MIDI-record seam (W7). Message-thread only.
+    //
+    // ProjectSession keeps NO hard RecordController dependency: the orchestrator wires the three
+    // std::function hooks below to the recorder's slot-arm / slot-disarm / is-slot-armed calls in
+    // main.cpp (each matches a frozen RecordController signature — §1a). ProjectSession orchestrates
+    // the born-audible + arm recipe on top of them so callers never touch raw engine record APIs.
+    //
+    // Signatures mirror RecordController::armFirstMidiInputToSlot / disarmSlot / isSlotMidiArmed
+    // (te::Edit&, te::ClipSlot&) — see design §1a/§1b. Left empty they are safe no-ops (arm returns
+    // false, is-armed returns false) so an un-wired ProjectSession never records but never crashes.
+    std::function<bool (te::Edit&, te::ClipSlot&)> recorderArmSlot;
+    std::function<bool (te::Edit&, te::ClipSlot&)> recorderDisarmSlot;
+    std::function<bool (te::Edit&, te::ClipSlot&)> recorderIsSlotArmed;
+
+    /** Arm cell (trackIndex, sceneIndex) for MIDI slot recording (VERDICT A). Idempotent. Orchestrates
+        the born-audible + arm recipe so callers never touch raw engine APIs: ensureScenes(sceneIndex+1);
+        ensure the track exists; PluginHost::ensureDefaultInstrument(track) so the captured clip is
+        born-audible (4OSC); resolve the ClipSlot (getClipSlot); hand off to the injected recorder
+        arm-slot seam (RecordController::armFirstMidiInputToSlot). Does NOT pre-insert a clip — the
+        engine creates it at commit. Returns true iff the slot ends armed; sets no clip. */
+    bool recordArmSlot (int trackIndex, int sceneIndex);
+
+    /** Disarms cell (trackIndex, sceneIndex). Wraps the injected recorder disarm-slot seam. Stops the
+        transport FIRST if it is recording (removeTarget fails while recording). */
+    void recordDisarmSlot (int trackIndex, int sceneIndex);
+
+    /** True iff cell (trackIndex, sceneIndex) is armed for MIDI record (re-derived from engine targets
+        each call via the injected is-slot-armed seam — no cached flag). Feeds SlotVisualState::recArmed
+        in the 25 Hz poll. Pure read — never logs. */
+    bool isSlotRecordArmed (int trackIndex, int sceneIndex) const;
+
+    /** Begins capture: ensures the track has a default instrument, then rolls the transport with
+        transport.record(false). Records because the slot's destination is recordEnabled — NOT because
+        the slot is launched (there is no clip to launch yet). No-op if no slot is currently the active
+        armed record slot. */
+    void beginSlotRecord (int trackIndex, int sceneIndex);
+
+    /** Ends capture: transport.stop(false,false); the engine commits the captured notes into a new
+        MidiClip in the slot via addMidiAsTransaction on stop. Then disarms the slot. Returns the
+        resulting clip if one was captured (getClipSlot(...)->getClip() dyn_cast to MidiClip), else {}. */
+    te::MidiClip::Ptr commitSlotRecord (int trackIndex, int sceneIndex);
+
+    /** True iff cell (trackIndex, sceneIndex) is the slot currently CAPTURING: it is the armed record
+        target (injected is-slot-armed seam) AND edit.getTransport().isRecording(). Pure engine read —
+        NOT "LaunchHandle playing" (which never becomes true for an empty capturing slot). Drives the
+        recording pad. Never logs (poll path). */
+    bool isSlotRecording (int trackIndex, int sceneIndex) const;
+
     te::Edit*             getEdit() const      { return edit.get(); }
     te::TransportControl* getTransport() const;
     juce::File            getEditFile() const  { return editFile; }
@@ -127,6 +176,11 @@ private:
     te::Engine& engine;
     std::unique_ptr<te::Edit> edit;
     juce::File editFile;
+
+    // The single active record slot (W7). {-1,-1} == none. Set by recordArmSlot, cleared by
+    // commitSlotRecord / recordDisarmSlot. Tracks which cell beginSlotRecord may roll for.
+    int activeRecordTrack = -1;
+    int activeRecordScene = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProjectSession)
 };
