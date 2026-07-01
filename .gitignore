@@ -17,3 +17,12 @@ Thumbs.db
 
 # Audio render scratch
 *.wav.tmp
+
+# Runtime logs — the app logs to %APPDATA%\Forge\logs, but guard against a stray
+# stderr redirect or a copied log landing in the tree (public repo: logs carry
+# absolute user paths + the command line by design).
+*.log
+forge.log*
+
+# Local-only notes (never published to this pseudonymous public repo).
+*.local.md

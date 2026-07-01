@@ -1,5 +1,6 @@
 #include "engine/RecordController.h"
 #include "engine/EngineHelpers.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -83,6 +84,9 @@ bool RecordController::armFirstInputToTrack (te::Edit& edit, te::AudioTrack& tra
     // InputDeviceInstance objects only exist once the playback context is allocated.
     edit.getTransport().ensureContextAllocated();
 
+    if (edit.getTransport().getCurrentPlaybackContext() == nullptr)
+        FORGE_LOG_ERROR ("Failed to allocate playback context for recording");
+
     int waveInstancesSeen = 0;
     juce::String lastSetTargetError;
 
@@ -110,6 +114,7 @@ bool RecordController::armFirstInputToTrack (te::Edit& edit, te::AudioTrack& tra
         if (! result)
         {
             lastSetTargetError = result.error();
+            FORGE_LOG_DEBUG ("setTarget failed for wave input '" + instance->getInputDevice().getName() + "': " + lastSetTargetError);
             continue;
         }
 
@@ -162,7 +167,11 @@ bool RecordController::disarmTrack (te::Edit& edit, te::AudioTrack& track)
         auto result = instance->removeTarget (track.itemID, &edit.getUndoManager());
 
         if (! result.wasOk())
+        {
             lastRemoveError = result.getErrorMessage();
+            FORGE_LOG_ERROR ("Could not disarm input device '" + instance->getInputDevice().getName()
+                             + "' from track: " + lastRemoveError);
+        }
         else if (wasActiveTarget)
             removedActive = true;
     }

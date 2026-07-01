@@ -26,6 +26,7 @@
 #include "ui/session/SessionView.h"
 #include "ui/ControlBar.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 namespace te = tracktion;
 using namespace juce;
@@ -61,8 +62,17 @@ static File createSineWaveFile (double sampleRate, double seconds, double freque
                 phase += phaseDelta;
             }
 
-            writerOwner->writeFromAudioSampleBuffer (buffer, 0, numSamples);
+            if (! writerOwner->writeFromAudioSampleBuffer (buffer, 0, numSamples))
+                FORGE_LOG_ERROR ("Failed to write audio samples to WAV file — I/O error or disk full");
         }
+        else
+        {
+            FORGE_LOG_WARN ("Failed to create WAV writer for sine wave");
+        }
+    }
+    else
+    {
+        FORGE_LOG_WARN ("Failed to create temp WAV file for sine wave (createOutputStream returned null)");
     }
 
     return file;
@@ -166,6 +176,10 @@ public:
         const auto projectFile = (mode == SelfTest::none) ? defaultProjectFile()
                                                           : File::createTempFile (te::editFileSuffix);
         editLoaded = session.openOrCreate (projectFile);
+        // NOTE: openOrCreate() returns false in the NORMAL "created a new project" case, so a
+        // false editLoaded is NOT a failure. The real failure is having no edit at all afterward.
+        if (session.getEdit() == nullptr)
+            FORGE_LOG_ERROR ("Failed to open or create project file: " + projectFile.getFullPathName());
 
         setupControlBar();
         setupStatusStrip();
@@ -201,7 +215,8 @@ public:
         // -> Inspector are left unwired until that feature exists — see docs/devlog/integration.md.)
         arrangeView.onEditMutated = [this]
         {
-            session.save();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
 
             // A structural change in the Arrange view (e.g. delete track) can leave the Session grid's
             // columns holding stale te::AudioTrack& refs. Rebuild it synchronously when the track count
@@ -240,7 +255,10 @@ public:
                                     : recorder.disarmTrack (*ed, track);
 
                 if (! ok)
+                {
                     setStatusMessage ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+                    FORGE_LOG_ERROR ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+                }
 
                 arrangeView.refreshArmStates();
             }
@@ -268,8 +286,8 @@ public:
 
             resized();
         };
-        detailView.onEditMutated = [this] { session.save(); };
-        pianoRoll.onEditMutated  = [this] { session.save(); };
+        detailView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        pianoRoll.onEditMutated  = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
         // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
         // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
@@ -294,19 +312,25 @@ public:
                 drawerVisible = true;
                 resized();
             }
+            else
+            {
+                FORGE_LOG_ERROR ("Failed to create MIDI clip in track " + juce::String (trackIndex));
+            }
         };
 
         // Double-clicking an audio file in the Browser imports it onto the project.
         browserPanel.onImportFile = [this] (const File& f)
         {
             clip = session.importAudioFile (f, te::TimePosition());
+            if (clip == nullptr)
+                FORGE_LOG_ERROR ("Failed to import audio file: " + f.getFullPathName());
             session.save();
             rebind();
         };
 
         // Session grid — mirror the arrange wiring. The view delegates all engine ops to ProjectSession;
         // here we only route selection/creation to the shared piano-roll drawer and the record arm path.
-        sessionView.onEditMutated = [this] { session.save(); };
+        sessionView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
         sessionView.onSlotSelected = [this] (te::Clip* c)
         {
@@ -359,7 +383,10 @@ public:
                                     : recorder.disarmTrack (*ed, track);
 
                 if (! ok)
+                {
                     setStatusMessage ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+                    FORGE_LOG_ERROR ((arm ? "Arm failed: " : "Disarm failed: ") + recorder.getLastError());
+                }
 
                 sessionView.refreshArmStates();
                 arrangeView.refreshArmStates();
@@ -529,7 +556,7 @@ private:
     {
         controlBar.onNew           = [this] { swapProject ([this] { session.newProject (uniqueUntitledFile()); }); };
         controlBar.onOpen          = [this] { openDialog(); };
-        controlBar.onSave          = [this] { session.save(); };
+        controlBar.onSave          = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
         controlBar.onSaveAs        = [this] { saveAsDialog(); };
         controlBar.onImport        = [this] { importDialog(); };
         controlBar.onExport        = [this] { exportDialog(); };
@@ -643,7 +670,11 @@ private:
 
                                       const auto f = fc.getResult();
                                       if (f.existsAsFile())
-                                          self->swapProject ([self, f] { self->session.openProject (f); });
+                                          self->swapProject ([self, f]
+                                          {
+                                              if (! self->session.openProject (f))
+                                                  FORGE_LOG_ERROR ("Failed to open project: " + f.getFullPathName());
+                                          });
                                   });
     }
 
@@ -669,7 +700,10 @@ private:
                                       if (self->session.saveAs (f))
                                           self->rebind();
                                       else
+                                      {
                                           self->setStatusMessage ("Save As failed: " + f.getFullPathName());
+                                          FORGE_LOG_ERROR ("Save As failed: " + f.getFullPathName());
+                                      }
                                   });
     }
 
@@ -685,6 +719,8 @@ private:
                 return;   // dialog outlived the shell: no-op
 
             self->clip = self->session.importAudioFile (f, te::TimePosition());
+            if (self->clip == nullptr)
+                FORGE_LOG_ERROR ("Failed to import audio file: " + f.getFullPathName());
             self->session.save();
             self->rebind();
         });
@@ -722,6 +758,9 @@ private:
                                         String err;
                                         const bool ok = Exporter::renderEditToWav (*edit, f, err);
 
+                                        if (! ok)
+                                            FORGE_LOG_ERROR ("Export failed: " + err);
+
                                         self->setStatusMessage (ok ? "Exported " + f.getFileName()
                                                                    : "Export failed: " + err);
                                     });
@@ -757,6 +796,9 @@ private:
                                        String err;
                                        const bool ok = Exporter::renderStems (*edit, dir, err);
 
+                                       if (! ok)
+                                           FORGE_LOG_ERROR ("Stem export failed: " + err);
+
                                        self->setStatusMessage (ok ? (err.isEmpty() ? "Exported stems to " + dir.getFileName()
                                                                                     : "Exported stems (some failed): " + err)
                                                                   : "Stem export failed: " + err);
@@ -774,7 +816,14 @@ private:
             // reflect the freshly-imported clip (the report reads its clip-component count).
             arrangeView.rebuild();
 
-            auto& transport = session.getEdit()->getTransport();
+            auto* ed = session.getEdit();
+            if (ed == nullptr)
+            {
+                FORGE_LOG_ERROR ("Transport null after verifying clip import — engine state error");
+                return;
+            }
+
+            auto& transport = ed->getTransport();
             transport.setLoopRange (clip->getEditTimeRange());
             transport.looping = true;
             transport.ensureContextAllocated();
@@ -792,6 +841,10 @@ private:
             // blockUntilSyncPointChange bails after ~100ms).
             if (auto* epc = transport.getCurrentPlaybackContext())
                 epc->blockUntilSyncPointChange();
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("Failed to import test tone file for playback selftest");
         }
     }
 
@@ -811,10 +864,14 @@ private:
         }
         else
         {
-            EngineHelpers::ensureRecordingInputOpen (engine);   // lazily open the capture input
+            const auto openErr = EngineHelpers::ensureRecordingInputOpen (engine);   // lazily open the capture input
+            if (openErr.isNotEmpty())
+                FORGE_LOG_ERROR ("Failed to open recording input: device unavailable or hardware error");
+
             recorder.enableInputs();
             if (auto* track = te::getAudioTracks (*edit)[0])
-                recorder.armFirstInputToTrack (*edit, *track);
+                if (! recorder.armFirstInputToTrack (*edit, *track))
+                    FORGE_LOG_ERROR ("Failed to arm input to track: " + recorder.getLastError());
             t->record (false);
         }
     }
@@ -827,11 +884,16 @@ private:
         if (session.getEdit() == nullptr)
             return;
 
+        FORGE_LOG_INFO ("selftest-record: opening input");
+
         auto& jdm = engine.getDeviceManager().deviceManager;
         if (auto* type = jdm.getCurrentDeviceTypeObject())
             rcAvailableInputs = type->getDeviceNames (true).joinIntoString ("|");
 
         rcOpenError = EngineHelpers::ensureRecordingInputOpen (engine);   // record selftest opens input lazily too
+        if (rcOpenError.isNotEmpty())
+            FORGE_LOG_WARN ("Record selftest: failed to open recording input: " + rcOpenError);
+
         recorder.enableInputs();
 
         if (auto* dev = jdm.getCurrentAudioDevice())
@@ -858,10 +920,17 @@ private:
         if (auto* track = te::getAudioTracks (*edit)[0])
             rcTrackArmed = recorder.armFirstInputToTrack (*edit, *track);
 
+        if (! rcTrackArmed)
+            FORGE_LOG_WARN ("Record selftest: failed to arm input to track 0");
+        else
+            FORGE_LOG_INFO ("selftest-record: armed track 0");
+
         if (auto* t = session.getTransport())
         {
             t->record (false);
             rcRecordingStarted = t->isRecording();
+            if (rcRecordingStarted)
+                FORGE_LOG_INFO ("selftest-record: rolling");
         }
     }
 
@@ -933,11 +1002,16 @@ private:
                << "recordedClipLengthSecs=" << String (recLen, 3) << newLine
                << "recordedPeakMagnitude="  << String (recPeak, 5) << newLine
                << "recordError="            << recorder.getLastError() << newLine
-               << "result="                 << (pass ? "PASS" : "FAIL") << newLine;
+               << "result="                 << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="                << forge::log::getLogFile().getFullPathName() << newLine;
 
-        File::getSpecialLocation (File::tempDirectory)
-            .getChildFile ("forge_phase0_selftest.log")
-            .replaceWithText (report);
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write record selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Record selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
@@ -955,12 +1029,16 @@ private:
             return;
         }
 
+        FORGE_LOG_INFO ("selftest-session: creating + launching clip in slot (0,0)");
+
         session.ensureScenes (16);
         ssClip = session.createMidiClipInSlot (0, 0, "SelfTest");
         ssClipCreated = (ssClip != nullptr);
 
         if (ssClipCreated)
             session.launchSlot (0, 0);   // per-track exclusivity + starts the transport (audible)
+        else
+            FORGE_LOG_ERROR ("Session selftest: failed to create MIDI clip in slot (0,0)");
 
         startTimer (1500);   // let the transport roll and the launch handle advance to 'playing'
     }
@@ -1001,11 +1079,16 @@ private:
                << "hasLaunchHandle="  << (hasLaunchHandle ? 1 : 0) << newLine
                << "transportPlaying=" << (transportPlaying ? 1 : 0) << newLine
                << "clipPlaying="      << (clipPlaying ? 1 : 0) << newLine
-               << "result="           << (pass ? "PASS" : "FAIL") << newLine;
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
 
-        File::getSpecialLocation (File::tempDirectory)
-            .getChildFile ("forge_phase0_selftest.log")
-            .replaceWithText (report);
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write session selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Session selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
@@ -1045,7 +1128,9 @@ private:
         };
 
         for (auto& c : cells)
-            session.createMidiClipInSlot (c.track, c.scene, c.name);
+            if (session.createMidiClipInSlot (c.track, c.scene, c.name) == nullptr)
+                FORGE_LOG_WARN ("Screenshot harness: failed to create demo MIDI clip at ("
+                                + juce::String (c.track) + "," + juce::String (c.scene) + ")");
 
         // Launch scene 3 so the snapshot shows playing pads + an active scene row.
         session.launchScene (3);
@@ -1072,6 +1157,10 @@ private:
             PNGImageFormat png;
             png.writeImageToStream (image, *out);
         }
+        else
+        {
+            FORGE_LOG_ERROR ("Failed to create/write PNG snapshot: " + file.getFullPathName());
+        }
     }
 
     void captureScreenshots()
@@ -1086,6 +1175,19 @@ private:
         setViewMode (ViewMode::Session);   captureView ("session");
         setViewMode (ViewMode::Arrange);   captureView ("arrange");
         setViewMode (ViewMode::Mixer);     captureView ("mix");
+
+        // Prove vertical scroll headlessly: force a SHORT window so the vertical scrollbar appears and the
+        // bottom scene rows are reachable only by scrolling, snap the top, scroll to the true bottom, snap
+        // again. Comparing session_top vs session_scrolled shows: scrollbar present, bottom rows reachable
+        // (not clipped), pads stay 46px (no stretch), and the pinned scene column tracks the pads.
+        setViewMode (ViewMode::Session);
+        setSize (1040, 360);                                                  // ~5-6 of 16 rows visible
+        sessionView.resized();                                               // re-layout at the short height
+        sessionView.getViewport().setViewPosition (0, 0);                     // top reference
+        captureView ("session_top");
+        sessionView.getViewport().setViewPositionProportionately (0.0, 1.0);  // scroll to the true bottom
+        captureView ("session_scrolled");
+        FORGE_LOG_INFO ("Screenshots written to " + File::getSpecialLocation (File::tempDirectory).getFullPathName());
 
         if (auto* t = session.getTransport())
             t->stop (false, false);
@@ -1235,11 +1337,16 @@ private:
                << "hasContext="        << (hasContext ? 1 : 0) << newLine
                << "playing="           << (playing ? 1 : 0) << newLine
                << "position="          << String (posSecs, 3) << newLine
-               << "result="            << (pass ? "PASS" : "FAIL") << newLine;
+               << "result="            << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
 
-        File::getSpecialLocation (File::tempDirectory)
-            .getChildFile ("forge_phase0_selftest.log")
-            .replaceWithText (report);
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write playback selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Playback selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
@@ -1267,6 +1374,15 @@ public:
 
     void initialise (const String& commandLine) override
     {
+        // Logging comes up FIRST, before anything else can fail, so startup diagnostics are captured.
+        const auto modeDesc = commandLine.contains ("--screenshot")       ? "screenshot"
+                            : commandLine.contains ("--selftest-record")  ? "selftest-record"
+                            : commandLine.contains ("--selftest-session") ? "selftest-session"
+                            : commandLine.contains ("--selftest")         ? "selftest-playback"
+                                                                          : "normal";
+        forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
+        FORGE_LOG_INFO ("Forge starting");
+
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         const auto mode = commandLine.contains ("--screenshot")       ? SelfTest::screenshot
@@ -1275,12 +1391,24 @@ public:
                         : commandLine.contains ("--selftest")         ? SelfTest::playback
                                                                       : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
+
+        // Post-open device snapshot (Option A). The engine member opened its OUTPUT device during
+        // ForgeApplication construction — BEFORE install() ran — so an open *failure* can't be captured,
+        // but we can record the resulting device and flag a total absence of any output device.
+        if (auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice())
+            FORGE_LOG_INFO ("Engine output device: " + dev->getName()
+                            + " @ " + String (dev->getCurrentSampleRate(), 0) + " Hz"
+                            + ", buffer " + String (dev->getCurrentBufferSizeSamples()));
+        else
+            FORGE_LOG_ERROR ("No output audio device after startup — playback will be unavailable");
     }
 
     void shutdown() override
     {
+        FORGE_LOG_INFO ("Forge shutting down");
         mainWindow = nullptr;
         LookAndFeel::setDefaultLookAndFeel (nullptr);
+        forge::log::shutdown();   // restores the previous juce::Logger, clears logFile, flushes + closes
     }
 
 private:

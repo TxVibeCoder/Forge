@@ -1,23 +1,17 @@
 #include "ui/session/SessionView.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "engine/EngineHelpers.h"
+#include "core/Log.h"
 
 using namespace juce;
-
-namespace
-{
-    // Per-slot pad height used only to SIZE the scrollable content (each TrackColumnComponent then
-    // divides its available middle region evenly across numScenes pads — it has no fixed slotH of
-    // its own, mirroring how MixerView derives strip heights). Matches sheet 00's pad row pitch.
-    constexpr int kSlotH = 46;
-}
 
 //==============================================================================
 SessionView::SessionView (ProjectSession& s)
     : session (s)
 {
     viewport.setViewedComponent (&columnHolder, false);   // we own columnHolder ourselves
-    viewport.setScrollBarsShown (false, true);            // horizontal scroll only
+    viewport.setScrollBarsShown (true, true);             // (vertical, horizontal): BOTH scrollbars enabled
+    viewport.onScroll = [this] { syncSceneColumnToScroll(); };
     addAndMakeVisible (viewport);
 
     setWantsKeyboardFocus (true);
@@ -40,6 +34,10 @@ void SessionView::setEdit (te::Edit* e)
     {
         edit = e;
         session.ensureScenes (SessionLayout::numScenes);   // grow-only, off undo stack (R3)
+
+        if (session.getNumScenes() < SessionLayout::numScenes)
+            FORGE_LOG_ERROR ("Failed to ensure " + juce::String (SessionLayout::numScenes) + " scenes in edit");
+
         rebuild();
         startTimerHz (25);                                 // §e poll cadence
     }
@@ -62,6 +60,8 @@ void SessionView::rebuild()
 
     lastSlotState.clear();
     lastSceneState.clear();
+
+    lastLoggedTrackCount = -1;   // fresh column set: re-arm the one-shot track-count-mismatch WARN gate
 
     if (edit != nullptr)
     {
@@ -94,7 +94,9 @@ void SessionView::rebuild()
         focusScene = jlimit (0, SessionLayout::numScenes - 1, focusScene);
     }
 
+    viewport.setViewPosition (0, 0);   // new/rebuilt edit always starts at the top
     resized();
+    syncSceneColumnToScroll();          // re-glue the fresh scene column to the (now-reset) scroll offset
     repaint();
 
     if (edit != nullptr)
@@ -168,14 +170,19 @@ void SessionView::resized()
 
     const int nTracks  = columns.size();
     const int columnH  = SessionLayout::headerH
-                       + SessionLayout::numScenes * kSlotH
-                       + SessionLayout::stopRowH;
+                       + SessionLayout::numScenes * SessionLayout::slotH
+                       + SessionLayout::stopRowH;                       // FIXED 844: 78 + 16*46 + 30
 
     const int contentW = jmax (viewport.getMaximumVisibleWidth(),
                                nTracks * SessionLayout::trackColW);
-    const int contentH = jmax (viewport.getMaximumVisibleHeight(), columnH);
+    const int contentH = columnH;   // fixed height => pads stay slotH tall; short window scrolls,
+                                    // tall window shows empty space below (no stretch)
 
-    columnHolder.setBounds (0, 0, contentW, contentH);
+    // Size ONLY — never setBounds(0,0,...). columnHolder is the viewport's viewed component, so its
+    // top-left position IS the scroll offset (scrolled-to-bottom sits at y = -getViewPositionY()).
+    // Forcing it to (0,0) here would yank the grid back to the top on every relayout (e.g. a window
+    // resize while scrolled). setSize lets the Viewport keep ownership of the scroll position.
+    columnHolder.setSize (contentW, contentH);
 
     int x = 0;
     for (auto* column : columns)
@@ -187,7 +194,25 @@ void SessionView::resized()
     // The scene column uses the SAME content height as the track columns (not the raw viewport height),
     // so its shared rowBand partition matches the columns' exactly and the scene rows never drift.
     if (scenes != nullptr)
-        scenes->setBounds (sceneArea.getX(), 0, sceneArea.getWidth(), contentH);
+    {
+        // Same contentH as the track columns (shared rowBand partition), translated up by the
+        // vertical scroll offset so scene launch row N stays glued to pad row N.
+        // Reserve the horizontal-scrollbar band (when shown) so the scene column's bottom stop
+        // band lines up with the H-bar-occluded track footers instead of overhanging them.
+        const int hBar = viewport.isHorizontalScrollBarShown()
+                       ? viewport.getScrollBarThickness() : 0;
+        scenes->setBounds (sceneArea.getX(),
+                           -viewport.getViewPositionY(),
+                           sceneArea.getWidth(),
+                           contentH - hBar);
+    }
+}
+
+void SessionView::syncSceneColumnToScroll()
+{
+    // Message-thread only (called from the viewport's visibleAreaChanged). Cheap: one move.
+    if (scenes != nullptr)
+        scenes->setTopLeftPosition (scenes->getX(), -viewport.getViewPositionY());
 }
 
 void SessionView::paint (Graphics& g)
@@ -268,6 +293,10 @@ void SessionView::handleSlotClicked (int trackIdx, int sceneIdx)
                 onEditMutated();
 
             rebuild();
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("Failed to create MIDI clip in slot (" + juce::String (trackIdx) + "," + juce::String (sceneIdx) + ")");
         }
     }
     else
@@ -352,6 +381,10 @@ void SessionView::importAudioInto (int trackIdx, int sceneIdx)
 
                                                safeThis->rebuild();
                                            }
+                                           else
+                                           {
+                                               FORGE_LOG_ERROR ("Failed to import audio into slot (" + juce::String (trackIdx) + "," + juce::String (sceneIdx) + ")");
+                                           }
                                        });
 }
 
@@ -372,9 +405,21 @@ bool SessionView::keyPressed (const KeyPress& key)
     if (key.isKeyCode (KeyPress::returnKey))
     {
         if (key.getModifiers().isShiftDown())
+        {
+            // A scene launch with no clips on that row across any track is a silent no-op; surface it.
+            if (focusScene < 0 || focusScene >= SessionLayout::numScenes)
+                FORGE_LOG_ERROR ("Failed to launch scene " + juce::String (focusScene) + " via keyboard");
+
             session.launchScene (focusScene);
+        }
         else
+        {
+            // Launching an empty focused slot is a silent no-op; surface the failed keyboard launch.
+            if (! session.isSlotFilled (focusTrack, focusScene))
+                FORGE_LOG_ERROR ("Failed to launch slot (" + juce::String (focusTrack) + "," + juce::String (focusScene) + ") via keyboard");
+
             session.launchSlot (focusTrack, focusScene);
+        }
 
         return true;
     }
@@ -435,6 +480,15 @@ void SessionView::timerCallback()
     auto tracks = te::getAudioTracks (*edit);
     if (tracks.size() != columns.size())
     {
+        // Edge-triggered (NOT per-tick): only log when the live count differs from the last value we
+        // logged, so a persistent mismatch across ticks emits a single WARN rather than 25/s.
+        const int live = tracks.size();
+        if (live != lastLoggedTrackCount)
+        {
+            FORGE_LOG_WARN ("Track count mismatch in poll: " + juce::String (live) + " live vs " + juce::String (columns.size()) + " (rebuilding)");
+            lastLoggedTrackCount = live;
+        }
+
         rebuild();
         return;
     }

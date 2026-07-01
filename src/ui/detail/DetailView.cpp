@@ -1,5 +1,6 @@
 #include "ui/detail/DetailView.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -169,6 +170,8 @@ void DetailView::rebuildThumbnail()
 
         if (audioFile.isValid())
             thumbnail = std::make_unique<te::SmartThumbnail> (wac->edit.engine, audioFile, *this, &wac->edit);
+        else
+            FORGE_LOG_ERROR ("Failed to create waveform thumbnail for clip '" + wac->getName() + "' — playback file is invalid or missing");
     }
 }
 

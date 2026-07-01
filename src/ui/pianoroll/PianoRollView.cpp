@@ -1,6 +1,7 @@
 #include "ui/pianoroll/PianoRollView.h"
 #include "ui/pianoroll/MidiNoteComponent.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 #include <algorithm>   // std::find for the selection set
 
@@ -204,7 +205,10 @@ void PianoRollView::scrollToClipPitchRange()
 void PianoRollView::commitNoteMove (te::MidiNote& note, double newStartBeat, int newPitch)
 {
     if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Cannot commit note move: no MIDI clip is bound to the piano roll");
         return;
+    }
 
     auto* undo = &clip->edit.getUndoManager();
     const double snapped = snapBeat (newStartBeat);
@@ -221,7 +225,10 @@ void PianoRollView::commitNoteMove (te::MidiNote& note, double newStartBeat, int
 void PianoRollView::commitNoteResize (te::MidiNote& note, double newLengthBeats)
 {
     if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Cannot commit note resize: no MIDI clip is bound to the piano roll");
         return;
+    }
 
     auto* undo = &clip->edit.getUndoManager();
 
@@ -383,7 +390,10 @@ void PianoRollView::previewMoveSelection (te::MidiNote& dragged, double beatDelt
 void PianoRollView::commitMoveSelection (te::MidiNote& dragged, double beatDelta, int pitchDelta)
 {
     if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Cannot commit selection move: no MIDI clip is bound to the piano roll");
         return;
+    }
 
     if (! isSelected (dragged))
         selectOnly (dragged);

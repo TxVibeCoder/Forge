@@ -23,8 +23,9 @@ PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 **What works today:**
 - **Session clip grid (the primary view)** — tracks × 16 scenes of launchable clips; single-click
   launches, right-click "Edit clip", double-click opens, keyboard arrow/Enter launch; **audible,
-  bar-quantised** launch; a pinned scene-launch column. The shipped clips / 4OSC / piano-roll / mixer
-  ride inside its slots and scenes.
+  bar-quantised** launch; a pinned scene-launch column; **Ableton-style vertical scroll** (fixed-height
+  pads, all 16 scene rows reachable, the scene column tracks the pads). The shipped clips / 4OSC /
+  piano-roll / mixer ride inside its slots and scenes.
 - **Project** save/load — a real `.tracktionedit` on disk (create / open / save / save-as).
 - **Audio** import (WAV/AIFF/FLAC/OGG) onto tracks; a timeline with **waveform thumbnails**,
   a moving **playhead** (drag to scrub), clip **drag-to-move** + selectable **snap grid**.
@@ -40,12 +41,15 @@ PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 - **Plugins** — built-in effects + **VST3/AU** scanning & hosting, with floating editor windows.
 - **Browser** (file tree, double-click to import) and a **clip Inspector** (name/gain/fades/waveform).
 - **Export** — WAV mixdown + per-track **stems**.
+- **Logging + error handling** — an app-wide logger (`src/core/Log.*`) with a crash handler, level macros,
+  and a rolling file sink at `%APPDATA%\Forge\logs\forge.log` (plus stderr); logging fallible seams as you
+  build them is a standing build principle ([`docs/LOGGING.md`](docs/LOGGING.md)).
 
 **Coming next (per DIRECTION.md):** a device-agnostic **control-surface layer** so real grid
 controllers (Launchpad, APC40 mkII) drive the grid — a "one day" hardware goal; the grid is fully
 playable with mouse + keyboard without it, and the on-screen pad model already emits the LED encoding
 a driver would push. Plus richer MIDI input (note-record into clips, MIDI-learn, MIDI-clock / Ableton
-Link), and a decision on the 16-scene-rows-vs-window layout (scroll vs. shorter pads).
+Link). *(The 16-scene-rows-vs-window layout question is settled — vertical scroll shipped.)*
 
 A to-scale **UI mockup set** of the envisioned product lives in [`mockups/`](mockups/) (open
 `mockups/preview/forge-ui-storyboard.png`).
@@ -77,6 +81,7 @@ forge/
 ├── libs/tracktion_engine/      # git submodule, pinned to v3.2.0 (bundles JUCE)
 ├── src/
 │   ├── main.cpp                # ForgeApplication (owns the Engine) + MainComponent (shell)
+│   ├── core/                   # Log — app-wide logger + crash handler (file sink + stderr, FORGE_LOG_* macros)
 │   ├── services/
 │   │   ├── files/              # ProjectSession — owns the Edit; create/open/save/import; createMidiClip
 │   │   └── export/             # Exporter — WAV mixdown + per-track stems

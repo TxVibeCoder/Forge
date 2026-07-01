@@ -1,6 +1,7 @@
 #include "services/files/ProjectSession.h"
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
+#include "core/Log.h"
 
 ProjectSession::ProjectSession (te::Engine& e)
     : engine (e)
@@ -10,13 +11,23 @@ ProjectSession::ProjectSession (te::Engine& e)
 void ProjectSession::newProject (const juce::File& f)
 {
     editFile = f;
-    f.getParentDirectory().createDirectory();
+    const auto parentDir = f.getParentDirectory();
+
+    if (! parentDir.createDirectory().wasOk())
+        FORGE_LOG_WARN ("Failed to create project parent directory: " + parentDir.getFullPathName() + " — the edit may not persist correctly");
 
     edit = te::createEmptyEdit (engine, f);
 
+    if (edit == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create empty edit in memory");
+        return;
+    }
+
     // Write the (empty) edit to disk NOW, before any clip is inserted, so that clip
     // source files are serialized as paths relative to the edit file.
-    te::EditFileOperations (*edit).save (true, true, false);
+    if (! te::EditFileOperations (*edit).save (true, true, false))
+        FORGE_LOG_ERROR ("Failed to save new project to disk at " + f.getFullPathName());
 
     edit->ensureNumberOfAudioTracks (1);
 }
@@ -26,7 +37,10 @@ bool ProjectSession::openProject (const juce::File& f)
     auto loaded = te::loadEditFromFile (engine, f);
 
     if (loaded == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to load project from " + f.getFullPathName() + " — file may be corrupted or unsupported");
         return false;
+    }
 
     edit = std::move (loaded);
     editFile = f;
@@ -48,7 +62,12 @@ bool ProjectSession::save()
     if (edit == nullptr)
         return false;
 
-    return te::EditFileOperations (*edit).save (true, true, false);
+    const bool ok = te::EditFileOperations (*edit).save (true, true, false);
+
+    if (! ok)
+        FORGE_LOG_ERROR ("Failed to save project to " + editFile.getFullPathName());
+
+    return ok;
 }
 
 bool ProjectSession::saveAs (const juce::File& f)
@@ -59,7 +78,10 @@ bool ProjectSession::saveAs (const juce::File& f)
     // Only adopt the new file once the write actually succeeds. On failure leave editFile
     // (and thus getEditFile()) pointing at the previously-saved location.
     if (! te::EditFileOperations (*edit).saveAs (f, true))
+    {
+        FORGE_LOG_ERROR ("Failed to save project to " + f.getFullPathName());
         return false;
+    }
 
     editFile = f;
     return true;
@@ -74,6 +96,8 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te:
 
     if (clip != nullptr)
         edit->markAsChanged();
+    else
+        FORGE_LOG_ERROR ("Failed to import audio file " + f.getFullPathName() + " — format may be unsupported");
 
     return clip;
 }
@@ -89,7 +113,10 @@ te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange 
     auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
 
     if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create MIDI clip on track " + juce::String (trackIndex));
         return {};
+    }
 
     auto clip = track->insertMIDIClip (name, range, nullptr);
 
@@ -97,6 +124,10 @@ te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange 
     {
         PluginHost::ensureDefaultInstrument (*track);   // born audible — default 4OSC at chain head
         edit->markAsChanged();
+    }
+    else
+    {
+        FORGE_LOG_ERROR ("Failed to create MIDI clip on track " + juce::String (trackIndex));
     }
 
     return clip;
@@ -414,7 +445,10 @@ te::MidiClip::Ptr ProjectSession::createMidiClipInSlot (int trackIndex, int scen
     auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
 
     if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create or access track at index " + juce::String (trackIndex));
         return {};
+    }
 
     ensureScenes (sceneIndex + 1);
     track->getClipSlotList().ensureNumberOfSlots (sceneIndex + 1);   // pad a slot-deficient loaded track (QC fix)
@@ -422,7 +456,10 @@ te::MidiClip::Ptr ProjectSession::createMidiClipInSlot (int trackIndex, int scen
     auto* slot = getClipSlot (trackIndex, sceneIndex);
 
     if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("Clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " could not be resolved after grid growth");
         return {};
+    }
 
     // Default ~4-bar / 16-beat clip length, built from the tempo sequence like the linear
     // MIDI-create caller in main.cpp. Slot clips start at beat 0 (the slot owns the position).
@@ -439,6 +476,10 @@ te::MidiClip::Ptr ProjectSession::createMidiClipInSlot (int trackIndex, int scen
         PluginHost::ensureDefaultInstrument (*track);   // born audible — default 4OSC at chain head
         edit->markAsChanged();                          // user mutation -> persist (Sf)
     }
+    else
+    {
+        FORGE_LOG_ERROR ("Failed to insert MIDI clip into slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex));
+    }
 
     return clip;
 }
@@ -452,13 +493,19 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
     // Guarantee that invariant before inserting (mirrors newProject's save-first rule) — and BAIL if the
     // save fails, so we never fall through to an absolute-path insert (QC fix; saveAs checks this too).
     if (! editFile.existsAsFile() && ! save())
+    {
+        FORGE_LOG_ERROR ("Failed to save project before importing audio (path must serialize relative)");
         return {};
+    }
 
     // Mutating path: ensure track + grid row exist.
     auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
 
     if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create or access track at index " + juce::String (trackIndex));
         return {};
+    }
 
     ensureScenes (sceneIndex + 1);
     track->getClipSlotList().ensureNumberOfSlots (sceneIndex + 1);   // pad a slot-deficient loaded track (QC fix)
@@ -466,12 +513,18 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
     auto* slot = getClipSlot (trackIndex, sceneIndex);
 
     if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("Clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " could not be resolved after grid growth");
         return {};
+    }
 
     te::AudioFile audioFile (edit->engine, file);
 
     if (! audioFile.isValid())
+    {
+        FORGE_LOG_ERROR ("Failed to load audio file " + file.getFullPathName() + " — format may be unsupported");
         return {};
+    }
 
     const auto length = te::TimeDuration::fromSeconds (audioFile.getLength());
     const te::ClipPosition pos { { te::TimePosition(), te::TimePosition() + length }, {} };
@@ -483,6 +536,8 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
 
     if (clip != nullptr)
         edit->markAsChanged();
+    else
+        FORGE_LOG_ERROR ("Failed to insert audio clip into slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex));
 
     return clip;
 }

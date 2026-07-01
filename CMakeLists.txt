@@ -29,6 +29,7 @@ juce_generate_juce_header(Forge)
 
 target_sources(Forge PRIVATE
     src/main.cpp
+    src/core/Log.cpp
     src/services/files/ProjectSession.cpp
     src/services/export/Exporter.cpp
     src/engine/RecordController.cpp

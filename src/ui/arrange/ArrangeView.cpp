@@ -1,5 +1,6 @@
 #include "ui/arrange/ArrangeView.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 #include <array>
 #include <cmath>
@@ -307,6 +308,8 @@ AudioClipComponent::AudioClipComponent (TimelineView& v, te::Clip& c)
 
         if (audioFile.isValid())
             thumbnail = std::make_unique<te::SmartThumbnail> (clip.edit.engine, audioFile, *this, &clip.edit);
+        else
+            FORGE_LOG_ERROR ("Failed to create waveform thumbnail for clip '" + clip.getName() + "' — playback file is invalid or missing");
     }
 }
 

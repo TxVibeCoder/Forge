@@ -3,6 +3,7 @@
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -462,7 +463,9 @@ private:
                                 if (safeThis == nullptr || result <= 0 || result > names.size())
                                     return;
 
-                                PluginHost::addPluginToTrack (safeThis->track, names[result - 1]);
+                                if (PluginHost::addPluginToTrack (safeThis->track, names[result - 1]) == nullptr)
+                                    FORGE_LOG_WARN ("Failed to add plugin '" + names[result - 1] + "' to track '" + safeThis->track.getName() + "'");
+
                                 if (safeThis->onChanged)
                                     safeThis->onChanged();
                             });
@@ -683,6 +686,8 @@ public:
 
         if (auto mv = edit.getMasterVolumePlugin())
             fader.setValue (mv->getVolumeDb(), dontSendNotification);
+        else
+            FORGE_LOG_ERROR ("Master volume plugin not found — master fader will not control output level");
 
         fader.onValueChange = [this]
         {

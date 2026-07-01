@@ -1,5 +1,6 @@
 #include "engine/PluginScanner.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -42,6 +43,8 @@ namespace PluginScanner
 
         const int typesBefore = knownList.getNumTypes();
 
+        FORGE_LOG_DEBUG ("Plugin scan starting: " + juce::String (typesBefore) + " types already known");
+
         // Walk every registered format that actually needs a directory scan (VST3 does; AU is
         // found by the OS but still enumerates via searchPathsForPlugins with an empty path).
         for (auto* format : formatManager.getFormats())
@@ -54,6 +57,8 @@ namespace PluginScanner
             const auto filesOrIds  = format->searchPathsForPlugins (searchPaths, true, false);
 
             const int total = filesOrIds.size();
+
+            FORGE_LOG_DEBUG ("Scanning format '" + format->getName() + "': " + juce::String (total) + " candidate(s)");
 
             for (int i = 0; i < total; ++i)
             {
@@ -74,6 +79,9 @@ namespace PluginScanner
 
         // Let any custom scanner release resources (the engine installs an out-of-process one).
         knownList.scanFinished();
+
+        FORGE_LOG_DEBUG ("Plugin scan finished: " + juce::String (jmax (0, knownList.getNumTypes() - typesBefore))
+                         + " new type(s) added");
 
         if (onProgress != nullptr)
             onProgress (1.0f, {});

@@ -1,5 +1,7 @@
 #include "services/export/Exporter.h"
 
+#include "core/Log.h"
+
 using namespace juce;
 
 namespace Exporter
@@ -58,8 +60,11 @@ bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& e
         return false;
     }
 
-    outFile.getParentDirectory().createDirectory();
-    outFile.deleteFile();   // overwrite any existing file; render expects to create it fresh
+    if (! outFile.getParentDirectory().createDirectory())
+        FORGE_LOG_WARN ("Failed to create output directory: " + outFile.getParentDirectory().getFullPathName());
+
+    if (outFile.existsAsFile() && ! outFile.deleteFile())   // overwrite any existing file; render expects to create it fresh
+        FORGE_LOG_WARN ("Failed to delete existing file " + outFile.getFullPathName() + " — it may be locked or read-only");
 
     auto& engine = edit.engine;
 
@@ -106,9 +111,13 @@ bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& e
     if (task == nullptr)
     {
         te::Renderer::turnOffAllPlugins (edit);
+        FORGE_LOG_ERROR ("Couldn't initialise the renderer.");
         error = "Couldn't initialise the renderer.";
         return false;
     }
+
+    FORGE_LOG_INFO ("Exporting audio: " + juce::String (countClipsOnAudioTracks (edit))
+                    + " clips, " + juce::String (editLength.inSeconds()) + "s");
 
     // Drive the task to completion synchronously — no UIBehaviour progress bar, no message loop.
     while (task->runJob() == juce::ThreadPoolJob::jobNeedsRunningAgain)
@@ -120,12 +129,14 @@ bool renderEditToWav (te::Edit& edit, const juce::File& outFile, juce::String& e
     if (task->errorMessage.isNotEmpty())
     {
         outFile.deleteFile();
+        FORGE_LOG_ERROR ("Export render failed: " + task->errorMessage);
         error = task->errorMessage;
         return false;
     }
 
     if (! outFile.existsAsFile())
     {
+        FORGE_LOG_ERROR ("The render finished but no file was produced.");
         error = "The render finished but no file was produced.";
         return false;
     }
@@ -169,6 +180,7 @@ bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& err
 
     if (! outputDir.createDirectory())
     {
+        FORGE_LOG_ERROR ("Couldn't create the output folder: " + outputDir.getFullPathName());
         error = "Couldn't create the output folder: " + outputDir.getFullPathName();
         return false;
     }
@@ -213,7 +225,9 @@ bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& err
             baseName = "Track";
 
         auto destFile = outputDir.getNonexistentChildFile (baseName, ".wav", false);
-        destFile.deleteFile();   // render expects to create the file fresh
+
+        if (destFile.existsAsFile() && ! destFile.deleteFile())   // render expects to create the file fresh
+            FORGE_LOG_WARN ("Failed to delete existing stem file " + destFile.getFullPathName());
 
         te::Renderer::Parameters params (edit);
         params.destFile           = destFile;
@@ -234,6 +248,7 @@ bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& err
 
         if (task == nullptr)
         {
+            FORGE_LOG_WARN ("Couldn't initialize renderer for track '" + at->getName() + "' — skipping this stem");
             failures.add (at->getName() + " (couldn't initialise the renderer)");
             continue;
         }
@@ -246,12 +261,14 @@ bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& err
         if (task->errorMessage.isNotEmpty())
         {
             destFile.deleteFile();
+            FORGE_LOG_WARN ("Stem render failed for '" + at->getName() + "': " + task->errorMessage);
             failures.add (at->getName() + " (" + task->errorMessage + ")");
             continue;
         }
 
         if (! destFile.existsAsFile())
         {
+            FORGE_LOG_WARN ("Render for track '" + at->getName() + "' finished but no file was produced");
             failures.add (at->getName() + " (no file was produced)");
             continue;
         }

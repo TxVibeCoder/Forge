@@ -24,6 +24,10 @@ namespace SessionLayout
     constexpr int slotPad   = 3;                 // inset inside each pad
     constexpr int numScenes = 16;                // default visible scene rows (MVP grid height)
     constexpr int gap       = 0;                 // columns are flush (hairline-separated)
+    constexpr int slotH     = 46;                // per-slot pad height used to SIZE the scrollable content
+                                                 // (columns then divide their middle region evenly across
+                                                 // numScenes); matches sheet 00 row pitch. Promoted from the
+                                                 // former file-local kSlotH in SessionView.cpp.
 
     constexpr juce::uint32 laneBg = 0xff262626;  // lane background — matches ArrangeView lane literal
 

@@ -76,6 +76,11 @@ public:
     /** Track-column count (excludes the scene column), for diagnostics / self-tests. */
     int getNumColumns() const                { return columns.size(); }
 
+    /** Exposes the scrolling viewport so the headless screenshot harness can drive setViewPosition
+        to prove vertical scroll. Message-thread only; UI-geometry accessor (does NOT let callers
+        cache slots — R1 is preserved). */
+    juce::Viewport& getViewport() { return viewport; }
+
     //==============================================================================
     // Shell seam callbacks (null-guarded; mirror ArrangeView). Default null => no-op.
 
@@ -112,6 +117,7 @@ private:
 
     void setFocus (int trackIdx, int sceneIdx);
     void repaintPad (int trackIdx, int sceneIdx);
+    void syncSceneColumnToScroll();  // translate the pinned scene column by -viewport.getViewPositionY()
 
     // Resolves the AudioTrack at trackIdx fresh via te::getAudioTracks (R1; never cached). Null
     // for an out-of-range index / no edit. Message-thread only.
@@ -125,7 +131,19 @@ private:
     ProjectSession& session;
     te::Edit* edit = nullptr;                 // raw, non-owning (R1)
 
-    juce::Viewport viewport;
+    // Viewport subclass whose only job is to surface visibleAreaChanged as an onScroll callback,
+    // so SessionView can translate the pinned scene column to match the vertical scroll offset.
+    struct ScrollingViewport : public juce::Viewport
+    {
+        std::function<void()> onScroll;
+        void visibleAreaChanged (const juce::Rectangle<int>& newArea) override
+        {
+            juce::Viewport::visibleAreaChanged (newArea);
+            if (onScroll) onScroll();
+        }
+    };
+
+    ScrollingViewport viewport;
     juce::Component columnHolder;
     juce::OwnedArray<TrackColumnComponent> columns;
     std::unique_ptr<SceneColumnComponent> scenes;
@@ -138,6 +156,10 @@ private:
     // Sized columns × numScenes on rebuild(); indexed [trackIdx * numScenes + sceneIdx].
     juce::Array<SlotVisualState> lastSlotState;
     juce::Array<SceneLaunchState> lastSceneState;
+
+    // Edge-trigger gate for the 25 Hz track-count-mismatch WARN: log only when the live count
+    // differs from the last value we logged (reset to -1 in rebuild()), never on every poll tick.
+    int lastLoggedTrackCount = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SessionView)
 };

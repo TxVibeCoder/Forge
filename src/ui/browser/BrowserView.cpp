@@ -1,5 +1,6 @@
 #include "ui/browser/BrowserView.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -47,8 +48,14 @@ BrowserView::BrowserView()
 
     // Start the background scan thread first, then point the list at the root so the initial
     // scan has a worker to run on (mirrors juce's ImagesDemo ordering).
-    scanThread.startThread (Thread::Priority::background);
-    contents.setDirectory (defaultBrowserRoot(),
+    if (! scanThread.startThread (Thread::Priority::background))
+        FORGE_LOG_ERROR ("Failed to start file-scanner thread — the browser tree will not populate");
+
+    const auto browserRoot = defaultBrowserRoot();
+    if (! browserRoot.isDirectory())
+        FORGE_LOG_WARN ("Failed to open browser directory: " + browserRoot.getFullPathName());
+
+    contents.setDirectory (browserRoot,
                            true,    // includeDirectories — let the user drill into sub-folders
                            true);   // includeFiles
 }

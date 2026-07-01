@@ -31,6 +31,8 @@ Four rules that this whole architecture exists to protect. When a decision is un
 3. **The UI observes; it never reaches into the audio.** User actions become *commands* that change the model. The audio engine picks up the change on its next block. The UI never pokes the audio thread directly.
 4. **Build on a proven core; spend your energy where it's yours.** The real-time audio graph is one of the hardest things in all of software. Don't rebuild it. Stand on a battle-tested engine and pour your effort into the workflow, the UI, and your own instruments/effects — the parts that make it *yours*.
 
+> **Logging (build principle):** Forge has an app-wide logging + error-handling subsystem in **`src/core/Log.*`** (a `juce::Logger` sink → `%APPDATA%\Forge\logs\forge.log` + stderr, a crash handler, and `FORGE_LOG_*` macros). **Log fallible seams as you build them** — but never on the audio/RT thread and never per-tick in a poll/paint (principle #1). See **[LOGGING.md](LOGGING.md)** for the principle, cheat-sheet, and new-feature checklist.
+
 ---
 ## 3. Recommended stack
 

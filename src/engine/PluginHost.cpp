@@ -1,5 +1,6 @@
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
+#include "core/Log.h"
 
 using namespace juce;
 
@@ -167,7 +168,10 @@ namespace PluginHost
         auto plugin = edit.getPluginCache().createNewPlugin (match->xmlType, match->description);
 
         if (plugin == nullptr)
+        {
+            FORGE_LOG_ERROR ("Failed to create plugin '" + match->displayName + "' — may be corrupted or unsupported");
             return {};
+        }
 
         // A track's chain ends with the always-present [volume&pan, level-meter] tail. We want
         // the new effect at the END of the user's insert section, i.e. just BEFORE that tail,
@@ -212,7 +216,10 @@ namespace PluginHost
         auto plugin = edit.getPluginCache().createNewPlugin (match->xmlType, match->description);
 
         if (plugin == nullptr)
+        {
+            FORGE_LOG_ERROR ("Failed to create instrument '" + match->displayName + "' — may be corrupted");
             return {};
+        }
 
         // The instrument is the track's sound source, so it goes at the HEAD of the chain
         // (index 0) — effects, then the volume/meter tail, all follow it.
@@ -231,7 +238,9 @@ namespace PluginHost
                 return false;
 
         // No instrument yet: insert a default 4OSC at the head of the chain.
-        addInstrumentToTrack (track, te::FourOscPlugin::getPluginName());
+        if (addInstrumentToTrack (track, te::FourOscPlugin::getPluginName()) == nullptr)
+            FORGE_LOG_ERROR ("Failed to ensure default instrument on track — MIDI clips may be inaudible");
+
         return true;
     }
 

@@ -11,6 +11,8 @@
 
 #include <JuceHeader.h>
 
+#include "core/Log.h"
+
 namespace te = tracktion;
 
 namespace EngineHelpers
@@ -32,9 +34,18 @@ namespace EngineHelpers
             if (audioFile.isValid())
             {
                 const auto length = te::TimeDuration::fromSeconds (audioFile.getLength());
-                return track->insertWaveClip (file.getFileNameWithoutExtension(), file,
-                                              { { start, start + length }, {} }, false);
+                auto clip = track->insertWaveClip (file.getFileNameWithoutExtension(), file,
+                                                   { { start, start + length }, {} }, false);
+
+                if (clip == nullptr)
+                    FORGE_LOG_ERROR ("Failed to insert audio clip from " + file.getFullPathName()
+                                     + " onto track " + juce::String (trackIndex));
+
+                return clip;
             }
+
+            FORGE_LOG_ERROR ("Failed to validate audio file " + file.getFullPathName()
+                             + " — format may be unsupported");
         }
 
         return {};
@@ -48,8 +59,16 @@ namespace EngineHelpers
                                                   te::TimeRange range, const juce::String& name)
     {
         if (auto* track = getOrInsertAudioTrackAt (edit, trackIndex))
-            return track->insertMIDIClip (name, range, nullptr);
+        {
+            auto clip = track->insertMIDIClip (name, range, nullptr);
 
+            if (clip == nullptr)
+                FORGE_LOG_ERROR ("Failed to insert MIDI clip onto track " + juce::String (trackIndex));
+
+            return clip;
+        }
+
+        FORGE_LOG_ERROR ("Failed to insert MIDI clip onto track " + juce::String (trackIndex));
         return {};
     }
 
@@ -214,7 +233,15 @@ namespace EngineHelpers
         // 4. If the combined in+out open failed, JUCE has already torn down the output device.
         //    Reopen the output-only setup we had so playback survives a failed arm.
         if (err.isNotEmpty() && current.outputDeviceName.isNotEmpty())
-            adm.setAudioDeviceSetup (current, false);
+        {
+            FORGE_LOG_ERROR ("Failed to open input device '" + setup.inputDeviceName + "': " + err
+                             + " — attempting output-only restore");
+
+            const auto restoreErr = adm.setAudioDeviceSetup (current, false);
+
+            if (restoreErr.isNotEmpty())
+                FORGE_LOG_ERROR ("Recovery: failed to restore output-only device — playback may be unavailable");
+        }
 
         // 5. Rebuild Tracktion's wave-in list from whatever input channels are now open.
         dm.rescanWaveDeviceList();
@@ -265,8 +292,16 @@ namespace EngineHelpers
         // Make the new hosted wave inputs visible to RecordController/getNumWaveInDevices().
         engine.getDeviceManager().rescanWaveDeviceList();
 
-        return engine.getDeviceManager().isHostedAudioDeviceInterfaceInUse() ? &hostedInterface
-                                                                             : nullptr;
+        if (engine.getDeviceManager().isHostedAudioDeviceInterfaceInUse())
+        {
+            FORGE_LOG_INFO ("Initialized synthetic audio device: " + juce::String (numInputChannels)
+                            + " in, " + juce::String (numOutputChannels) + " out @ "
+                            + juce::String (sampleRate) + "Hz");
+            return &hostedInterface;
+        }
+
+        FORGE_LOG_ERROR ("Engine refused to switch to synthetic audio device — record selftest cannot proceed");
+        return nullptr;
     }
 
     //==============================================================================
