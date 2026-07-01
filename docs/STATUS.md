@@ -3,8 +3,9 @@
 *Living status document. Last updated 2026-06-30 (this session: **Session-grid vertical scroll** — the
 16-scene grid now scrolls Ableton-style with fixed ~46 px pads and a pinned scene column that tracks the
 pads; and an **app-wide logging + error-handling subsystem** (`src/core/Log.*`) with logging-at-the-seam now
-a standing build principle. Both **built + verified, not yet committed**: clean MSVC Debug build; `--selftest`,
-`--selftest-record`, `--selftest-session` all PASS; `--screenshot` proves the scroll. The prior session shipped
+a standing build principle. Both **built + verified, committed as `8d15234` + pushed** to `origin/main`
+(working tree clean, sanitized): clean MSVC Debug build; `--selftest`, `--selftest-record`,
+`--selftest-session` all PASS; `--screenshot` proves the scroll. The prior session shipped
 the **Session clip-launch grid** — the DEFAULT view (Session ∣ Arrange ∣ Mix) on Tracktion's Scene / ClipSlot /
 LaunchHandle; playable with mouse + keyboard, launch audible + bar-quantised).*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
@@ -195,7 +196,7 @@ inside slots and scenes. Full design record in [devlog/session-design.md](devlog
   Real hardware controllers are the next "one day" seam (§5). Live mouse interaction still needs a manual pass
   (the dev window can't be GUI-driven headlessly, but `--screenshot` covers rendering).
 
-### Session-grid vertical scroll — SHIPPED  (built + verified this session, not yet committed)
+### Session-grid vertical scroll — SHIPPED  (`8d15234`; built + verified + pushed this session)
 The 16-scene layout question is **resolved: vertical scroll** (Ableton-style, keep full-size pads) over
 fit-to-window. The grid was fit-to-window — pads stretched tall and the bottom scene rows were clipped and
 unreachable on a short window. It now scrolls vertically with **FIXED ~46 px pads** (`SessionLayout::slotH`
@@ -210,7 +211,7 @@ a real vertical scrollbar appears. Isolated to `src/ui/session/SessionView.{h,cp
   proof of the scroll; all three selftests still PASS. Design record:
   [devlog/session-scroll-design.md](devlog/session-scroll-design.md).
 
-### App-wide logging + error-handling subsystem — SHIPPED (NEW)  (built + verified this session, not yet committed)
+### App-wide logging + error-handling subsystem — SHIPPED (NEW)  (`8d15234`; built + verified + pushed this session)
 Forge previously had essentially **no logging** (3 incidental sites; ad-hoc status-strip messages only). New
 facility **`src/core/Log.h` / `src/core/Log.cpp`** (added to CMake `target_sources` after `main.cpp`):
 - A `juce::Logger` subclass installed via `setCurrentLogger` (so JUCE's own device logs are captured too) +
@@ -402,8 +403,8 @@ surface is becoming the **Session clip grid**, so the sequence is reordered arou
    default) on Tracktion's `ClipSlot` / scenes / `LaunchHandle`; playable with mouse + keyboard, launch
    audible + bar-quantised; built + adversarially QC'd + fix-re-verified (see the Session-grid section in §2
    and [devlog/session-design.md](devlog/session-design.md)). The **16-scene vertical scroll** (Ableton-style,
-   fixed ~46 px pads) is now **✅ DONE this session** (built + verified, not yet committed — see §2). **Remaining:**
-   a manual GUI smoke pass of live mouse interaction.
+   fixed ~46 px pads) is now **✅ DONE this session** (built + verified, committed as `8d15234` + pushed — see
+   §2). **Remaining:** a manual GUI smoke pass of live mouse interaction.
 2. **Control-surface layer ("one day").** Device-agnostic drivers on Tracktion's `ControlSurface` seam so
    **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state model
    feeds the on-screen grid and the hardware LEDs. The grid works without any hardware (not an MVP gate).

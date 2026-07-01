@@ -3,6 +3,11 @@
 Forge drives itself headless for CI-free verification. Each mode writes a key=value report
 to `%TEMP%\forge_phase0_selftest.log` then quits. `result=PASS|FAIL` is the bottom line.
 
+Since the logging subsystem (`src/core/Log.*`, see [../docs/LOGGING.md](../docs/LOGGING.md)) landed, every
+`FORGE_LOG_*` line also **echoes to stderr**, so a headless run surfaces its full diagnostic trace (startup
+banner, device, phase boundaries, any failure) on the console with no debugger attached — and each report now
+appends a `logFile=<path>` line pointing at the persistent log (`%APPDATA%\Forge\logs\forge.log`).
+
 ## `Forge --selftest` (playback / arrange path)
 
 Imports a generated 440 Hz tone onto track 1, plays it, then samples state at ~3s.
@@ -70,3 +75,18 @@ the transport), waits ≈1.5 s for the launcher to engage, then verifies the cli
 
 > Verified 2026-06-30: PASS on a box with a working output device — the launched slot's handle reaches
 > `playing` with the transport rolling, confirming the launcher playback path engages.
+
+## `Forge --screenshot` (headless render — no PASS/FAIL)
+
+Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a
+PNG in `%TEMP%` via `createComponentSnapshot`, so the UI can be inspected without a live display. Writes:
+
+| file | what it proves |
+|---|---|
+| `forge_shot_session.png` | the Session clip grid (matches [mockups](../mockups/) sheet 00) |
+| `forge_shot_arrange.png` / `forge_shot_mix.png` | the Arrange timeline / Mixer |
+| `forge_shot_session_top.png` / `forge_shot_session_scrolled.png` | **vertical-scroll proof** — the grid at a short (1040×360) window, snapped at the top then scrolled to the bottom. Comparing them confirms all 16 scene rows are reachable (not clipped), pads stay ~46 px (no stretch), and the pinned scene column stays aligned with the pads while scrolling. |
+
+> Verified 2026-06-30: `session_scrolled` shows scenes 10–16 with the scene column aligned to the pads,
+> confirming the Session-grid vertical scroll. This is the headless stand-in for the one check that still
+> needs a human: a live mouse/keyboard GUI smoke pass.

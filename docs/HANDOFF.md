@@ -5,10 +5,10 @@
 > **"Session-grid vertical scroll + app-wide logging"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`** (`origin/main` @ `06f3cf6` — the prior session's Session grid is merged + live). **This session's
-two features — vertical scroll + the logging subsystem — are BUILT + VERIFIED but NOT YET COMMITTED (working
-tree dirty; commit + sanitize + push still to do).** Last build **clean** (MSVC Debug) · **`--selftest`,
-`--selftest-record`, `--selftest-session` all PASS** on the final binary · `--screenshot` proves the scroll.
+**`main`** (`origin/main` @ `8d15234`). **This session's two features — vertical scroll + the logging
+subsystem — are COMMITTED as `8d15234` and PUSHED to `origin/main` (working tree clean; sanitized before the
+push).** Last build **clean** (MSVC Debug) · **`--selftest`, `--selftest-record`, `--selftest-session` all
+PASS** on the final binary · `--screenshot` proves the scroll.
 
 ---
 
@@ -31,8 +31,8 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ## What this session did — vertical scroll + app-wide logging
 
-Two features shipped this session. Both are **built + verified, NOT yet committed** (working tree dirty; the
-commit + sanitize + push is the first thing to do next time — see "Gotchas").
+Two features shipped this session. Both are **built + verified, and now COMMITTED (`8d15234`) + PUSHED** to
+`origin/main` (working tree clean; sanitized before the push — see "Gotchas").
 
 1. **Session grid — vertical scroll (the flagged "START HERE" next-step is now DONE).** The clip grid was
    fit-to-window: pads stretched tall and the bottom scene rows were **clipped + unreachable** on a short
@@ -63,7 +63,8 @@ commit + sanitize + push is the first thing to do next time — see "Gotchas").
      [LOGGING.md](LOGGING.md) (principle + cheat-sheet + new-feature checklist). `.gitignore` now excludes
      `*.log` / `forge.log*`. Design record: [devlog/logging-design.md](devlog/logging-design.md).
 
-> Prior session (`origin/main` @ `06f3cf6`, merged + live): **built + published the Session clip-launch grid**
+> Prior session (published at `06f3cf6`, the tip this session built on; now superseded by `8d15234`):
+> **built + published the Session clip-launch grid**
 > — SessionView as the default `ViewMode`, on Tracktion's `ClipSlot` / `Scene` / `LaunchHandle`; source-grounded
 > design + file-disjoint build → 5-lens adversarial QC (12 real issues fixed) → independent fix re-verify (caught
 > 2 regressions) → `--selftest-session` + `--screenshot` added → sanitized + pushed. Full record:
@@ -103,10 +104,9 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-0. **FIRST: commit + sanitize + push this session's work.** Vertical scroll + the logging subsystem are built
-   and verified but the **working tree is dirty** — nothing is committed yet. Commit (`feat` + `docs`), then
-   **sanitize before pushing** (pseudonymous public repo — see "Gotchas"), then push. Until then `origin/main`
-   is still at the prior session's `06f3cf6`.
+> This session's work is already **committed (`8d15234`) + pushed** (sanitized) — the commit + push step is
+> done, so the flagged next items are the manual GUI smoke pass and then the control-surface layer.
+
 1. **Manual GUI smoke pass — START HERE (functionally).** The one path that can't be driven headlessly here.
    Click through the Session grid live (launch a pad / a scene / the right-click "Edit clip" + double-click
    gestures, **and scroll to scenes 10–16** now that vertical scroll shipped) and the MIDI MVP draw→play path.
@@ -174,13 +174,14 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **This session is NOT yet committed.** Vertical scroll + logging are built + verified but the working tree is
-  **dirty**; `origin/main` is still at the prior session's `06f3cf6`. Commit + push is the first next-step (see
-  "What's next" #0). **Public repo = sanitize before every push** (pseudonymous TxVibeCoder — keep the real
-  email / personal `C:\Users\…` paths / prior-project names out; note `.gitignore` now excludes `*.log` /
-  `forge.log*` so the log sink never gets committed). History was rewritten once (a prior session) to scrub a
-  stray path; `git-filter-repo` isn't on PATH here, so run **`python -m git_filter_repo`** (it drops the
-  `origin` remote as a safety step — re-add it before pushing). Submodules are clean.
+- **This session IS committed + pushed.** Vertical scroll + logging are committed as `8d15234` and pushed to
+  `origin/main`; the working tree is **clean** and the pushed set was **sanitized** (a privacy scan found no
+  real email / personal `C:\Users\…` paths / private side-project names). **Public repo = sanitize before every
+  push** (pseudonymous TxVibeCoder — keep the real email / personal `C:\Users\…` paths / prior-project names
+  out; note `.gitignore` now excludes `*.log` / `forge.log*` so the log sink never gets committed). History was
+  rewritten once (a prior session) to scrub a stray path; `git-filter-repo` isn't on PATH here, so run
+  **`python -m git_filter_repo`** if it's ever needed again (it drops the `origin` remote as a safety step —
+  re-add it before pushing). Submodules are clean.
 
 ---
 
@@ -206,7 +207,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 ## Open decisions (waiting on you)
 
 - **Session grid layout — RESOLVED + BUILT (vertical scroll).** No longer open: vertical scroll with fixed
-  ~46 px pads shipped this session (built + verified, not yet committed). See "What this session did" #1.
+  ~46 px pads shipped this session (built + verified, committed as `8d15234` + pushed). See "What this session
+  did" #1.
 - **Double-click edit gesture** — currently double-click opens a clip AND launches it (first press launches);
   right-click "Edit clip" is the launch-free path. Kept as belt-and-suspenders this session; revisit if the
   double-launch bothers you.

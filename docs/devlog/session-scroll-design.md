@@ -241,3 +241,8 @@ magic number.
   acceptable, and confirm the alignment verification in §4 passes. Alternatively, decide the bottom
   ~8px track-footer occlusion is acceptable and drop the `hBar` reservation entirely (simplest, but
   the scene column's bottom stop band would overhang the H-bar by ~8px).
+  **RESOLVED:** the `hBar` accessors are VERIFIED PRESENT in the vendored JUCE
+  (`isHorizontalScrollBarShown()`, `getScrollBarThickness()`) and used directly — NO fallback needed.
+  Also confirmed a post-implementation fix: `resized()` uses `columnHolder.setSize(...)` (not
+  `setBounds(0, 0, ...)`) so a relayout while scrolled no longer resets the scroll to the top —
+  verified via `--screenshot` (the `session_top` / `session_scrolled` pair).

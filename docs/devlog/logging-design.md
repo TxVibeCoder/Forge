@@ -617,12 +617,20 @@ engine/UI diagnostics compiled out in Release; the ~10 explicitly-marked hot-pat
 ## 10. Open questions for the human
 1. **Crash handler after shutdown** — stays registered (no JUCE unregister API); made inert by
    clearing `logFile`. Accept, or mandate install-once-per-process?
+   **RESOLVED:** ACCEPTED the inert-via-empty-`logFile` guard (stays registered, self-guards on the
+   cleared `logFile`) — implemented.
 2. **Engine device-open failure** — engine is a member constructed before `install()`. Accept the
    post-open snapshot + startup null-device check (option A), or refactor engine to a
    `unique_ptr` built inside `initialise()` (option B)?
+   **RESOLVED:** chose OPTION A — the post-open device snapshot INFO + a startup null-device ERROR
+   check, implemented in `main.cpp`; the engine stays a member (no `unique_ptr` refactor).
 3. **Log-file location** — `%APPDATA%\Forge\logs\forge.log` (roaming). Confirm, vs. `%TEMP%` or
    `%LOCALAPPDATA%`.
+   **RESOLVED:** CONFIRMED `%APPDATA%\Forge\logs\forge.log` — implemented.
 4. **Debug lines in the file sink** — currently routed to file; exclude from file (debugger-only)
    if dev debug volume bloats the 1 MiB cap?
+   **RESOLVED:** KEPT routing debug lines to the file (compiled out of Release anyway, so no
+   Release-file bloat).
 5. **`.gitignore`** — add `*.log` / `forge.log*` as defense-in-depth (logs carry absolute user
    paths + commandLine) so a redirected stderr dump can't be committed to the public repo.
+   **RESOLVED:** ADDED `*.log` / `forge.log*` to `.gitignore`.
