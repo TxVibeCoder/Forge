@@ -26,3 +26,7 @@ forge.log*
 
 # Local-only notes (never published to this pseudonymous public repo).
 *.local.md
+
+# Multi-CLI wave packets — local operational scaffolding (they embed machine-local paths).
+# The committed record of a wave is its consolidation devlog, not these prompt files.
+wave-*-cli-prompts/

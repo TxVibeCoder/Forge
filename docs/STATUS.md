@@ -256,6 +256,40 @@ the slot. This is **verdict (A): direct `ClipSlot` recording**, and it is now **
   **exactly** those notes (`capturedNoteCount == notesInjected`, `preExistingNotes==0`) → **PASS**. Adversarial
   QC: 0 blocker/major, 2 minor found + fixed (swapProject MIDI-teardown; slot-arm error-message fallback).
 
+### Wave 01 — six parallel feature seams — SHIPPED  (first multi-CLI wave; baseline `6100fb9`)
+Forge's first **flat parallel multi-CLI wave**: six file-disjoint feature CLIs (P1–P6) built against
+contract-first seams and committed their own scoped commits; the orchestrator (P7) implemented the two shared
+`ProjectSession` seams, wired everything into the single integration build, and ran adversarial QC. Full record:
+[devlog/wave-01-features.md](devlog/wave-01-features.md).
+- **P1 metronome + count-in** (`096c9bd`): a stateless `Metronome` seam over the engine's `Edit::clickTrackEnabled`
+  (persisted, OFF by default) + native `Edit::CountIn` (a global setting; whole-bar count-in ≤ 2 bars). TransportBar
+  gains a **Click** toggle + count-in selector. Native count-in — `transport.record()` pre-rolls it, no
+  `RecordController` change.
+- **P2 MIDI-learn** (`1ef4f37`): a thin `MidiLearn` driver over Tracktion's native `ParameterControlMappings`
+  (persists on the Edit) + `PluginHost::getAutomatableParameters`. Wired minimal — a **Ctrl+L** track▸plugin▸param
+  picker arms a learn. **Deferred:** `ForgeUIBehaviour` / a MIDI-input listener so real controller CCs reach the
+  seam; a `--selftest-midilearn` gate.
+- **P3 buses / sends** (`c5062a3`): per-track **A/B aux-send knobs** + two **aux-return strips** in the mixer, over
+  a new `ProjectSession` aux seam (`ensureAuxBus`/`setTrackSendLevel`/…). An aux bus = a plain `AudioTrack` +
+  `AuxReturnPlugin`, appended at the **END** so absolute track indices stay stable; `onTracksChanged` rebuilds the
+  grid/lanes on add.
+- **P4 async export + progress** (`8d0afdf`): `renderEditToWavAsync`/`renderStemsAsync` run the render recipe
+  off the message thread with progress + cancel; an `ExportProgress` panel drives it. **Sync API preserved.**
+- **P5 markers** (`fe1bfcb`): a `MarkerBar` timeline strip over a new `ProjectSession` markers seam (keyed on the
+  stable `EditItemID`), sharing the arrange `TimelineView`.
+- **P6 clip edge-fade** (`975846e`): a `ClipFades` helper (5 ms linear anti-click fade, audio-only, idempotent),
+  wired into `importAudioFile` + `importAudioIntoSlot`.
+- **Consolidation:** implemented the aux + markers `ProjectSession` seams (source-verified engine APIs); wired all
+  6 features in `main.cpp` + 5 new CMake sources. Caught + fixed a **nested-block-comment** bug in the committed
+  `MarkerBar.h` (`te::MarkerClip*/Clip*` closed a `/* */` doc comment early — the CLAUDE.md gotcha; a build-less CLI
+  can't catch it). **Adversarial QC** (5 dimensions → per-finding skeptic verify): **3 confirmed, 0 refuted** — two
+  distinct lifetime blockers, both fixed in `swapProject` before the Edit is torn down: an **async-export UAF**
+  (Edit freed under the render worker → `activeRender.reset()`) and a **MIDI-learn dangling `learningEdit`** (→
+  `midiLearn.cancelLearn()`). Aux-index-stability + markers-alignment dimensions came back clean.
+- **Verified:** clean MSVC Debug build (0 warnings); **all four selftests PASS**; `--screenshot` renders all views
+  (mixer shows the A/B sends + Return A/B strips; arrange shows Click + count-in). Live-gesture smoke pass still
+  maintainer-only.
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -413,9 +447,9 @@ tests/  SELFTEST.md
 |---|---|---|
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
-| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
+| 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ done (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows + **buses/sends (aux A/B, W01 P3)** done) |
 | 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish + W7 record built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; **W7 MIDI record into Session slots done** (`160f6cc`, verdict A, `--selftest-midi` PASS → `docs/devlog/midi-record-design.md`); automation to do) |
-| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
+| 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division + **markers (W01 P5)** + **async export w/ progress (W01 P4)** + **metronome/count-in (W01 P1)** + **anti-click edge-fade (W01 P6)** done; LUFS/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
 ### Interface build order (from INTERFACE.md)

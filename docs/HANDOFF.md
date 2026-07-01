@@ -2,14 +2,16 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-01**, end of the
-> **"W7 — MIDI record into Session clip slots"** session.
+> **"Wave 01 — six parallel feature seams"** session (Forge's first multi-CLI wave).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`** (`origin/main` @ `160f6cc` + this docs commit). **This session's feature — W7 MIDI record into
-Session clip slots — is COMMITTED as `160f6cc` and PUSHED to `origin/main` (working tree clean; sanitized
-before the push; previous tip was `2589c42`).** Last build **clean** (MSVC Debug, 0 warnings) · **all four
-selftests PASS** — `--selftest`, `--selftest-record`, `--selftest-session`, `--selftest-midi` — on the final
-binary.
+**`main`**. **Wave 01 shipped this session: six file-disjoint feature CLIs (P1–P6) each landed a scoped commit,
+and the orchestrator (P7) consolidation is COMMITTED as `17d335c` (this docs commit sits on top) and PUSHED to
+`origin/main`; working tree clean, sanitized before the push. Baseline before the wave was `6100fb9`.** Last
+build **clean** (MSVC Debug, 0 warnings) · **all four selftests PASS** — `--selftest`, `--selftest-record`,
+`--selftest-session`, `--selftest-midi` — on the final binary; `--screenshot` renders. Six features shipped:
+**metronome + count-in, MIDI-learn, buses/sends (aux A/B), async export + progress, markers, anti-click
+edge-fade** — full record in [devlog/wave-01-features.md](devlog/wave-01-features.md).
 
 ---
 
@@ -30,36 +32,41 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What this session did — W7: MIDI record into Session clip slots
+## What this session did — Wave 01: six parallel feature seams
 
-One feature shipped this session. It's **built + verified, and now COMMITTED (`160f6cc`) + PUSHED** to
-`origin/main` (working tree clean; sanitized before the push — see "Gotchas").
+Forge's **first flat parallel multi-CLI wave**: six file-disjoint feature CLIs (P1–P6) built against
+contract-first seams and each committed a scoped commit, then the orchestrator (P7) implemented the two shared
+`ProjectSession` seams, wired everything into the single integration build, and ran adversarial QC. All
+**built + verified + COMMITTED (`17d335c` + this docs commit) + PUSHED** to `origin/main` (working tree clean;
+sanitized before the push). Full record: [devlog/wave-01-features.md](devlog/wave-01-features.md).
 
-**W7 — MIDI record into Session clip slots.** A track can now be **MIDI record-armed** (the Session arm button
-branches MIDI vs audio), and an **empty slot on a MIDI-armed track** can be captured via **Ctrl+Enter** or a
-right-click **"Record into slot"** item → a live-played MIDI loop is recorded straight into that slot as a new
-**born-audible (4OSC) `te::MidiClip`**. Recording is **transport-driven** (`transport.record()`), **NOT**
-launch-driven — the armed slot's `itemID` is the record target, and on stop the engine materialises the clip in
-the slot. This is **verdict (A): direct `ClipSlot` recording**, now **empirically proven** (the design had it
-"untested in-engine"). Frozen design record: [devlog/midi-record-design.md](devlog/midi-record-design.md).
+- **P1 metronome + count-in** (`096c9bd`): `engine/Metronome` seam over the engine's `Edit::clickTrackEnabled`
+  (persisted, OFF by default) + native `Edit::CountIn`; TransportBar gains a **Click** toggle + count-in
+  selector. Count-in is native (`transport.record()` pre-rolls it) — no `RecordController` change.
+- **P2 MIDI-learn** (`1ef4f37`): `engine/MidiLearn` — a thin driver over Tracktion's native
+  `ParameterControlMappings` (persists on the Edit) + `PluginHost::getAutomatableParameters`. Wired **minimal**:
+  a **Ctrl+L** track▸plugin▸param picker arms a learn. **Deferred** (ticketed): a focused-edit
+  `ForgeUIBehaviour` / MIDI-input listener so real controller CCs reach the seam; a `--selftest-midilearn` gate.
+- **P3 buses / sends** (`c5062a3`): per-track **A/B aux-send knobs** + two **aux-return strips** in the mixer,
+  over a new `ProjectSession` aux seam. An aux bus = a plain `AudioTrack` + `AuxReturnPlugin`, **appended at the
+  END** so absolute track indices stay stable; `onTracksChanged` rebuilds the grid/lanes on add.
+- **P4 async export + progress** (`8d0afdf`): `Exporter::renderEditToWavAsync`/`renderStemsAsync` run off the
+  message thread with progress + cancel behind an `ExportProgress` panel; the **sync API is preserved**.
+- **P5 markers** (`fe1bfcb`): a `MarkerBar` timeline strip (keyed on the stable `EditItemID`) over a new
+  `ProjectSession` markers seam, sharing the arrange `TimelineView`.
+- **P6 clip edge-fade** (`975846e`): `engine/ClipFades` — a 5 ms linear anti-click fade (audio-only,
+  idempotent), wired into `importAudioFile` + `importAudioIntoSlot`.
+- **Consolidation:** implemented the aux + markers seams (source-verified engine APIs) + wired all 6 features.
+  Caught + fixed a **nested-block-comment** bug in the committed `MarkerBar.h` (`te::MarkerClip*/Clip*` closed a
+  `/* */` doc comment early — the CLAUDE.md gotcha; a build-less CLI can't catch it). **Adversarial QC**
+  (5 dimensions → per-finding skeptic verify): **3 confirmed, 0 refuted** — two distinct lifetime blockers, both
+  fixed in `swapProject` before the Edit is torn down: an **async-export UAF** (Edit freed under the render
+  worker → `activeRender.reset()`) and a **MIDI-learn dangling `learningEdit`** (→ `midiLearn.cancelLearn()`).
 
-- **Record layer** (`src/engine/RecordController.{h,cpp}`): new MIDI methods — `enableMidiInputs`,
-  `armFirstMidiInputToSlot` / `…ToTrack`, `disarmSlot` / `disarmMidiTrack`,
-  `isSlotMidiArmed` / `isTrackMidiArmed` — with **its own MIDI enable sequence** (`getMidiInDevices` +
-  `setMonitorMode(automatic)` + `rescanMidiDeviceList`), **not** a clone of the wave path.
-- **Session record seam** (`src/services/files/ProjectSession.{h,cpp}`): `recordArmSlot` / `beginSlotRecord` /
-  `commitSlotRecord` / `isSlotRecording`, delegating to the recorder via injected `std::function`s (no hard
-  `RecordController` dependency). Slot capture is **slot-ONLY** — it drops any track record target first so
-  notes never double-capture to the arrangement. Audio/MIDI arm are **mutually exclusive per track** (v1).
-- **Pad state** (`src/ui/session/SlotVisualState.h` + `ClipSlotComponent.cpp`): new `recording` state (pulsing
-  red), dominating all clip/queue states for the one capturing pad.
-- **Headless gate** (NEW): `--selftest-midi` creates a `VirtualMidiInputDevice`, arms slot (0,0), rolls the
-  transport, injects 4 synthetic notes, and asserts the slot's committed clip holds **exactly** those notes
-  (`capturedNoteCount == notesInjected`, `preExistingNotes==0`) → **PASS**.
-- **QC:** adversarial pass found 0 blocker/major, 2 minor (swapProject MIDI-teardown; slot-arm error-message
-  fallback) — both fixed.
-
-> Prior session (published at `8d15234`, the tip this session built on): **Session-grid vertical scroll +
+> Prior session (`160f6cc`): **W7 — MIDI record into Session clip slots** — a track can be MIDI record-armed and
+> an empty slot captured (**Ctrl+Enter** / right-click "Record into slot") straight into a born-audible
+> `te::MidiClip`; transport-driven (verdict A), proven by `--selftest-midi`
+> ([devlog/midi-record-design.md](devlog/midi-record-design.md)). Before that (`8d15234`): **Session-grid vertical scroll +
 > app-wide logging** — the 16-scene grid scrolls Ableton-style with fixed ~46 px pads and a pinned scene column
 > that tracks the pads ([devlog/session-scroll-design.md](devlog/session-scroll-design.md)); and an app-wide
 > logging + error-handling subsystem (`src/core/Log.*`, ~90 seams instrumented) with logging-at-the-seam a
@@ -97,8 +104,12 @@ Phases 0–4 + startup hardening + MIDI MVP/W6 + **W7 MIDI record into slots** +
   record-arm a track, capture an empty slot (**Ctrl+Enter** / right-click "Record into slot") straight into a
   born-audible `MidiClip`; transport-driven (verdict A), proven by `--selftest-midi`. Details:
   [devlog/midi-record-design.md](devlog/midi-record-design.md).
-- **Mixer** (strips, plugin inserts w/ bypass+reorder, master + post-fader meter), **plugin hosting**
-  (built-in + VST3/AU scan + floating editors), **Browser**, **clip Inspector**, **WAV export + stems**.
+- **Mixer** (strips, plugin inserts w/ bypass+reorder, master + post-fader meter, **A/B aux sends → aux-return
+  strips**), **plugin hosting** (built-in + VST3/AU scan + floating editors), **Browser**, **clip Inspector**,
+  **WAV export + stems** (now **async, off-thread, with a progress/cancel panel**).
+- **Wave 01 additions** — **metronome + count-in** (TransportBar Click toggle + selector), **markers** (a
+  timeline marker bar over the arrange view), **MIDI-learn** (a **Ctrl+L** param picker over Tracktion's native
+  mapping store — hardware-CC routing deferred), and an automatic **anti-click edge fade** on imported audio.
 
 Full feature list + roadmap in [STATUS.md](STATUS.md).
 
@@ -106,26 +117,34 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> This session's work (**W7 MIDI record into slots**) is already **committed (`160f6cc`) + pushed** (sanitized)
-> — the commit + push step is done, so the flagged next items are the manual GUI smoke pass and then the
-> remaining MIDI-input roles + the control-surface layer.
+> Wave 01 (six feature seams) is **committed (`17d335c` + this docs commit) + pushed** (sanitized). The flagged
+> next items are the manual GUI smoke pass of the new gestures, the **deferred Wave-01 follow-ups**, and then the
+> control-surface layer.
 
 1. **Manual GUI smoke pass — START HERE (functionally).** The one path that can't be driven headlessly here.
-   Click through the Session grid live (launch a pad / a scene / the right-click "Edit clip" + double-click
-   gestures, scroll to scenes 10–16), the MIDI MVP draw→play path, **and the new W7 slot-record gesture** —
-   MIDI-arm a track, Ctrl+Enter (or right-click "Record into slot") on an empty slot, play a few notes, stop,
-   confirm the born-audible clip lands in the slot and plays back. `--screenshot` covers rendering and
-   `--selftest-session` / `--selftest-midi` cover audibility + capture, but a human should click it once with a
-   real controller.
-2. **Remaining MIDI input roles** — **MIDI-learn** param mapping; **MIDI-clock / Ableton Link** sync. (W7
-   note-record into slots is now **DONE** — see "What this session did".)
-3. **Control-surface layer ("one day") — the next real feature build.** A device-agnostic driver on the
+   Click through the Session grid live (launch a pad / a scene / right-click "Edit clip", scroll to scenes
+   10–16), the MIDI draw→play + slot-record gesture, **and the new Wave-01 gestures** — the TransportBar **Click**
+   toggle + count-in selector; **markers** (left-click the marker bar to add, drag to move, double-click to
+   rename, click to jump); mixer **aux sends** (drag an A/B send knob, click "＋ Enable" on a return); the
+   **async export** progress/cancel dialog (Export a longer edit); and **Ctrl+L** MIDI-learn (pick a plugin
+   param). `--screenshot` covers rendering and the four selftests cover the headless paths, but a human should
+   click these once.
+2. **Deferred Wave-01 follow-ups (ticketed).** (a) **MIDI-learn hardware routing** — install a focused-edit
+   `ForgeUIBehaviour` (or a Forge MIDI-input listener) so real controller CCs reach
+   `MidiLearn::handleIncomingController`; today Ctrl+L **arms** a learn but completion from hardware awaits this.
+   (b) A **`--selftest-midilearn`** headless gate (inject a CC via the seam directly — a virtual device can't
+   carry a CC to the store). (c) **Audio-slot-record edge-fade** — wire `ClipFades` into a future audio
+   slot-record commit (today's slot record is MIDI-only, where the fade is a no-op). See
+   [devlog/wave-01-features.md](devlog/wave-01-features.md) "Deferred follow-ups".
+3. **Remaining MIDI input roles** — **MIDI-clock / Ableton Link** sync. (MIDI-learn param mapping shipped as
+   Wave-01 P2, minus the deferred hardware-routing follow-up above.)
+4. **Control-surface layer ("one day") — the next real feature build.** A device-agnostic driver on the
    `ControlSurface` seam so real grid controllers drive the grid (Launchpad first, then APC40 mkII). The
    on-screen pad model is already hardware-ready: `SlotVisualState::toPadFeedback` emits the exact
    `(colourIdx, state)` LED encoding a driver would push. External hardware over MIDI; not an MVP gate.
    Reference: [mockups](../mockups/) sheet 09.
-4. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends; async export + progress; LUFS;
-   markers; comping; macOS build; interactive-UI verification.
+5. **Carried-over polish** — automation (vol/pan/plugin-param) lanes; **LUFS** metering; comping; macOS build;
+   interactive-UI verification. (Buses/sends, async export + progress, and markers **shipped in Wave 01**.)
 
 ---
 
