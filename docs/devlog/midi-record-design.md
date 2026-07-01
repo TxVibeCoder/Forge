@@ -8,6 +8,10 @@ orchestrator alone edits `CMakeLists.txt`, `src/main.cpp`, and integration wirin
 
 ## 0. Decisive slot-recording verdict
 
+> **UPDATE (shipped `160f6cc`, 2026-07-01): verdict (A) is now EMPIRICALLY PROVEN.** The `--selftest-midi` gate
+> (§4) records 4 synthetic MIDI notes straight into slot `(0,0)` and asserts the committed clip holds exactly
+> those notes — PASS. The "untested in-engine" caveat below is resolved: this path is now runtime-verified.
+
 **VERDICT: (A) — Direct slot recording IS supported and is the W7 path.**
 
 A `te::ClipSlot` is a `ClipOwner` (`tracktion_ClipSlot.h:18-20`) and a first-class record target. The
@@ -33,11 +37,12 @@ capture pipeline is:
 > slot->getClip())` guard). **Do not call `launchSlot` on the record path.** The prior design's "launchSlot so
 > the LaunchHandle reaches playing" (risk #7) is deleted.
 
-Caveat honestly recorded: this code path is **untested in-engine** (no vendored test or example arms a
-`ClipSlot` as a record target; `ClipLauncherDemo` only pre-authors clips into slots, it has no record code).
-The `--selftest-midi` gate below is the **first proof** of the path. The verdict-(B) track-target fallback
-(`armFirstMidiInputToTrack` + a commit-move step) is kept fully specified so a downgrade is additive, not a
-redesign.
+Caveat honestly recorded: ~~this code path is **untested in-engine**~~ **RESOLVED — now proven** (`160f6cc`):
+at authoring time no vendored test or example armed a `ClipSlot` as a record target (`ClipLauncherDemo` only
+pre-authors clips into slots, no record code), so the path was untested in-engine. The `--selftest-midi` gate
+below is the **first proof** of the path and now **PASSES** — verdict (A) is empirically confirmed. The
+verdict-(B) track-target fallback (`armFirstMidiInputToTrack` + a commit-move step) is kept fully specified so a
+downgrade is additive, not a redesign.
 
 ---
 
@@ -497,6 +502,7 @@ follows C (needs the new `computeSlotState` arity). E integrates last and is the
 - Captured-clip length has **no** launch-quantise rounding (`MidiInputDevice.cpp:1141`, `EditUtilities`
   punch-range) → length narrative corrected; Forge must schedule bar-aligned start/stop for a quantised loop.
 - Verdict (A) is code-path-supported but **untested in-engine** → gate is the first proof; (B) fallback kept.
+  **RESOLVED (`160f6cc`): `--selftest-midi` PASSES — verdict (A) is now empirically proven in-engine.**
 - recArmed tint driven by audio `isTrackArmed` only → poll ORs in `isTrackMidiArmed`; audio/MIDI arm mutually
   exclusive per track (v1).
 - Arm routing contradiction → the branch lives solely in `SessionView::wireColumn` on `trackIsMidi`.
@@ -525,16 +531,26 @@ follows C (needs the new `computeSlotState` arity). E integrates last and is the
 
 1. **Count-in**: recommended v1 = none (capture starts when the transport rolls). A metronome count-in touches
    the transport recipe (out of W7 scope). Confirm no count-in for v1.
+   > **RESOLVED (v1, shipped `160f6cc`): NONE.** No count-in — capture starts the moment the transport rolls.
 2. **Overdub vs replace into a FILLED slot**: recommended v1 = empty slots only (gesture + tint gated on
    empty). `addMidiAsTransaction` takes a `MergeMode`, so the engine supports overdub later, but the UX
    (which mode, how to choose) needs its own pass. Confirm empty-only for v1.
+   > **RESOLVED (v1, shipped `160f6cc`): EMPTY-slots-ONLY.** The record gesture + recArmed tint are gated on an
+   > empty slot; overdub/replace into a filled slot is deferred.
 3. **Fixed-length vs open-ended capture**: recommended v1 = open-ended (stop when the user stops). A
    fixed-N-bar auto-stop must be a Forge-scheduled `stop` (slots force `wasPunchRecording=false`, so the engine
    won't punch out). Confirm open-ended for v1.
+   > **RESOLVED (v1, shipped `160f6cc`): OPEN-ENDED.** The user stops manually; no fixed-length auto-punch-out.
 4. **Ctrl+Enter binding**: confirm no shell global accelerator already claims Ctrl+Enter (grep of
    `main.cpp:624-637` shows only S/O/N/I under Ctrl, so it is free). Fallback: a plain `R` on the focused slot.
+   > **RESOLVED (v1, shipped `160f6cc`): Ctrl+Enter CONFIRMED FREE + USED.** No shell accelerator claims it; the
+   > `R`-on-focused-slot fallback was not needed.
 5. **Audio/MIDI arm exclusivity**: recommended v1 = mutually exclusive per track (one R indicator, one recArmed
    tint). Confirm — or design a dual-arm indicator if both must coexist.
+   > **RESOLVED (v1, shipped `160f6cc`): MUTUALLY EXCLUSIVE per track.** Arming one disarms the other, so the
+   > single R indicator + single recArmed tint stay unambiguous. (Implemented in the arm wiring.)
 6. **Recording into an armed slot while another slot on the track is playing**: transport-level record captures
    regardless of playback; confirm the desired interaction (does starting a slot record stop the track's
    playing clip?). Recommended v1: independent (record does not stop playback), revisit if confusing.
+   > **RESOLVED (v1, shipped `160f6cc`): INDEPENDENT.** Starting a slot record does not stop a playing clip on
+   > the track — transport-level record and slot playback coexist.

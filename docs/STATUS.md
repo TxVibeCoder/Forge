@@ -1,12 +1,17 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-06-30 (this session: **Session-grid vertical scroll** — the
-16-scene grid now scrolls Ableton-style with fixed ~46 px pads and a pinned scene column that tracks the
-pads; and an **app-wide logging + error-handling subsystem** (`src/core/Log.*`) with logging-at-the-seam now
-a standing build principle. Both **built + verified, committed as `8d15234` + pushed** to `origin/main`
-(working tree clean, sanitized): clean MSVC Debug build; `--selftest`, `--selftest-record`,
-`--selftest-session` all PASS; `--screenshot` proves the scroll. The prior session shipped
-the **Session clip-launch grid** — the DEFAULT view (Session ∣ Arrange ∣ Mix) on Tracktion's Scene / ClipSlot /
+*Living status document. Last updated 2026-07-01 (this session: **W7 — MIDI record into Session clip slots** —
+a track can be MIDI record-armed and an empty slot on a MIDI-armed track can be captured (**Ctrl+Enter** or
+right-click **"Record into slot"**) → a live-played MIDI loop is recorded straight into that slot as a new
+born-audible (4OSC) `MidiClip`. Recording is **transport-driven** (`transport.record()`), not launch-driven —
+this is **verdict (A): direct `ClipSlot` recording**, now **empirically proven** by the new
+`--selftest-midi` gate. **Built + verified, committed as `160f6cc` + pushed** to `origin/main` (working tree
+clean, sanitized): clean MSVC Debug build (0 warnings); **all four selftests PASS** — `--selftest`,
+`--selftest-record`, `--selftest-session`, `--selftest-midi`. The prior session shipped **Session-grid
+vertical scroll** — the 16-scene grid scrolls Ableton-style with fixed ~46 px pads and a pinned scene column
+that tracks the pads; and an **app-wide logging + error-handling subsystem** (`src/core/Log.*`) with
+logging-at-the-seam a standing build principle (`8d15234`). The session before that shipped the **Session
+clip-launch grid** — the DEFAULT view (Session ∣ Arrange ∣ Mix) on Tracktion's Scene / ClipSlot /
 LaunchHandle; playable with mouse + keyboard, launch audible + bar-quantised).*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
@@ -228,6 +233,29 @@ facility **`src/core/Log.h` / `src/core/Log.cpp`** (added to CMake `target_sourc
   **[LOGGING.md](LOGGING.md)** (principle + cheat-sheet + new-feature checklist). `.gitignore` now excludes
   `*.log` / `forge.log*`. Design record: [devlog/logging-design.md](devlog/logging-design.md).
 
+### W7 — MIDI record into Session slots — SHIPPED  (`160f6cc`; built + verified + pushed this session)
+**A track can be MIDI record-armed and an empty slot captured straight into a born-audible clip.** The Session
+arm button branches MIDI vs audio; an empty slot on a MIDI-armed track is captured via **Ctrl+Enter** or
+right-click **"Record into slot"** → a live-played MIDI loop is recorded straight into that slot as a new
+born-audible (4OSC) `te::MidiClip`. Recording is **transport-driven** (`transport.record()`), **NOT**
+launch-driven — the armed slot's `itemID` is the record target and on stop the engine materialises the clip in
+the slot. This is **verdict (A): direct `ClipSlot` recording**, and it is now **empirically proven** by the new
+`--selftest-midi` gate. Frozen design record: [devlog/midi-record-design.md](devlog/midi-record-design.md).
+- **Record layer** (`RecordController`): new MIDI methods (`enableMidiInputs`,
+  `armFirstMidiInputToSlot` / `…ToTrack`, `disarmSlot` / `disarmMidiTrack`,
+  `isSlotMidiArmed` / `isTrackMidiArmed`) with **its own MIDI enable sequence** (`getMidiInDevices` +
+  `setMonitorMode(automatic)` + `rescanMidiDeviceList`) — **not** a clone of the wave path.
+- **Session record seam** (`ProjectSession`): `recordArmSlot` / `beginSlotRecord` / `commitSlotRecord` /
+  `isSlotRecording`, delegating to the recorder via injected `std::function`s (no hard `RecordController`
+  dependency). Slot capture is **slot-ONLY** — it drops any track record target first so notes never
+  double-capture to the arrangement. Audio/MIDI arm are **mutually exclusive per track** (v1).
+- **Pad state** (`SlotVisualState`): new `recording` state (pulsing red), dominating all clip/queue states for
+  the one capturing pad; `ClipSlotComponent::paint` gains an explicit `recording` branch.
+- **Verified (headless):** the new **`--selftest-midi`** gate creates a `VirtualMidiInputDevice`, arms slot
+  (0,0), rolls the transport, injects 4 synthetic notes, and asserts the slot's committed clip holds
+  **exactly** those notes (`capturedNoteCount == notesInjected`, `preExistingNotes==0`) → **PASS**. Adversarial
+  QC: 0 blocker/major, 2 minor found + fixed (swapProject MIDI-teardown; slot-arm error-message fallback).
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -241,6 +269,12 @@ lazy record-input open.
 `mode=session`: **result=PASS** — the Session-grid **audibility gate**: a clip created in slot (0,0),
 launched, reaches *playing* with the transport rolling (proves the launcher playback path engages on the
 same device).
+`mode=midi`: **result=PASS** — the **MIDI-slot record gate** (first proof of verdict-A direct `ClipSlot`
+recording): a `VirtualMidiInputDevice` is created + enabled, slot (0,0) is armed, the transport rolls, 4
+synthetic notes are injected, and the slot's committed clip is asserted to hold **exactly** those notes.
+`availableMidiInputs`=the virtual device · `midiDeviceEnabled=1` · `preExistingNotes=0` · `trackArmed=1`
+(slot armed) · `recordingStarted=1` · `notesInjected=4` · `clipCreated=1` · `capturedNoteCount=4`
+(`== notesInjected`, EXACT).
 `mode=record`: **result=PASS** — recording is now **verified end-to-end on real hardware**. The
 event-driven harness opens the input lazily, yields to the message loop, then arms + records a real
 take: `inputDeviceCount=8 · trackArmed=1 · recordingStarted=1 · recordedClipCount=1 ·
@@ -259,11 +293,11 @@ src/
 ├── core/
 │   └── Log.h / Log.cpp            app-wide logging + crash handler (juce::Logger sink → %APPDATA%\Forge\logs\forge.log + stderr; FORGE_LOG_* macros)
 ├── services/
-│   ├── files/ProjectSession       owns the Edit; create/open/save/import; createMidiClip; isModified
+│   ├── files/ProjectSession       owns the Edit; create/open/save/import; createMidiClip; isModified; MIDI slot-record seam (recordArmSlot/beginSlotRecord/commitSlotRecord/isSlotRecording via injected recorder)
 │   └── export/Exporter            render the Edit → 24-bit WAV (whole-edit mixdown + per-track stems)
 ├── engine/
 │   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, lazy record-input open, track vol/pan
-│   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed
+│   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed; MIDI slot record (enableMidiInputs, armFirstMidiInputToSlot/…ToTrack, disarmSlot/…MidiTrack, isSlotMidiArmed/isTrackMidiArmed)
 │   ├── PluginHost                 list/add/remove built-in + external plugins; instrument seam (4OSC at chain head)
 │   └── PluginScanner              VST3/AU scan dialog → engine known-plugin list (auto-persist)
 └── ui/
@@ -276,7 +310,7 @@ src/
     ├── browser/BrowserView        left-region file browser (double-click → import)
     ├── detail/DetailView          bottom-drawer audio-clip inspector (name/gain/fades/waveform)
     ├── pianoroll/                 bottom-drawer MIDI editor: PianoRollView (Viewport grid) + MidiNoteComponent
-    └── session/                   PRIMARY view: clip-launch grid — SessionView (fixed-pad vertical scroll) + Track/Scene columns + ClipSlot pad + SlotVisualState
+    └── session/                   PRIMARY view: clip-launch grid — SessionView (fixed-pad vertical scroll; MIDI arm branch + Ctrl+Enter/"Record into slot") + Track/Scene columns + ClipSlot pad + SlotVisualState (incl. recording state)
 docs/   ARCHITECTURE · FEATURE_CATALOG · INTERFACE · STATUS · devlog/ (per-wave writeups)
 tests/  SELFTEST.md
 ```
@@ -350,9 +384,11 @@ tests/  SELFTEST.md
 ### Later / feature-gated
 - [x] **MIDI tracks + piano-roll — MVP + W6 polish DONE** (`9a24989`, `bb5b6bf`). Draw a MIDI clip and
   hear it via a default 4OSC; clips render polymorphically (`ClipComponent` base); piano-roll has
-  velocity lane + multi-select + copy/paste. **Post-MVP remaining:** **W7 MIDI-input recording** (its own
-  enable sequence + a runtime test with a physical controller); horizontal auto-scroll-to-clip. Live GUI
-  draw→play path still needs a manual smoke pass.
+  velocity lane + multi-select + copy/paste.
+- [x] **W7 — MIDI record into Session clip slots — DONE** (`160f6cc`). MIDI record-arm a track, capture an
+  empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
+  (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
+  remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
 - [ ] ASIO (needs Steinberg SDK + `JUCE_ASIO=1`); MP3 import (`JUCE_USE_MP3AUDIOFORMAT=1`).
 - [ ] `rtcheck` RT-safety tool is macOS/Linux only — N/A on the Windows dev box.
 - [ ] AGPLv3 obligations when distributing builds (share source — trivial for this repo).
@@ -378,7 +414,7 @@ tests/  SELFTEST.md
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ mostly (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows done; buses/sends to do) |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; W7 MIDI-input record + automation to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish + W7 record built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; **W7 MIDI record into Session slots done** (`160f6cc`, verdict A, `--selftest-midi` PASS → `docs/devlog/midi-record-design.md`); automation to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division done; LUFS/markers/comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ |
 
@@ -408,11 +444,12 @@ surface is becoming the **Session clip grid**, so the sequence is reordered arou
 2. **Control-surface layer ("one day").** Device-agnostic drivers on Tracktion's `ControlSurface` seam so
    **real** grid controllers (Launchpad, then APC40 mkII) drive the grid; the same pad-colour/state model
    feeds the on-screen grid and the hardware LEDs. The grid works without any hardware (not an MVP gate).
-3. **MIDI input roles.** Note-record into clips (**W7** — own MIDI enable sequence + a physical-controller
-   runtime test, see midi-design.md §5); MIDI-learn param mapping; MIDI-clock / Ableton Link sync.
+3. **MIDI input roles.** ✅ **W7 note-record into slots DONE** (`160f6cc`) — own MIDI enable sequence, verdict A,
+   proven by `--selftest-midi` (see [devlog/midi-record-design.md](devlog/midi-record-design.md)). Still to do:
+   MIDI-learn param mapping; MIDI-clock / Ableton Link sync.
 4. **Done this slice (now reusable inside slots/scenes):** ✅ recording verified on real hardware; ✅ MIDI
-   MVP + W6 piano-roll polish (draw + hear, velocity / multi-select / copy-paste). A **manual GUI smoke
-   pass** of the draw→play path is still worth doing.
+   MVP + W6 piano-roll polish (draw + hear, velocity / multi-select / copy-paste); ✅ **W7 MIDI record into
+   Session slots**. A **manual GUI smoke pass** of the draw→play + slot-record path is still worth doing.
 5. **Carried-over polish.** Automation (volume/pan/plugin-param lanes) + **buses/sends** in the mixer;
    async export + progress; LUFS metering; markers; comping; off-thread record-input open.
 

@@ -1,14 +1,15 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-06-30**, end of the
-> **"Session-grid vertical scroll + app-wide logging"** session.
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-01**, end of the
+> **"W7 — MIDI record into Session clip slots"** session.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`** (`origin/main` @ `8d15234`). **This session's two features — vertical scroll + the logging
-subsystem — are COMMITTED as `8d15234` and PUSHED to `origin/main` (working tree clean; sanitized before the
-push).** Last build **clean** (MSVC Debug) · **`--selftest`, `--selftest-record`, `--selftest-session` all
-PASS** on the final binary · `--screenshot` proves the scroll.
+**`main`** (`origin/main` @ `160f6cc` + this docs commit). **This session's feature — W7 MIDI record into
+Session clip slots — is COMMITTED as `160f6cc` and PUSHED to `origin/main` (working tree clean; sanitized
+before the push; previous tip was `2589c42`).** Last build **clean** (MSVC Debug, 0 warnings) · **all four
+selftests PASS** — `--selftest`, `--selftest-record`, `--selftest-session`, `--selftest-midi` — on the final
+binary.
 
 ---
 
@@ -29,55 +30,53 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What this session did — vertical scroll + app-wide logging
+## What this session did — W7: MIDI record into Session clip slots
 
-Two features shipped this session. Both are **built + verified, and now COMMITTED (`8d15234`) + PUSHED** to
+One feature shipped this session. It's **built + verified, and now COMMITTED (`160f6cc`) + PUSHED** to
 `origin/main` (working tree clean; sanitized before the push — see "Gotchas").
 
-1. **Session grid — vertical scroll (the flagged "START HERE" next-step is now DONE).** The clip grid was
-   fit-to-window: pads stretched tall and the bottom scene rows were **clipped + unreachable** on a short
-   window. It's now **Ableton-style vertical scroll with FIXED ~46 px pads** — all 16 scene rows reachable,
-   the pinned scene column tracks the pads while scrolling, and a real vertical scrollbar appears. Isolated to
-   `src/ui/session/SessionView.{h,cpp}` + `SessionLayout.h` (promoted `slotH = 46`).
-   - A nested **`ScrollingViewport`** overrides `visibleAreaChanged` → `onScroll` → `syncSceneColumnToScroll()`,
-     offsetting the pinned scene column by `-getViewPositionY()` so scene launch rows stay aligned with pads.
-   - **A real bug was found + fixed during verification:** `resized()` now uses `columnHolder.setSize(...)`, not
-     `setBounds(0, 0, ...)` — the viewed component's top-left **is** the scroll offset, so the old code snapped
-     the grid back to the top on any relayout while scrolled.
-   - **Headless proof:** `--screenshot` now renders a short-window `session_top` + `session_scrolled` pair.
-     Design record: [devlog/session-scroll-design.md](devlog/session-scroll-design.md).
-2. **App-wide logging + error-handling subsystem (NEW) + a standing build principle.** Forge previously had
-   essentially **no logging** (3 incidental sites; ad-hoc status-strip messages). New facility **`src/core/Log.h`
-   / `src/core/Log.cpp`** (added to CMake `target_sources` after `main.cpp`):
-   - A `juce::Logger` subclass installed via `setCurrentLogger` (so JUCE's own device logs are captured too) +
-     a `SystemStats` crash handler; four levels (ERROR / WARN / INFO / DEBUG — DEBUG compiled out of Release);
-     ergonomic `FORGE_LOG_*(juce::String)` macros.
-   - A `CriticalSection`-guarded file sink at `%APPDATA%\Forge\logs\forge.log` (1 MiB cap, single `.1` rollover)
-     + unconditional **stderr echo** so headless selftests surface logs. Installed as the first line of
-     `ForgeApplication::initialise`, torn down in `shutdown`.
-   - **~90 failure seams backfilled** across ~15 files (ProjectSession, Exporter, engine/*, main.cpp, session,
-     mixer/browser/detail/arrange/pianoroll). **HARD RULES:** never log on the audio/RT thread or per-tick in a
-     poll/paint (the one allowed poll log is an edge-gated track-count-mismatch in SessionView); autosave logs
-     only on `save() == false`.
-   - **Now a STANDING BUILD PRINCIPLE** — log fallible seams as you build them — documented in
-     [LOGGING.md](LOGGING.md) (principle + cheat-sheet + new-feature checklist). `.gitignore` now excludes
-     `*.log` / `forge.log*`. Design record: [devlog/logging-design.md](devlog/logging-design.md).
+**W7 — MIDI record into Session clip slots.** A track can now be **MIDI record-armed** (the Session arm button
+branches MIDI vs audio), and an **empty slot on a MIDI-armed track** can be captured via **Ctrl+Enter** or a
+right-click **"Record into slot"** item → a live-played MIDI loop is recorded straight into that slot as a new
+**born-audible (4OSC) `te::MidiClip`**. Recording is **transport-driven** (`transport.record()`), **NOT**
+launch-driven — the armed slot's `itemID` is the record target, and on stop the engine materialises the clip in
+the slot. This is **verdict (A): direct `ClipSlot` recording**, now **empirically proven** (the design had it
+"untested in-engine"). Frozen design record: [devlog/midi-record-design.md](devlog/midi-record-design.md).
 
-> Prior session (published at `06f3cf6`, the tip this session built on; now superseded by `8d15234`):
-> **built + published the Session clip-launch grid**
-> — SessionView as the default `ViewMode`, on Tracktion's `ClipSlot` / `Scene` / `LaunchHandle`; source-grounded
-> design + file-disjoint build → 5-lens adversarial QC (12 real issues fixed) → independent fix re-verify (caught
-> 2 regressions) → `--selftest-session` + `--screenshot` added → sanitized + pushed. Full record:
-> [devlog/session-design.md](devlog/session-design.md). Before that: the **direction reset → DIRECTION.md** + the
-> to-scale [mockups](../mockups/) (sheet 00 = the Session grid), and the **MIDI MVP (W1–W5) + W6 piano-roll
-> polish** ([devlog/midi-build.md](devlog/midi-build.md)) — clips / 4OSC / piano-roll now ride inside slots.
+- **Record layer** (`src/engine/RecordController.{h,cpp}`): new MIDI methods — `enableMidiInputs`,
+  `armFirstMidiInputToSlot` / `…ToTrack`, `disarmSlot` / `disarmMidiTrack`,
+  `isSlotMidiArmed` / `isTrackMidiArmed` — with **its own MIDI enable sequence** (`getMidiInDevices` +
+  `setMonitorMode(automatic)` + `rescanMidiDeviceList`), **not** a clone of the wave path.
+- **Session record seam** (`src/services/files/ProjectSession.{h,cpp}`): `recordArmSlot` / `beginSlotRecord` /
+  `commitSlotRecord` / `isSlotRecording`, delegating to the recorder via injected `std::function`s (no hard
+  `RecordController` dependency). Slot capture is **slot-ONLY** — it drops any track record target first so
+  notes never double-capture to the arrangement. Audio/MIDI arm are **mutually exclusive per track** (v1).
+- **Pad state** (`src/ui/session/SlotVisualState.h` + `ClipSlotComponent.cpp`): new `recording` state (pulsing
+  red), dominating all clip/queue states for the one capturing pad.
+- **Headless gate** (NEW): `--selftest-midi` creates a `VirtualMidiInputDevice`, arms slot (0,0), rolls the
+  transport, injects 4 synthetic notes, and asserts the slot's committed clip holds **exactly** those notes
+  (`capturedNoteCount == notesInjected`, `preExistingNotes==0`) → **PASS**.
+- **QC:** adversarial pass found 0 blocker/major, 2 minor (swapProject MIDI-teardown; slot-arm error-message
+  fallback) — both fixed.
+
+> Prior session (published at `8d15234`, the tip this session built on): **Session-grid vertical scroll +
+> app-wide logging** — the 16-scene grid scrolls Ableton-style with fixed ~46 px pads and a pinned scene column
+> that tracks the pads ([devlog/session-scroll-design.md](devlog/session-scroll-design.md)); and an app-wide
+> logging + error-handling subsystem (`src/core/Log.*`, ~90 seams instrumented) with logging-at-the-seam a
+> standing build principle ([LOGGING.md](LOGGING.md) · [devlog/logging-design.md](devlog/logging-design.md)).
+> Before that (`06f3cf6`): **the Session clip-launch grid** — SessionView as the default `ViewMode`, on
+> Tracktion's `ClipSlot` / `Scene` / `LaunchHandle`; source-grounded design + file-disjoint build → 5-lens
+> adversarial QC → independent fix re-verify → `--selftest-session` + `--screenshot`
+> ([devlog/session-design.md](devlog/session-design.md)). Before that: the **direction reset → DIRECTION.md** +
+> the to-scale [mockups](../mockups/) (sheet 00 = the Session grid), and the **MIDI MVP (W1–W5) + W6 piano-roll
+> polish** ([devlog/midi-build.md](devlog/midi-build.md)) — clips / 4OSC / piano-roll ride inside slots.
 
 ---
 
 ## What exists today (the building blocks)
 
-Phases 0–4 + startup hardening + MIDI MVP/W6 + the **Session clip-launch grid** (now with vertical scroll) +
-the **logging subsystem**, all shipped, building clean, all three selftests PASS:
+Phases 0–4 + startup hardening + MIDI MVP/W6 + **W7 MIDI record into slots** + the **Session clip-launch grid**
+(with vertical scroll) + the **logging subsystem**, all shipped, building clean, all four selftests PASS:
 
 - **Session grid (PRIMARY view)** — tracks × 16 scenes of launchable clips on `ClipSlot` / `Scene` /
   `LaunchHandle`; single-click launches (instant), right-click "Edit clip" (launch-free), double-click opens;
@@ -94,7 +93,10 @@ the **logging subsystem**, all shipped, building clean, all three selftests PASS
 - **Transport** (play/stop/record/loop) and **recording** — verified end-to-end on real hardware
   (`--selftest-record` captures a real take); output-only startup, lazy capture-input open.
 - **MIDI** — clips on any track, born audible via a default **4OSC** at chain index 0; a **piano-roll**
-  (draw/move/resize/delete, velocity lane, multi-select, copy/paste).
+  (draw/move/resize/delete, velocity lane, multi-select, copy/paste); **W7 record into Session slots** — MIDI
+  record-arm a track, capture an empty slot (**Ctrl+Enter** / right-click "Record into slot") straight into a
+  born-audible `MidiClip`; transport-driven (verdict A), proven by `--selftest-midi`. Details:
+  [devlog/midi-record-design.md](devlog/midi-record-design.md).
 - **Mixer** (strips, plugin inserts w/ bypass+reorder, master + post-fader meter), **plugin hosting**
   (built-in + VST3/AU scan + floating editors), **Browser**, **clip Inspector**, **WAV export + stems**.
 
@@ -104,22 +106,24 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> This session's work is already **committed (`8d15234`) + pushed** (sanitized) — the commit + push step is
-> done, so the flagged next items are the manual GUI smoke pass and then the control-surface layer.
+> This session's work (**W7 MIDI record into slots**) is already **committed (`160f6cc`) + pushed** (sanitized)
+> — the commit + push step is done, so the flagged next items are the manual GUI smoke pass and then the
+> remaining MIDI-input roles + the control-surface layer.
 
 1. **Manual GUI smoke pass — START HERE (functionally).** The one path that can't be driven headlessly here.
    Click through the Session grid live (launch a pad / a scene / the right-click "Edit clip" + double-click
-   gestures, **and scroll to scenes 10–16** now that vertical scroll shipped) and the MIDI MVP draw→play path.
-   `--screenshot` covers rendering (incl. the `session_top`/`session_scrolled` pair) and `--selftest-session`
-   covers audibility, but a human should click it once.
-2. **Control-surface layer ("one day") — the next real feature build.** A device-agnostic driver on the
+   gestures, scroll to scenes 10–16), the MIDI MVP draw→play path, **and the new W7 slot-record gesture** —
+   MIDI-arm a track, Ctrl+Enter (or right-click "Record into slot") on an empty slot, play a few notes, stop,
+   confirm the born-audible clip lands in the slot and plays back. `--screenshot` covers rendering and
+   `--selftest-session` / `--selftest-midi` cover audibility + capture, but a human should click it once with a
+   real controller.
+2. **Remaining MIDI input roles** — **MIDI-learn** param mapping; **MIDI-clock / Ableton Link** sync. (W7
+   note-record into slots is now **DONE** — see "What this session did".)
+3. **Control-surface layer ("one day") — the next real feature build.** A device-agnostic driver on the
    `ControlSurface` seam so real grid controllers drive the grid (Launchpad first, then APC40 mkII). The
    on-screen pad model is already hardware-ready: `SlotVisualState::toPadFeedback` emits the exact
    `(colourIdx, state)` LED encoding a driver would push. External hardware over MIDI; not an MVP gate.
    Reference: [mockups](../mockups/) sheet 09.
-3. **MIDI input roles** — note-record into clips (**W7**: own MIDI enable sequence + a runtime test with a
-   physical controller, see [midi-design.md §5](devlog/midi-design.md)); **MIDI-learn** param mapping;
-   **MIDI-clock / Ableton Link** sync.
 4. **Carried-over polish** — automation (vol/pan/plugin-param) + buses/sends; async export + progress; LUFS;
    markers; comping; macOS build; interactive-UI verification.
 
@@ -135,6 +139,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest         # headless playback check     → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-record  # headless recording check    → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-session # Session-grid audibility gate → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midi    # MIDI-record-into-slot gate  → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # render each view → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -162,6 +167,25 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **Never arm recording synchronously in one blocking callback** — the device-list rebuild is async. The
   **same discipline now also guards the playback selftest**: yield to the loop, `dispatchPendingUpdates`,
   `blockUntilSyncPointChange` before checking (a hot-swapped output device is `isSuspended` until it drains).
+- **Nested block comments corrupt doc comments (this session's bit).** A `/* … */` block comment placed
+  **inside** a `/** … */` doc comment closes the doc comment early — the first `*/` ends it, and everything
+  after (up to the real close) leaks into the code stream and corrupts the following declarations. Bit
+  `RecordController.h` during W7; fixed by not nesting `/* */` inside `/** */`. Use `//` for inline notes inside
+  a doc comment.
+- **MIDI slot record is transport-driven, NOT launch-driven.** Recording is started by
+  `transport.record(false)` over `isRecordingActive()` destinations — **never** `launchSlot` on the record path
+  (an empty armed slot has no clip and no `LaunchHandle`, so a launch is a hard no-op). `isSlotRecording` is
+  `isSlotMidiArmed(slot) && transport.isRecording()`, NOT "LaunchHandle playing".
+- **Slot capture must be slot-ONLY.** Arm the slot's `itemID` (`setTarget(slot.itemID, /*moveToTrack=*/false,
+  …)`) and **disarm the track's MIDI target first** — if both a track and a slot are armed, notes
+  double-capture into the arrangement as well as the slot. (Audio/MIDI arm are also mutually exclusive per
+  track in v1.)
+- **Injecting synthetic MIDI headlessly:** after `engine.getDeviceManager().createVirtualMidiDevice(name)`
+  (async — **yield first**, then find the device by name via `getMidiInDevices()`), inject notes with
+  `dev->handleIncomingMidiMessage(msg, dev->getMPESourceID())` (the **public** override — NOT the protected
+  `handleNoteOn/handleNoteOff` keyboard-listener overrides). On teardown call
+  `deleteVirtualMidiDevice(*dev)` or the device name leaks (persisted in engine PropertyStorage) and the next
+  run's `createVirtualMidiDevice` fails with "Name already in use".
 - **SessionView threading (load-bearing):** pads cache NO `te::ClipSlot*`/`Clip*` — only `(track,scene)`
   indices; the 25 Hz poll re-resolves via the **const** `getClipSlot` (never inserts). Any track-list change
   must rebuild the grid before a stale `TrackColumnComponent` derefs its `AudioTrack&` (the QC blocker).
@@ -174,10 +198,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **This session IS committed + pushed.** Vertical scroll + logging are committed as `8d15234` and pushed to
-  `origin/main`; the working tree is **clean** and the pushed set was **sanitized** (a privacy scan found no
-  real email / personal `C:\Users\…` paths / private side-project names). **Public repo = sanitize before every
-  push** (pseudonymous TxVibeCoder — keep the real email / personal `C:\Users\…` paths / prior-project names
+- **This session IS committed + pushed.** W7 (MIDI record into Session slots) is committed as `160f6cc` and
+  pushed to `origin/main` (previous tip `2589c42`); the working tree is **clean** and the pushed set was
+  **sanitized** (a privacy scan found no real email / personal `C:\Users\…` paths / private side-project names).
+  **Public repo = sanitize before every push** (pseudonymous TxVibeCoder — keep the real email / personal
+  `C:\Users\…` paths / prior-project names
   out; note `.gitignore` now excludes `*.log` / `forge.log*` so the log sink never gets committed). History was
   rewritten once (a prior session) to scrub a stray path; `git-filter-repo` isn't on PATH here, so run
   **`python -m git_filter_repo`** if it's ever needed again (it drops the `origin` remote as a safety step —
@@ -189,14 +214,16 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 
 - **Workflow tool with file-disjoint agents** — exclusive file ownership + additive-only interfaces +
   contract-first seams; the orchestrator does the `CMakeLists`/`main.cpp` wiring and the single integration
-  build. The prior session's **Session grid** landed a **clean first-try integration build** this way (2,920
-  LOC, 18 files), because every load-bearing engine API was **source-verified before** the fan-out. (This
-  session's two features were small + local enough to build directly.)
+  build. An earlier session's **Session grid** landed a **clean first-try integration build** this way (2,920
+  LOC, 18 files), because every load-bearing engine API was **source-verified before** the fan-out. **W7 this
+  session** followed the same pattern — a frozen source-verified design
+  ([devlog/midi-record-design.md](devlog/midi-record-design.md)) → file-disjoint build waves (record layer /
+  session seam / pad state / session view) → orchestrator integration + the single build.
 - **Adversarial verify waves** (independent skeptics, default-refuted, evidence-required) — high ROI for
-  anything that can't be runtime-confirmed here. The prior session ran them on the SessionView **design**, the
-  **QC** (12 confirmed, 3 refuted), and a **fix re-verify** — the last one caught two regressions the fixes
-  themselves introduced. Also a **root-cause workflow** for the playback-selftest failure. They earn their keep.
-  This session's verification caught the real `columnHolder.setSize` scroll bug (below).
+  anything that can't be runtime-confirmed here. Earlier sessions ran them on the SessionView **design**, the
+  **QC** (12 confirmed, 3 refuted), and a **fix re-verify**. **W7's QC** found 0 blocker/major and 2 minor
+  (swapProject MIDI-teardown; slot-arm error-message fallback) — both fixed — and the new `--selftest-midi`
+  gate is the empirical proof of the verdict-A record path. They earn their keep.
 - **Log fallible seams as you build them — STANDING BUILD PRINCIPLE (new this session).** Every new feature
   routes its failure paths through `src/core/Log.*` (`FORGE_LOG_ERROR/WARN/INFO/DEBUG`) — **never** on the
   audio/RT thread, **never** per-tick in a poll/paint, autosave only on `save() == false`. The principle +
@@ -224,11 +251,12 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
-- [devlog/session-design.md](devlog/session-design.md) — the Session-grid design + build-wave record (prior session).
-- [devlog/session-scroll-design.md](devlog/session-scroll-design.md) — **the vertical-scroll design (this session)**.
-- [LOGGING.md](LOGGING.md) + [devlog/logging-design.md](devlog/logging-design.md) — **the logging principle + subsystem design (this session)**.
+- [devlog/midi-record-design.md](devlog/midi-record-design.md) — **the W7 MIDI-slot-record design + the frozen recipe (this session)**.
+- [devlog/session-design.md](devlog/session-design.md) — the Session-grid design + build-wave record (earlier session).
+- [devlog/session-scroll-design.md](devlog/session-scroll-design.md) — the vertical-scroll design (prior session).
+- [LOGGING.md](LOGGING.md) + [devlog/logging-design.md](devlog/logging-design.md) — the logging principle + subsystem design (prior session).
 - [devlog/midi-build.md](devlog/midi-build.md) — the MIDI MVP + W6 build record.
-- [devlog/midi-design.md](devlog/midi-design.md) — MIDI design + the W7 (input-record) plan.
+- [devlog/midi-design.md](devlog/midi-design.md) — MIDI design + the original W7 (input-record) plan.
 - [devlog/device-recording.md](devlog/device-recording.md) — recording root-cause + device-pairing nuance.
 - [ARCHITECTURE.md](ARCHITECTURE.md) · [INTERFACE.md](INTERFACE.md) · [FEATURE_CATALOG.md](FEATURE_CATALOG.md) ·
   [../tests/SELFTEST.md](../tests/SELFTEST.md).

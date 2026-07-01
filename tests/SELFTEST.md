@@ -76,6 +76,53 @@ the transport), waits ≈1.5 s for the launcher to engage, then verifies the cli
 > Verified 2026-06-30: PASS on a box with a working output device — the launched slot's handle reaches
 > `playing` with the transport rolling, confirming the launcher playback path engages.
 
+## `Forge --selftest-midi` (MIDI record into a Session clip slot)
+
+The acceptance gate for **W7 — MIDI record into Session clip slots** (design:
+[../docs/devlog/midi-record-design.md](../docs/devlog/midi-record-design.md)). It is the **first proof of
+verdict-A direct `ClipSlot` recording** — the design's record path was "untested in-engine"; this gate makes it
+empirical. **Event-driven** (mirrors the record/session yield discipline), it proves MIDI capture straight into
+a Session `ClipSlot` with **zero hardware**:
+
+- **Phase 1** — grows the grid to 16 scenes (`ensureScenes`), asserts slot `(0,0)` is EMPTY
+  (`preExistingNotes=0`), ensures a born-audible default 4OSC on track 0, creates a `VirtualMidiInputDevice`
+  (`createVirtualMidiDevice`, async), then YIELDS.
+- **Phase 2** — finds the virtual device by name, `setEnabled(true)` + `setMonitorMode(automatic)`,
+  `ensureContextAllocated`, arms **only the slot** `(0,0)` (`setTarget(slot.itemID, /*moveToTrack=*/false)` +
+  `setRecordingEnabled`), rolls the transport (`transport.record(false)`), then YIELDS.
+- **Phase 3** — injects 4 deterministic notes (C4/E4/G4/C5) via
+  `handleIncomingMidiMessage(msg, getMPESourceID())`, then YIELDS.
+- **Phase 4** — `transport.stop` (the engine commits the captured notes into a new `MidiClip` in the slot via
+  `addMidiAsTransaction`, never a take), disarms the slot, re-resolves the slot's clip, counts its notes,
+  `deleteVirtualMidiDevice` (mandatory — a leaked name fails the next run), writes the report, and quits.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `availableMidiInputs` | names of engine MIDI-in devices (incl. the virtual one) | — (diagnostic) |
+| `midiDeviceEnabled` | 1 if the virtual MIDI input was enabled | 1 |
+| `preExistingNotes` | notes already in slot `(0,0)` before recording | **0** (slot must start empty) |
+| `trackArmed` | 1 if the MIDI input armed to the **slot's** `itemID` (slot armed, not the track) | 1 |
+| `recordingStarted` | 1 if the transport entered record | 1 |
+| `notesInjected` | count of synthetic notes injected while rolling | ≥ 4 |
+| `clipCreated` | 1 if a `MidiClip` materialised in the slot on stop | 1 |
+| `capturedNoteCount` | notes in the committed slot clip's sequence | **`== notesInjected`** (EXACT) |
+
+### PASS criteria (all must hold)
+```
+midiDeviceEnabled && trackArmed && recordingStarted
+  && preExistingNotes == 0
+  && notesInjected >= 4
+  && clipCreated
+  && capturedNoteCount == notesInjected      // EXACT, not >=
+```
+The `capturedNoteCount == notesInjected` equality (not `>=`) is the false-pass defense: it catches an
+empty-but-present clip, a wrong-target capture (notes into the track instead of the slot), and any pre-seeded
+notes.
+
+> Verified 2026-07-01: **PASS** — the four injected notes land **exactly** in the slot's committed clip
+> (`capturedNoteCount == notesInjected == 4`, `preExistingNotes == 0`), the first in-engine proof that Forge
+> records MIDI directly into a Session `ClipSlot` (verdict A).
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a
