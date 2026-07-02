@@ -2,20 +2,21 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of the
-> **"W04b — the UX wave, part 2: tear-offs · slide-outs · timecode · tray meter"** wave (one continuous
-> autonomous session shipped W03 → W04a → W04b; see the prior-wave blockquotes).
+> **"W05 — global Undo/Redo + the polish sweep"** wave (one continuous autonomous session shipped
+> W03 → W04a → W04b → W05; see the prior-wave blockquotes). ⚠ **W05's adversarial QC was
+> LIMIT-INTERRUPTED — two dimensions are OWED as the next session's first action (see What's next).**
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W04b shipped in `cc27300` (code) + a docs commit — COMMITTED + PUSHED to `origin/main` (on
-top of the `ecfd5e1` baseline). Working tree clean; the pushed set was sanitized.** Last build **clean**
-(MSVC Debug, 0 warnings) · **all FIFTEEN selftests PASS** — the W04a fourteen plus **`--selftest-popout`** —
-each on the final binary with clean self-exit; `--screenshot` renders a **9-state matrix** incl. the
-window-level **`shell_window`** (the first frame showing menu bar + four-zone LCD + shell together).
-Shipped: **tear-off mixer/piano-roll windows** (View ▸ Pop Out; close returns them; keys bubble to the
-shell), **animated B/E slide-outs**, **the timecode LCD zone** (absolute time returns, width-gated; default
-launch width now 1200), **the shared PeakMeter + a channel-tray meter**, **Session-grid tray-follow**, and
-**the Arrange playhead's move into the timeTempo clock family**. Full record in
-[devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
+**`main`**. **W05 shipped in `5e5dcf2` (code) + a docs commit — COMMITTED + PUSHED to `origin/main` (on
+top of the `7034955` baseline). Working tree clean; the pushed set was sanitized.** Last build **clean**
+(MSVC Debug, 0 warnings) · **all SIXTEEN selftests PASS** — the W04b fifteen plus **`--selftest-undo`** —
+each on the final binary with clean self-exit; `--screenshot` renders the **9-state matrix**.
+Shipped: **global Undo/Redo** (Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the
+Edit's own UndoManager; per-gesture transaction seals; a synchronous cross-surface refresh fan-out; a
+record gate; a piano-roll detached-clip guard), **scene-column polish** (hover, tooltips, full-width
+STOP ALL, beat-pulse parity), **the tray↔mixer strip-widget extraction** (`ui/common/StripWidgets.h`),
+**the empty-centre hint**, and **popout placement persistence**. Full record in
+[devlog/wave-05-undo.md](devlog/wave-05-undo.md).
 
 **STANDING MAINTAINER CONSTRAINTS (stated this session):** the maintainer has **no physical MIDI hardware**
 and **runs no manual tests** — every feature must be headless-provable (selftest gates + `--screenshot`).
@@ -46,43 +47,56 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What this session did — W04b: the UX wave, part 2
+## What this session did — W05: global Undo/Redo + the polish sweep
 
-The W04 charter's remainder, landed in **`cc27300` (code)** + a docs commit on the `ecfd5e1` baseline.
-Process: 2 spikes (tear-off mechanics skeptic-corrected pre-build) → 4 file-disjoint Fable/opus agents +
-orchestrator shell work (slide-outs, window capture) → integration → 15-gate floor → an 18-agent adversarial
-QC (**9 distinct defects confirmed incl. 1 blocker, all fixed**). Full record:
-[devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
+Landed in **`5e5dcf2` (code)** + a docs commit on the `7034955` baseline. Process: 2 source-verify
+dossiers (undo mechanics · polish inventory, both with cited line evidence) → 2 parallel file-disjoint
+agents (scene polish · strip widgets) + orchestrator-serial main.cpp work (the whole undo track + the two
+main.cpp polish items) → integration → **16-gate floor** → adversarial QC (**LIMIT-INTERRUPTED** — the
+session's agent limit hit mid-wave; 2 findings recovered from the transcript and fixed by hand; two
+dimensions owed). Full record: [devlog/wave-05-undo.md](devlog/wave-05-undo.md).
 
-- **Tear-off panels** (`ui/popout/PopoutWindow.{h,cpp}` + shell): View ▸ **Pop Out Mixer / Pop Out Piano
-  Roll** reparent the live SHELL MEMBERS into desktop windows and back (never recreated; engine bindings
-  ride along). `setContentNonOwned` + JUCE's non-owned detach make double-delete structurally impossible;
-  window destruction is DEFERRED (`callAsync` — the close callback runs on the window's own stack); normal
-  z-order; unconsumed keys bubble to the shell; Mix-while-out fronts the popout; the menu items tick while
-  out; a project swap leaves tear-offs alone (views rebind in place). Gate: **`--selftest-popout`** with a
-  **noGhostOverlay** assert that fires BEFORE any rescue relayout — because the QC blocker was exactly a
-  restored view coming home visible at stale popout bounds, overlaying the whole shell and eating input,
-  while the gate's own asserts performed the rescue relayout a real user never does.
-- **Animated slide-outs**: B/E ease ~160 ms — a dedicated timer lerps the width/height SCALARS through
-  `resized()` per step, so the whole layout chain moves together (`ComponentAnimator` rejected: it fights
-  `resized()` for child bounds; MainComponent's inherited Timer is load-bearing selftest machinery, hence
-  the separate timer object). `revealDrawer()` routes all programmatic opens (a direct `drawerVisible =
-  true` write desynced the slide target — the first E press after a clip-selection auto-open BOUNCED the
-  drawer, the QC major); resizers are inert mid-slide; persisted sizes untouched by animation.
-- **The timecode LCD zone**: the W04a deliberate drop returns as the width-gated FOURTH zone ("M:SS.mmm" /
-  "H:MM:SS.mmm"; negative pre-roll clamps to "0:00.000"; sheds first). `LcdState.timecodeText` is the
-  struct's 4th member — a compile-time contract with the shell's positional demo-state inits. Default
-  launch width is now **1200** (the four-zone floor is ~1174 — at 1040 the zone could never render, QC).
-- **Shared PeakMeter + the tray meter**: the W03 WeakReference meter extracted VERBATIM to
-  `ui/common/PeakMeter.h` and consumed by both the mixer strips and a new tray meter (the track's
-  Edit-owned `LevelMeterPlugin` measurer; attach-on-rebind; polled in the visibility-gated 10 Hz tick;
-  attachment asserted by the tray gate's `meterSourceSeen` leg).
-- **Session tray-follow**: `SessionView::onTrackFocusChanged (int)` (fires on real change only; index-based
-  per R1) bound with the pinned-Files guard, plus a view-switch SEED from `getFocusTrackIndex()` (the
-  change-only seam never fires for the default track 0 — QC).
-- **Accent sweep**: the Arrange playhead → **timeTempo**, brightened with 1 px dark edges (it crossed the
-  automation curve's near-identical teal — QC); the contract's piano-roll playhead was **SKIPPED-STALE**
-  (verified: none exists — a future feature, not a colour). Amber = selection only, everywhere.
+- **Global Undo/Redo** (`main.cpp` + `ui/menu/ForgeMenuModel.{h,cpp}`): **Edit ▸ Undo / Redo** with live
+  enablement (a new `enabledWhen` command-table column over `canUndo`/`canRedo`) + Ctrl+Z / Ctrl+Shift+Z /
+  Ctrl+Y. A thin shell over the Edit's own `UndoManager`:
+  - the five `onEditMutated` hooks (arrange/detail/piano-roll/session/markers) seal a transaction eagerly
+    (`beginNewTransaction`) on top of the engine's 350 ms auto-seal → per-gesture undo units;
+  - **`Edit::undo()`/`redo()`**, never the raw UM (keeps the engine's selection refresh);
+  - **undo is a no-op with a status message WHILE RECORDING** — record-arm targets sit ON the undo stack
+    and `removeTarget` fails while recording, so an undo mid-take would silently retarget the capture;
+  - undo fires no `onEditMutated` and no view listens to the state tree, so the shell **saves first**
+    (disk must never stay newer than memory) then SYNCHRONOUSLY fans the refresh out: arrange rebuild,
+    session rebuild, mixer structural refresh, tray, markers — no timer can interleave a stale deref;
+  - a **detached-clip guard**: a redo-of-delete leaves the piano-roll holding a live but PARENTLESS
+    `MidiClip::Ptr` (edits would write to a dead state tree); the fan-out closes the roll back to Detail;
+  - `ensureScenes` stays deliberately OFF the stack (inhibitor + `clearUndoHistory` in `ProjectSession`).
+  - Gate: **`--selftest-undo`** — create/delete/undo/redo round-trip + a note-level leg, with
+    `canUndo`/`canRedo` transition asserts from a `clearUndoHistory` baseline.
+- **Scene-column polish** (the last W04 charter item): hover lifts rows to `raisedBg` (child-inclusive —
+  the fill holds over the ▶ button), tooltips name the hidden right-click stop (which now also works OVER
+  the button), full-width **"■ STOP ALL"**, and the queued/playing ring beat-pulses in parity with the
+  pads (change-gated + no-pulse sentinel, so static rows stay repaint-free).
+- **Strip-widget extraction** (`ui/common/StripWidgets.h`, NEW): tray↔mixer fader/knob/send styling +
+  range constants + `busLetter` once, in `forge::strip` — style-only free helpers (no `addAndMakeVisible`
+  inside), header-only (no CMake edit), zero behaviour change.
+- **The empty-centre hint** (W04b deferral): tearing the mixer off WHILE IN Mix view now paints an
+  explanation instead of a blank centre (W04b only covered selecting Mix while already torn off).
+- **Popout placement persistence** (W04b deferral): `getWindowStateAsString` per window
+  (`forgeMixerPopoutState`/`forgePianoRollPopoutState`), saved at restore-time AND shell teardown,
+  restored on tear-off. Saved while the window is still alive — restore defers destruction.
+- **QC — LIMIT-INTERRUPTED:** of three planned dimensions only **polish-regressions** ran; its 2 findings
+  were recovered from the workflow transcript, self-adjudicated, and fixed (the hint's raw em-dash through
+  `juce::String`'s ASCII-only `char*` ctor rendered mojibake; the scene-row hover fill dropped out over
+  the ▶ launch button). **undo-correctness + shell-integration NEVER RAN** — owed (see What's next).
+
+> Prior wave (W04b, `cc27300`, PUSHED — same session): **tear-off mixer/piano-roll windows**
+> (`ui/popout/PopoutWindow.{h,cpp}`; reparented live shell members, never recreated; deferred close; keys
+> bubble to the shell; Mix-while-out fronts the popout; gate `--selftest-popout` with its noGhostOverlay
+> assert — the QC blocker was a restored view coming home visible at stale bounds, overlaying the shell),
+> **animated B/E slide-outs** (scalar-lerp timer through `resized()`; all programmatic opens via
+> `revealDrawer()` or the slide target desyncs), **the timecode LCD zone** (width-gated 4th zone; default
+> launch width 1200), **the shared PeakMeter + a channel-tray meter**, **Session-grid tray-follow**, and
+> **the Arrange playhead → timeTempo**. Full record: [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
 
 > Prior wave (W04a, `41e3139`, PUSHED — same session): **the transport LCD** (pure LcdModel; count-in digits
 > derive from the engine's CLICK GRID — the punch is never beat-snapped; the count-in latch arms only on a
@@ -106,47 +120,6 @@ QC (**9 distinct defects confirmed incl. 1 blocker, all fixed**). Full record:
 > can ship unwired — verify shell wiring explicitly. Full record:
 > [devlog/wave-03-features.md](devlog/wave-03-features.md).
 
-- **Automation lanes** (`engine/AutomationHelpers.h` + `ui/arrange/AutomationLane.{h,cpp}` + ArrangeView): a
-  header-only seam over each track's `VolumeAndPanPlugin` curves — units are fader position 0..1 / pan −1..+1,
-  and **every mutator ends in `updateStream()`** (curve activation is otherwise deferred to a 10 ms engine
-  timer). UI: a collapsible 46 px per-track lane (an **A** toggle beside M/S/R), click-to-add / drag / right-
-  click-delete points, Volume|Pan selector, pixel-exact against clips via the shared `TimelineView` axis. The
-  lane listens for `curveHasChanged` so external curve edits repaint live. Points persist in the
-  `.tracktionedit` automatically. Gate: **`--selftest-automation`** (a 2-point falling curve demonstrably
-  drives `getCurrentValue()` during playback).
-- **MIDI-clock out** (`engine/MidiClockSync.h` + `engine/MidiClockProbe.h` + a TransportBar **Clock** toggle):
-  per-device `setSendingClock` behind a small seam. Gate: **`--selftest-sync`** captures the engine's ACTUAL
-  wire bytes via a `MidiOutputDevice` subclass overriding `sendMessageNow` — SPP + start + a 24 PPQN clock
-  train (96/96 expected on this machine) + stop — with an honest SKIP-degrade on zero-MIDI-out boxes and a
-  fully lossless teardown (device entry, scan interval, NAME-keyed persisted props all restored).
-  **Ableton Link deferred:** the engine wrapper is compiled out and the Link library is NOT vendored —
-  vendoring + license review is a maintainer decision (see Open decisions).
-- **LUFS off the message thread** (`Exporter` + `dsp/LoudnessAnalyzer`): the W02 QC minor closed — analysis
-  runs on the export render worker after the WAV is provably closed; the message thread receives only a
-  finished value under the existing alive token; a per-chunk **abort predicate** keeps the dtor's 5 s join
-  bound honest. The W02 `finishAll` callback invariant is preserved verbatim. `--selftest-lufs` gained
-  file+thread and abort legs.
-- **Live cross-surface refresh** (MixerView + DetailView): values changed anywhere (MIDI-learn, another view,
-  automation) appear on the mixer/inspector without re-selecting — a structural-guard-first 28 Hz sync with
-  drag/focus guards and `dontSendNotification` everywhere, allocation- and repaint-free at steady state;
-  DetailView polls at 10 Hz. Gate: **`--selftest-livesync`**.
-- **The teardown hang that became a product fix:** the first sync-gate run froze the app at shutdown (one
-  core spinning). Marker-bisecting the destructor chain found the mixer master strip's `PeakMeter` holding a
-  raw pointer into `EditPlaybackContext::masterLevels` — the gate was the first code ever to free the
-  playback context with the mixer alive, and `removeClient` then walked freed memory. **Reachable in the real
-  app via device restarts** (`restartAllTransports` frees contexts). Fixed by holding ALL meter sources as
-  **`juce::WeakReference<te::LevelMeasurer>`** (the engine declares it weak-referenceable): the reference
-  nulls itself when the owner dies, so detach skips `removeClient` exactly when it must — one mechanism that
-  also closed QC's plugin-cull race on track/return meters.
-- **Adversarial QC (4 dimensions × per-finding skeptics):** 9 confirmed / 1 refuted. Blockers/majors: the
-  ReturnStrip 28 Hz UAF after deleting an aux-return track (fixed: re-resolve through the seam before every
-  deref — the R1 rule); the **Clock toggle left unwired at integration** (the gate passed by driving the
-  engine seam directly — exactly the class of gap selftests cannot see; fixed in `setupControlBar`); the
-  meter cull race (fixed by the WeakReference); a stale lane on external single-point curve moves (fixed via
-  the listener; the engine's move-the-single-point semantics are accepted + documented). Minors: sync-gate
-  degrade path never rolled; probe props pollution (snapshot/restore); automation drag clamp; overlapping-
-  handle hit-test z-order; INTERFACE.md tense drift.
-
 > Prior session (W02, `bb9ef5e`, PUSHED): **MIDI-learn HW routing (focused-Edit `ForgeUIBehaviour`,
 > `--selftest-midiinput`) · a Forge-native Launchpad control surface (`--selftest-controlsurface`; byte
 > mapping still needs a real device) · offline BS.1770-4 LUFS on export (`--selftest-lufs`)**. Key facts that
@@ -159,30 +132,6 @@ QC (**9 distinct defects confirmed incl. 1 blocker, all fixed**). Full record:
 > feature CLIs (P1–P6) each committed a scoped commit, then the orchestrator (P7) implemented the two shared
 > `ProjectSession` seams, wired everything into the single integration build, and ran adversarial QC. Baseline
 > was `6100fb9`. Full record: [devlog/wave-01-features.md](devlog/wave-01-features.md).
-
-- **P1 metronome + count-in** (`096c9bd`): `engine/Metronome` seam over the engine's `Edit::clickTrackEnabled`
-  (persisted, OFF by default) + native `Edit::CountIn`; TransportBar gains a **Click** toggle + count-in
-  selector. Count-in is native (`transport.record()` pre-rolls it) — no `RecordController` change.
-- **P2 MIDI-learn** (`1ef4f37`): `engine/MidiLearn` — a thin driver over Tracktion's native
-  `ParameterControlMappings` (persists on the Edit) + `PluginHost::getAutomatableParameters`. Wired **minimal**:
-  a **Ctrl+L** track▸plugin▸param picker arms a learn, proven headlessly by the new **`--selftest-midilearn`**
-  gate. **Deferred** (ticketed): a focused-edit `ForgeUIBehaviour` / MIDI-input listener so real controller CCs
-  reach the seam.
-- **P3 buses / sends** (`c5062a3`): per-track **A/B aux-send knobs** + two **aux-return strips** in the mixer,
-  over a new `ProjectSession` aux seam. An aux bus = a plain `AudioTrack` + `AuxReturnPlugin`, **appended at the
-  END** so absolute track indices stay stable; `onTracksChanged` rebuilds the grid/lanes on add.
-- **P4 async export + progress** (`8d0afdf`): `Exporter::renderEditToWavAsync`/`renderStemsAsync` run off the
-  message thread with progress + cancel behind an `ExportProgress` panel; the **sync API is preserved**.
-- **P5 markers** (`fe1bfcb`): a `MarkerBar` timeline strip (keyed on the stable `EditItemID`) over a new
-  `ProjectSession` markers seam, sharing the arrange `TimelineView`.
-- **P6 clip edge-fade** (`975846e`): `engine/ClipFades` — a 5 ms linear anti-click fade (audio-only,
-  idempotent), wired into `importAudioFile` + `importAudioIntoSlot`.
-- **Consolidation:** implemented the aux + markers seams (source-verified engine APIs) + wired all 6 features.
-  Caught + fixed a **nested-block-comment** bug in the committed `MarkerBar.h` (`te::MarkerClip*/Clip*` closed a
-  `/* */` doc comment early — the CLAUDE.md gotcha; a build-less CLI can't catch it). **Adversarial QC**
-  (5 dimensions → per-finding skeptic verify): **3 confirmed, 0 refuted** — two distinct lifetime blockers, both
-  fixed in `swapProject` before the Edit is torn down: an **async-export UAF** (Edit freed under the render
-  worker → `activeRender.reset()`) and a **MIDI-learn dangling `learningEdit`** (→ `midiLearn.cancelLearn()`).
 
 > Prior session (`160f6cc`): **W7 — MIDI record into Session clip slots** — a track can be MIDI record-armed and
 > an empty slot captured (**Ctrl+Enter** / right-click "Record into slot") straight into a born-audible
@@ -205,7 +154,8 @@ QC (**9 distinct defects confirmed incl. 1 blocker, all fixed**). Full record:
 
 Phases 0–4 + startup hardening + MIDI MVP/W6 + **W7 MIDI record into slots** + the **Session clip-launch grid**
 (with vertical scroll) + the **logging subsystem** + the **Wave-01 feature seams** + the **W02 engine seams** +
-the **W03 features** + the **W04a/W04b UX waves**, all shipped, building clean, all FIFTEEN selftests PASS:
+the **W03 features** + the **W04a/W04b UX waves** + **W05 undo/polish**, all shipped, building clean, all
+SIXTEEN selftests PASS:
 
 - **Session grid (PRIMARY view)** — tracks × 16 scenes of launchable clips on `ClipSlot` / `Scene` /
   `LaunchHandle`; single-click launches (instant), right-click "Edit clip" (launch-free), double-click opens;
@@ -256,6 +206,12 @@ the **W03 features** + the **W04a/W04b UX waves**, all shipped, building clean, 
   slide-outs**, **the timecode LCD zone** (fourth zone, width-gated; default launch width 1200), **a
   channel-tray level meter** (via the shared `ui/common/PeakMeter.h`), **Session-grid tray-follow** (grid
   focus binds the tray), and the **window-level `shell_window` screenshot** (menu bar finally captured).
+- **W05 additions** — **global Undo/Redo** (Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/
+  Ctrl+Y; per-gesture transaction seals; blocked with a status message while recording; a synchronous
+  cross-surface refresh fan-out; a piano-roll detached-clip guard), **scene-column polish** (hover /
+  tooltips / full-width STOP ALL / beat-pulse parity), **the strip-widget extraction**
+  (`ui/common/StripWidgets.h` — tray↔mixer styling once), **the empty-centre hint**, and **popout
+  placement persistence**.
 
 Full feature list + roadmap in [STATUS.md](STATUS.md).
 
@@ -263,24 +219,29 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W04b (`cc27300` + docs) is **committed + PUSHED to `origin/main`.** Hardware smoke tests and manual GUI
+> W05 (`5e5dcf2` + docs) is **committed + PUSHED to `origin/main`.** Hardware smoke tests and manual GUI
 > passes are **permanently parked** (see the standing constraints at the top); the path forward is the
 > headless-provable roadmap.
 
-1. **W04c / UX leftovers (small).** **Scene layout polish** (the one W04 charter item not yet addressed);
-   an empty-centre hint if Mix is ever reached torn-off; popout window-position persistence; further
-   strip-widget extraction (fader/knob styling still duplicated tray↔mixer); a piano-roll playhead (a NEW
-   feature — verified none exists); a window-SIZE dimension for the state matrix.
-2. **Deferred follow-ups (ticketed).** (a) **Ableton Link** — engine wrapper compiled out, library NOT
+1. **⚠ FIRST: the owed W05 QC dimensions.** W05's adversarial QC was cut off by the session agent limit —
+   only polish-regressions ran (2 findings recovered + fixed). Run **undo-correctness** (transaction
+   granularity across all five mutation hooks; undo interleaved with launches/recording/project swaps;
+   the record gate; the detached-clip guard) and **shell-integration** (the refresh fan-out against every
+   surface incl. torn-off popouts; menu enablement; key routing with popout focus) as adversarial
+   dimensions with per-finding skeptics. The orchestrator's inline self-review found nothing, but that is
+   NOT adversarial verification — treat those areas as unverified until this runs.
+2. **UX leftovers (small).** A DetailView detached-clip guard (the piano-roll got one in W05; the audio
+   inspector edits a live-but-parentless clip as a safe no-op after a redo-of-delete); a piano-roll
+   playhead (a NEW feature — verified none exists); a window-SIZE dimension for the state matrix.
+3. **Deferred follow-ups (ticketed).** (a) **Ableton Link** — engine wrapper compiled out, library NOT
    vendored; enabling = vendor `github.com/Ableton/link` + asio-standalone + an AGPLv3 license review (a
    maintainer dependency decision). (b) **Aux-send knobs + return-strip insert rows are not live-synced**.
    (c) **Plugin-param automation lanes** (vol/pan shipped; the seam generalizes). (d) **Audio-slot-record
    edge-fade** remains blocked — no audio slot-record path exists. (e) The export progress panel sits at
    ~100 % during a very long master-render loudness analysis (honest but unlabeled).
-3. **Carried-over polish** — **comping**; an optional **live short-term LUFS meter** (requires forking the
-   engine for a post-fader sample tap); macOS build (no Mac on hand); a global **Undo/Redo** command surface
-   (the engine has an UndoManager; the shell exposes no command yet — the Edit menu is thin until it does).
-4. **Parked until hardware exists** — the Launchpad byte-mapping smoke test, physical-CC MIDI-learn drive,
+4. **Carried-over polish** — **comping**; an optional **live short-term LUFS meter** (requires forking the
+   engine for a post-fader sample tap); macOS build (no Mac on hand).
+5. **Parked until hardware exists** — the Launchpad byte-mapping smoke test, physical-CC MIDI-learn drive,
    and the APC40 mkII driver.
 
 ---
@@ -307,6 +268,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-menu    # menu-bar model walk (pure) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-tray    # channel-tray live-sync gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-popout  # tear-off round-trip gate → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-undo    # undo/redo round-trip gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 9-state matrix (incl. shell_window) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -370,6 +332,23 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   `revealDrawer()` (it retargets an in-flight close and keeps the slide target in sync) — a direct write
   made the next E toggle bounce the drawer instead of closing it, and a close-in-flight settle step could
   flip the flag back off underneath the open.
+- **What is and isn't on the undo stack (W05).** Track **mute/solo are NOT undoable** — the engine binds
+  those `CachedValue`s with a null UndoManager (its choice, not Forge's; do not "fix" by re-binding).
+  **Record-arm targets ARE on the stack** (`setTarget`/`removeTarget` write through the UM) — which is why
+  the shell BLOCKS undo while recording (an undo mid-take would silently retarget the capture), and why an
+  undo while merely armed can disarm a track. Undo history is per-Edit and does NOT survive a project swap.
+  `ensureScenes` is deliberately off the stack. And undo/redo fires no `onEditMutated` — any new surface
+  must be added to the explicit refresh fan-out in `undoOrRedo`, or it shows stale state.
+- **`juce::String`'s `char*` ctor is ASCII-only (W05 — the recovered QC finding).** A raw em-dash (or any
+  non-ASCII byte) in a `const char*` literal renders mojibake and jasserts every paint under a debugger.
+  Use plain ASCII in string literals, or `String::fromUTF8` with escaped bytes (the ClipSlotComponent
+  precedent) when the glyph is worth it. MSVC compiles this repo without `/utf-8`, so the bytes reach the
+  ctor raw.
+- **A component's hover state excludes its children by default (W05).** `isMouseOverOrDragging()` goes
+  false while the pointer is over a CHILD (e.g. a row's own launch button), and
+  `setRepaintsOnMouseActivity` only fires for the component's OWN enter/exit — a hover fill flickers off
+  exactly over the primary click target. Use `isMouseOverOrDragging (true)` + route the child's mouse
+  events through the parent (`addMouseListener`) with explicit enter/exit repaints.
 - **Build file lock:** a running `Forge.exe` → `LNK1168` on the next build, and it can hold the WASAPI
   device. `Get-Process Forge | Stop-Process -Force` before building or runtime-testing; use a 45–90 s timeout.
 - **Docker on this Windows box:** mount with the Windows path or Git Bash mangles it —
@@ -423,10 +402,10 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED.** W03 (four features + 3 new gates, `ffa494d`) + its docs commit are
-  on **`origin/main`**; the working tree is **clean** and the pushed set was **sanitized** (only placeholder
-  `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Prior history: W02
-  (`bb9ef5e` → docs `2da5f16`), Wave 01 (`e3b8c7c`), all pushed.
+- **Latest work is committed + PUSHED.** W05 (`5e5dcf2`) + its docs commit are on **`origin/main`**; the
+  working tree is **clean** and the pushed set was **sanitized** (only placeholder `C:\Users\…` / `<user>`
+  forms in doc text — no real machine paths / identity leaks). Prior history: W04b (`cc27300`), W04a
+  (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`), Wave 01 (`e3b8c7c`), all pushed.
   Sanitizing is a live discipline, not
   a formality: a prior wave's CLI caught + scrubbed a stray sibling-project name in a comment before its commit —
   it would have been the first private-project-name leak into the public repo. **Public repo = sanitize before
@@ -502,7 +481,9 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/wave-03-features.md](devlog/wave-03-features.md) — **W03: automation · MIDI-clock out · async LUFS · live refresh (this session)**.
+- [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (this session; QC partially owed)**.
+- [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md) / [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md) — the W04 UX waves (same session).
+- [devlog/wave-03-features.md](devlog/wave-03-features.md) — W03: automation · MIDI-clock out · async LUFS · live refresh (same session).
 - [devlog/wave-02-features.md](devlog/wave-02-features.md) — W02: MIDI-learn HW routing · control surface · offline LUFS (prior session).
 - [devlog/wave-01-features.md](devlog/wave-01-features.md) — Wave 01: the six parallel feature seams (prior session).
 - [devlog/midi-record-design.md](devlog/midi-record-design.md) — the W7 MIDI-slot-record design + the frozen recipe.

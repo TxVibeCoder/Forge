@@ -298,6 +298,31 @@ deferred resets ran:
   view overlaying the shell at stale popout bounds);
 - after driving Mixer view / drawer+PianoRoll state, both views read visible in their home slots.
 
+## `Forge --selftest-undo` (global undo/redo round-trip)
+
+The acceptance gate for **W05 — global Undo/Redo** (design:
+[../docs/devlog/wave-05-undo.md](../docs/devlog/wave-05-undo.md)). Proves the undo/redo round-trip against
+the Edit's own `UndoManager`, all synchronous message-thread work. Explicit `beginNewTransaction` calls make
+the gate deterministic (the engine's 350 ms auto-seal timer needs message-loop time); `clearUndoHistory`
+first gives a guaranteed clean baseline whatever ran before.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `baselineClean` | no undo/redo available after `clearUndoHistory` | 1 |
+| `clipCreated` | T1: a born-audible MIDI clip created in slot (0,0) | 1 |
+| `canUndoAfterCreate` | the create landed on the stack | 1 |
+| `emptyAfterDelete` | T2: the clip deleted — slot empty | 1 |
+| `filledAfterUndo` | `Edit::undo()` brings the clip back | 1 |
+| `canRedoAfterUndo` | the redo leg is armed | 1 |
+| `emptyAfterRedo` | `Edit::redo()` removes it again | 1 |
+| `noteLeg` | on the resurrected clip: a UM-tracked `addNote` is undone (count returns, `canRedo` true) | 1 |
+
+> Verified 2026-07-02: **PASS**. Known behavioural edges (by design, not gate-covered): track **mute/solo
+> are NOT undoable** (the engine binds them with a null UndoManager); **record-arm IS on the undo stack**
+> (the shell blocks undo while recording); undo history does not survive a project swap. The live shell
+> path additionally fans a cross-surface refresh out after every undo/redo — that path is exercised by the
+> gate's shell but its view-level effects are screenshot/QC territory, not report fields.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

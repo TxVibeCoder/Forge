@@ -1,13 +1,15 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W04b — the UX wave, part 2: tear-off
-panels · animated slide-outs · timecode LCD zone · tray meter · accent sweep** — the W04 charter's remainder
-on baseline `ecfd5e1`, proven by `--selftest-popout` on a **fifteen-gate floor**; adversarial QC confirmed
-9 distinct defects (1 blocker — a restored popout view overlaying the shell at stale bounds; the gate was
-hardened with a no-ghost-overlay assert) — all fixed. Clean MSVC Debug build (0 warnings); **all FIFTEEN
-selftests PASS**; `--screenshot` renders a 9-state matrix incl. the window-level `shell_window` (the first
-frame showing the menu bar + four-zone LCD + shell together). Full record →
-[devlog/wave-04b-ux.md](devlog/wave-04b-ux.md). Earlier same continuous effort: **W04a** (`41e3139`; →
+*Living status document. Last updated 2026-07-02 (this session: **W05 — global Undo/Redo + the polish
+sweep** on baseline `7034955` — Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the
+Edit's own UndoManager, transaction sealing at every mutation hook, a synchronous cross-surface refresh
+fan-out, the scene-column polish, the tray↔mixer strip-widget extraction, the empty-centre hint, and popout
+placement persistence — proven by the new `--selftest-undo` on a **SIXTEEN-gate floor**. **Adversarial QC
+was limit-interrupted**: only the polish dimension ran (2 findings recovered + fixed); the undo-correctness
+and shell-integration dimensions are OWED as the next session's first action. Clean MSVC Debug build
+(0 warnings); **all SIXTEEN selftests PASS**; `--screenshot` renders the 9-state matrix. Full record →
+[devlog/wave-05-undo.md](devlog/wave-05-undo.md). Earlier same continuous effort: **W04b** (`cc27300`; →
+[devlog/wave-04b-ux.md](devlog/wave-04b-ux.md)); **W04a** (`41e3139`; →
 [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md)); **W03** (`ffa494d`; →
 [devlog/wave-03-features.md](devlog/wave-03-features.md)); **W02** (`bb9ef5e`); **Wave 01** (`e3b8c7c`);
 **W7** (`160f6cc`); **scroll + logging** (`8d15234`).)*
@@ -31,7 +33,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
 | **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
-| **Code size** | ~15,800 lines of Forge source (engine/JUCE excluded) across 68 files |
+| **Code size** | ~22,500 lines of Forge source (engine/JUCE excluded) across 79 files |
 
 ---
 
@@ -426,6 +428,38 @@ incl. 1 blocker, all fixed). Full record: [devlog/wave-04b-ux.md](devlog/wave-04
   Arrange playhead → timeTempo** (brightened, dark-edged against the automation teal); the **window-level
   screenshot** (`shell_window`).
 
+### W05 — global Undo/Redo + the polish sweep — SHIPPED  (this session; baseline `7034955`)
+Two tracks: global Undo/Redo, and the W04c polish list. Process: 2 source-verify dossiers (undo mechanics ·
+polish inventory) → 2 parallel file-disjoint agents (scene polish · strip widgets) + orchestrator-serial
+main.cpp work (the undo track + the two main.cpp polish items) → integration → **16-gate floor** →
+adversarial QC (**LIMIT-INTERRUPTED** — see below). Full record: [devlog/wave-05-undo.md](devlog/wave-05-undo.md).
+- **Global Undo/Redo** (`main.cpp` + `ui/menu/ForgeMenuModel.{h,cpp}`): **Edit ▸ Undo / Redo** with live
+  enablement (a new `enabledWhen` command-table column over `canUndo`/`canRedo`) + Ctrl+Z / Ctrl+Shift+Z /
+  Ctrl+Y. A thin shell over the Edit's own `UndoManager`: the five `onEditMutated` hooks seal a transaction
+  eagerly (per-gesture units on top of the engine's 350 ms auto-seal); `Edit::undo()/redo()` (never the raw
+  UM); undo is a **no-op with a status message while recording** (record-arm targets sit ON the stack —
+  an undo mid-take would retarget the capture); after undo/redo the shell saves then synchronously fans a
+  refresh out (arrange/session rebuild, mixer structural refresh, tray, markers) and closes the piano-roll
+  if its clip came back PARENTLESS (a redo-of-delete leaves a live but detached `Ptr`). `ensureScenes` stays
+  deliberately off the stack. Track **mute/solo are NOT undoable** (engine binds them with a null UM — by
+  design). Gate: **`--selftest-undo`** (create/delete/undo/redo round-trip + a note-level leg, with
+  `canUndo`/`canRedo` transition asserts).
+- **Scene-column polish** (the last W04 charter item): hover lifts rows to `raisedBg`, tooltips name the
+  hidden right-click stop, full-width **"■ STOP ALL"**, and the queued/playing ring gains beat-pulse parity
+  with the pads (change-gated, repaint-free when static).
+- **Strip-widget extraction** (`ui/common/StripWidgets.h`): the tray↔mixer fader/knob/send styling +
+  range constants + `busLetter` now live once in `forge::strip` (style-only helpers; header-only, no CMake
+  edit, zero behaviour change).
+- **W04b deferrals closed**: the empty-centre hint (tearing the mixer off while IN Mix view now explains
+  itself) and popout placement persistence (`getWindowStateAsString` per window, saved at restore/teardown,
+  restored on tear-off).
+- **QC — LIMIT-INTERRUPTED (honest record):** of the three planned dimensions, only **polish-regressions**
+  ran before the session's agent limit; its 2 findings were recovered from the workflow transcript,
+  self-adjudicated, and fixed (an em-dash rendered as mojibake through `juce::String`'s ASCII-only `char*`
+  ctor; the scene-row hover fill dropped out over the ▶ launch button). The **undo-correctness** and
+  **shell-integration** dimensions NEVER RAN and are owed as the next session's first action — the
+  orchestrator's inline self-review found nothing, but that is not adversarial verification.
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -488,6 +522,8 @@ src/
     ├── transport/LcdModel.h       pure display model behind the LCD — headlessly gated (W04a)
     ├── tray/ChannelTray           left-sidebar selected-track channel strip: pan, A/B sends, inserts, fader, M/S (W04a)
     ├── menu/ForgeMenuModel        the top menu-bar model (File/Edit/View/Transport/Help, shortcut labels, live ticks; W04a)
+    ├── common/                    shared widgets: PeakMeter.h (WeakReference-sourced level meter, W04b) + StripWidgets.h (tray↔mixer fader/knob/send styling, W05)
+    ├── popout/PopoutWindow        tear-off desktop windows for the mixer / piano-roll (reparent + deferred close; W04b)
     ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots (bypass + reorder), master strip + post-fader meter
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
@@ -572,11 +608,17 @@ tests/  SELFTEST.md
   empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
   (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
   remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
-- [x] **W04b — the UX wave, part 2 — DONE** (this session). Tear-off mixer/piano-roll windows
+- [x] **W05 — global Undo/Redo + the polish sweep — DONE** (this session). Edit ▸ Undo/Redo + shortcuts
+  over the Edit's UndoManager (`--selftest-undo`), scene-column polish, the strip-widget extraction, the
+  empty-centre hint, popout placement persistence. **Remaining:** the OWED QC dimensions (undo-correctness +
+  shell-integration — the wave was limit-interrupted); a matching detached-clip guard for DetailView; a
+  piano-roll playhead (new feature); a window-SIZE state matrix.
+  Details: [devlog/wave-05-undo.md](devlog/wave-05-undo.md).
+- [x] **W04b — the UX wave, part 2 — DONE** (prior wave, same session). Tear-off mixer/piano-roll windows
   (`--selftest-popout`), animated B/E slide-outs, the timecode LCD zone, the shared PeakMeter + tray meter,
-  Session tray-follow, the playhead accent move. **Remaining (W04c/later):** an empty-centre hint, popout
-  position persistence, scene layout polish, further strip-widget extraction, a piano-roll playhead, a
-  window-SIZE state matrix. Details: [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
+  Session tray-follow, the playhead accent move. **Remaining (W04c/later):** ~~an empty-centre hint, popout
+  position persistence, scene layout polish, further strip-widget extraction~~ (all closed in W05); a
+  piano-roll playhead; a window-SIZE state matrix. Details: [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
 - [x] **W04a — the UX wave, part 1 — DONE** (prior wave, same session). Transport LCD (`--selftest-lcd`), channel tray
   (`--selftest-tray`), menu bar (`--selftest-menu`, incl. the dead-Rec-button fix + the control-bar
   de-clutter), Session sequence lighting + the semantic accent switch (amber = selection only), persisted
@@ -670,9 +712,10 @@ surface is becoming the **Session clip grid**, so the sequence is reordered arou
    item 4, moved onto the render worker in W03)**, ✅ **volume/pan automation lanes + live cross-surface
    refresh (W03)**; still to do: plugin-param automation lanes; comping; an optional **live short-term LUFS
    meter** (would require forking the engine for a post-fader sample tap — no non-mutating tap exists today);
-   off-thread record-input open. **Next planned: the W04 UX wave** (menu bar, popouts/slide-outs, section
-   scaling + persistence, scene layout polish, sequence lighting, tempo indicators, semantic accents,
-   state-matrix screenshots — see INTERFACE.md).
+   off-thread record-input open. ✅ **The W04 UX wave (a/b) + the W05 undo/polish wave are DONE** (menu bar,
+   LCD, tray, popouts/slide-outs, sequence lighting, semantic accents, scene polish, global Undo/Redo —
+   see the wave devlogs). **Next: the owed W05 QC dimensions first** (undo-correctness + shell-integration),
+   then the next feature wave.
 
 ---
 
