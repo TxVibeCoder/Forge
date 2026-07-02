@@ -10,15 +10,6 @@ using namespace juce;
 static constexpr int countInOptions[]  = { 0, 1, 2 };
 static constexpr int numCountInOptions = (int) (sizeof (countInOptions) / sizeof (countInOptions[0]));
 
-static String formatTimecode (double seconds)
-{
-    const int ms = roundToInt (seconds * 1000.0);
-    const int a  = std::abs (ms);
-    return String (ms < 0 ? "-" : "")
-         + String::formatted ("%02d:%02d:%02d.%03d",
-                              a / 3600000, (a / 60000) % 60, (a / 1000) % 60, a % 1000);
-}
-
 TransportBar::TransportBar()
 {
     for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton, &midiClockButton })
@@ -75,13 +66,7 @@ TransportBar::TransportBar()
     };
     addAndMakeVisible (countInBox);
 
-    readout.setJustificationType (Justification::centredRight);
-    readout.setFont (Font (FontOptions (16.0f)));
-    addAndMakeVisible (readout);
-
     syncMetronomeControls();   // defaults until the shell wires the query seams + calls setEdit
-
-    startTimerHz (25);
 }
 
 TransportBar::~TransportBar()
@@ -115,9 +100,6 @@ void TransportBar::resized()
     }
 
     countInBox.setBounds (r.removeFromLeft (jmin (120, r.getWidth())));
-    r.removeFromLeft (4);
-
-    readout.setBounds (r.removeFromRight (jmin (240, r.getWidth())));
 }
 
 void TransportBar::changeListenerCallback (ChangeBroadcaster*)
@@ -161,20 +143,4 @@ void TransportBar::syncMetronomeControls()
             countInBox.setSelectedId (i + 1, dontSendNotification);
             break;
         }
-}
-
-void TransportBar::timerCallback()
-{
-    if (transport == nullptr || edit == nullptr)
-    {
-        readout.setText ("00:00:00.000   1|1", dontSendNotification);
-        return;
-    }
-
-    const auto pos = transport->getPosition();
-    const auto bb  = edit->tempoSequence.toBarsAndBeats (pos);
-
-    readout.setText (formatTimecode (pos.inSeconds())
-                         + "   " + String (bb.bars + 1) + "|" + String (bb.getWholeBeats() + 1),
-                     dontSendNotification);
 }

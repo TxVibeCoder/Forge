@@ -334,6 +334,11 @@ public:
         lane's indicator, and after rebuild() so arm survives structural edits. */
     void refreshArmStates();
 
+    /** Expands/collapses a track's automation sub-lane programmatically (same per-session view
+        state the header A button flips). Used by the headless state-matrix screenshot harness so
+        the expanded lane is renderable without a mouse; out-of-range indices are a no-op. */
+    void setAutomationLaneExpanded (int trackIndex, bool shouldShow);
+
     //==============================================================================
     // Optional callbacks the shell can set to drive Inspector / persistence.
     // Default null => no-op. Selection state itself is owned here.

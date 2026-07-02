@@ -42,6 +42,9 @@ target_sources(Forge PRIVATE
     src/engine/LaunchpadDriver.cpp
     src/engine/dsp/LoudnessAnalyzer.cpp
     src/ui/transport/TransportBar.cpp
+    src/ui/transport/LcdDisplay.cpp
+    src/ui/tray/ChannelTray.cpp
+    src/ui/menu/ForgeMenuModel.cpp
     src/ui/arrange/ArrangeView.cpp
     src/ui/arrange/AutomationLane.cpp
     src/ui/markers/MarkerBar.cpp

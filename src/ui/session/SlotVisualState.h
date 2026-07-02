@@ -15,6 +15,10 @@
         caller gates its use (transport-running) and this function additionally only reads it
         when a launch handle exists; it is never invoked for empty/stopped pads.
 
+      - padPulseAlpha(...) — the ONE pure beat-pulse curve (W04a sequence lighting) mapping
+        (state, cycle phase) to the alpha of the pad's play-family ring. Deterministic and
+        engine-free, so the selftest gate asserts it headlessly.
+
       - PadFeedback + toPadFeedback(...) — the (colourIdx, state) LED encoding identical to
         the future ControlSurface padStateChanged model (colourIdx 0=off, 1-18=hue;
         state 0=solid, 1=blink, 2=pulse), so the same state drives screen pixels and LEDs.
@@ -26,6 +30,8 @@
 #pragma once
 
 #include <JuceHeader.h>
+
+#include <cmath>   // std::floor (padPulseAlpha's phase wrap)
 
 namespace te = tracktion;
 
@@ -98,6 +104,49 @@ inline SlotVisualState computeSlotState (te::ClipSlot* slot, bool transportRunni
     }
 
     return SlotVisualState::hasClip;
+}
+
+//==============================================================================
+/** Beat-synchronised pulse alpha for a pad's play-family ring (W04a sequence lighting).
+
+    Pure function of (state, phase) — no engine reads, no time source of its own: the caller
+    (the SessionView 25 Hz poll) derives `phase` from the transport via
+    tempoSequence.toBarsAndBeats, so the animation is beat-locked and never free-runs.
+    This is the --selftest-lcd lighting leg's assertion target.
+
+    `phase` is the pad's animation-cycle position in [0, 1):
+      - playing: the fractional beat (0 = on the beat) — a 1-beat cycle.
+      - queued:  the position within a TWO-beat cycle (half rate: peaks every other beat).
+    Out-of-range phases are defensively wrapped into [0, 1).
+
+    Mapping and exact expected values (float math, assert with ~1e-4 tolerance):
+      - playing:   1.0 - 0.45 * phase (peak 1.0 on the beat, linear decay to 0.55 across it).
+                   phase 0 -> 1.0 · 0.5 -> 0.775 · 0.999 -> 0.55045
+      - queued:    gentle 0.35..0.75 triangle over the 2-beat cycle.
+                   phase 0 -> 0.35 · 0.5 -> 0.75 · 0.999 -> 0.3508
+      - recording: 1.0 at every phase — the pad's red chrome is fixed (its hardware LED pulse
+                   comes from toPadFeedback state 2), so no screen modulation here.
+      - all others (empty, has-clip, stopping, rec-armed): 0.0 — no pulse overlay.
+*/
+inline float padPulseAlpha (SlotVisualState state, double phase) noexcept
+{
+    const auto p = (float) (phase - std::floor (phase));   // wrap into [0, 1)
+
+    switch (state)
+    {
+        case SlotVisualState::playing:
+            return 1.0f - 0.45f * p;
+
+        case SlotVisualState::queued:
+            return p < 0.5f ? 0.35f + 0.8f * p
+                            : 0.75f - 0.8f * (p - 0.5f);
+
+        case SlotVisualState::recording:
+            return 1.0f;
+
+        default:
+            return 0.0f;
+    }
 }
 
 //==============================================================================

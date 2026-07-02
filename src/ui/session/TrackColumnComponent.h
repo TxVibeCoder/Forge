@@ -51,6 +51,11 @@ public:
         index is out of range). The pad repaints only if its state/label actually changed. */
     void setSlotVisual (int sceneIndex, SlotVisualState state, juce::String label);
 
+    /** Pushes the beat-pulse ring alpha into the pad at sceneIndex (negative = no pulse / static
+        render). No-op if the index is out of range; the pad repaints only when the value actually
+        changes, so pads parked at the sentinel stay repaint-free (W04a sequence lighting). */
+    void setSlotPulse (int sceneIndex, float pulseAlpha);
+
     /** Sets the selection / keyboard-focus highlight on the pad at sceneIndex. */
     void setSlotSelected (int sceneIndex, bool shouldBeSelected);
 

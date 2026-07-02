@@ -21,6 +21,18 @@ void ClipSlotComponent::setVisualState (SlotVisualState newState, String newLabe
     }
 }
 
+void ClipSlotComponent::setPulseAlpha (float newPulseAlpha)
+{
+    // Pushed every poll tick while this pad is animated (playing / queued), and parked at the
+    // negative no-pulse sentinel otherwise — the change gate below is what keeps static pads
+    // repaint-free (§e): a pad repaints per tick ONLY while its pulse value is actually moving.
+    if (! approximatelyEqual (pulseAlpha, newPulseAlpha))
+    {
+        pulseAlpha = newPulseAlpha;
+        repaint();
+    }
+}
+
 void ClipSlotComponent::setSelected (bool shouldBeSelected)
 {
     if (selected != shouldBeSelected)
@@ -115,24 +127,27 @@ void ClipSlotComponent::paint (Graphics& g)
 
     if (hasClip)
     {
-        // Glyph + name. A filled disc + caret while playing (onAccent over the accent outline);
-        // a hollow caret otherwise.
+        // Glyph + name. A filled playGreen disc + dark caret while playing; a play-family or
+        // neutral hollow caret otherwise.
         auto textArea = b.toNearestInt().reduced (5, 3);
 
         const auto glyphArea = textArea.removeFromLeft (12);
         if (playing)
         {
-            g.setColour (Colour (ForgeLookAndFeel::accent));
+            // Playing glyph disc: playGreen ("sound is happening here", W04a semantic accent) with
+            // a dark caret on top (onAccent means text-on-AMBER, so a plain dark ink is used here).
+            g.setColour (Colour (ForgeLookAndFeel::playGreen));
             g.fillEllipse (glyphArea.toFloat().withSizeKeepingCentre (8.0f, 8.0f));
-            g.setColour (Colour (ForgeLookAndFeel::onAccent));
+            g.setColour (Colours::black.withAlpha (0.8f));
         }
         else if (queued)
         {
-            // Queued / stopping: an amber caret so an about-to-fire (or about-to-stop) clip reads
-            // distinctly from a plain stopped clip — and from a merely-selected one, whose caret stays
-            // neutral. (QC fix: previously queued state was conveyed ONLY by the accent outline, which is
-            // identical to the selection outline, so a queued clip and a selected idle clip were the same.)
-            g.setColour (Colour (ForgeLookAndFeel::accent));
+            // Queued / stopping: a dim-green caret (the queued member of the play family, W04a) so
+            // an about-to-fire (or about-to-stop) clip reads distinctly from a plain stopped clip —
+            // and from a merely-selected one, whose caret stays neutral. (QC fix: previously queued
+            // state was conveyed ONLY by an outline identical to the selection outline, so a queued
+            // clip and a selected idle clip were the same.)
+            g.setColour (Colour (ForgeLookAndFeel::playGreenDim));
         }
         else
         {
@@ -144,11 +159,11 @@ void ClipSlotComponent::paint (Graphics& g)
         g.drawText (label, textArea.removeFromLeft (textArea.getWidth()),
                     Justification::centredLeft, true);
 
-        // Amber progress sliver along the bottom while playing (fixed sliver, MVP — no timeline).
+        // playGreen progress sliver along the bottom while playing (fixed sliver, MVP — no timeline).
         if (playing)
         {
             auto sliver = b.withTrimmedTop (b.getHeight() - 2.0f).reduced (1.0f, 0.0f);
-            g.setColour (Colour (ForgeLookAndFeel::accent));
+            g.setColour (Colour (ForgeLookAndFeel::playGreen));
             g.fillRect (sliver);
         }
     }
@@ -160,11 +175,34 @@ void ClipSlotComponent::paint (Graphics& g)
         g.drawText (juce::String::fromUTF8 ("\xe2\x97\x8b"), b.toNearestInt(), Justification::centred);  // ○
     }
 
-    // Accent outline LAST (§d): 2 px for playing / queued / stopping, or selection / keyboard
-    // focus. Same colour, drawn over everything else.
-    if (playing || queued || selected)
+    // Outlines LAST, semantic vocabulary (W04a): the play-family ring carries the LAUNCH state —
+    // playGreen while playing, playGreenDim while queued (both beat-pulsed via the pushed-in
+    // pulseAlpha) or stopping (static). AMBER now means ONLY selection / keyboard focus.
+    if (playing || queued)
+    {
+        const bool isQueued = (state == SlotVisualState::queued);
+
+        // pulseAlpha < 0 => no beat pulse flowing (transport not running / poll edge): fall back
+        // to the state's peak so the ring never vanishes. Stopping is static at full strength.
+        const float ringAlpha = playing  ? (pulseAlpha >= 0.0f ? pulseAlpha : 1.0f)
+                              : isQueued ? (pulseAlpha >= 0.0f ? pulseAlpha : 0.75f)
+                                         : 1.0f;
+
+        g.setColour (Colour (playing ? ForgeLookAndFeel::playGreen
+                                     : ForgeLookAndFeel::playGreenDim).withAlpha (ringAlpha));
+        g.drawRoundedRectangle (b, corner, 2.0f);
+    }
+
+    // Selection / keyboard-focus cursor: the one remaining AMBER on the grid. Drawn over everything
+    // else; when a play-family ring already occupies the outer edge the cursor drops to an inner
+    // ring (the recArmed-style inset) so both meanings stay visible at once.
+    if (selected)
     {
         g.setColour (Colour (ForgeLookAndFeel::accent));
-        g.drawRoundedRectangle (b, corner, 2.0f);
+
+        if (playing || queued)
+            g.drawRoundedRectangle (b.reduced (3.0f), corner, 1.5f);
+        else
+            g.drawRoundedRectangle (b, corner, 2.0f);
     }
 }

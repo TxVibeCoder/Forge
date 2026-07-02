@@ -10,8 +10,11 @@
     computes a SlotVisualState (SlotVisualState.h), and calls setVisualState() to push it here.
 
     paint() draws the §(d) pad recipe (rounded laneBg base, track-colour@0.55 fill when the pad
-    has a clip, black@0.6 border, textPrim label, 2px accent outline when playing/queued/selected)
-    using ONLY ForgeLookAndFeel named colours and the one sanctioned laneBg literal.
+    has a clip, black@0.6 border, textPrim label) using ONLY ForgeLookAndFeel named colours and
+    the one sanctioned laneBg literal. The outline vocabulary is semantic (W04a): a play-family
+    ring — playGreen while playing, playGreenDim while queued/stopping — whose alpha is the
+    beat pulse pushed in via setPulseAlpha() by the parent's poll (derived from the transport,
+    never a free-running animation); AMBER is reserved for the selection / keyboard-focus cursor.
 
     Mouse intent is surfaced through null-guarded std::function callbacks; the parent (which knows
     the resolved engine state) disambiguates launch vs. create vs. open.
@@ -43,7 +46,14 @@ public:
         parent's poll on the message thread with a state derived from a freshly-resolved slot. */
     void setVisualState (SlotVisualState newState, juce::String label);
 
-    /** Selection / keyboard-focus flag — rendered as the same 2px accent outline (§d). */
+    /** Pushes the beat-pulse alpha for the play-family ring (padPulseAlpha output). Negative =
+        no pulse flowing (transport stopped / pad not animated): paint falls back to the state's
+        static peak. Repaints ONLY when the value changes, so the parent may push every tick —
+        stopped pads (parked at the sentinel) stay repaint-free (§e repaint discipline). */
+    void setPulseAlpha (float newPulseAlpha);
+
+    /** Selection / keyboard-focus flag — rendered as the 2px AMBER cursor outline (§d; W04a:
+        amber is selection-only, inset to an inner ring when a play-family ring is showing). */
     void setSelected (bool shouldBeSelected);
     bool isSelected() const                  { return selected; }
 
@@ -72,6 +82,7 @@ private:
 
     SlotVisualState state = SlotVisualState::empty;   // last state pushed by the parent/poll
     juce::String label;                               // clip name (or empty)
+    float pulseAlpha = -1.0f;                         // beat-pulse ring alpha; negative = no pulse (static render)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipSlotComponent)
 };

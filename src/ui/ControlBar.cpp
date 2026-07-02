@@ -5,8 +5,10 @@ using namespace juce;
 
 ControlBar::ControlBar()
 {
-    for (auto* b : { &browserBtn, &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn,
-                     &scanBtn, &audioBtn, &sessionBtn, &arrangeBtn, &mixBtn, &drawerBtn })
+    // The file-command buttons are gone (W04a): the menu bar owns those commands now; the bar
+    // keeps only the performance surface — region toggles, transport, LCD, view switch. Their
+    // std::function callbacks stay on this class for the menu model to copy.
+    for (auto* b : { &browserBtn, &sessionBtn, &arrangeBtn, &mixBtn, &drawerBtn })
         addAndMakeVisible (b);
 
     // The view-switch buttons must NOT retain keyboard focus: otherwise Enter (SessionView's "launch the
@@ -16,18 +18,10 @@ ControlBar::ControlBar()
     mixBtn    .setWantsKeyboardFocus (false);
 
     addAndMakeVisible (transportBar);
+    addAndMakeVisible (lcd);
 
     browserBtn.onClick = [this] { if (onToggleBrowser) onToggleBrowser(); };
     drawerBtn.onClick  = [this] { if (onToggleDrawer)  onToggleDrawer(); };
-
-    newBtn.onClick     = [this] { if (onNew) onNew(); };
-    openBtn.onClick    = [this] { if (onOpen) onOpen(); };
-    saveBtn.onClick    = [this] { if (onSave) onSave(); };
-    saveAsBtn.onClick  = [this] { if (onSaveAs) onSaveAs(); };
-    importBtn.onClick  = [this] { if (onImport) onImport(); };
-    exportBtn.onClick  = [this] { showExportMenu(); };
-    scanBtn.onClick    = [this] { if (onScanPlugins) onScanPlugins(); };
-    audioBtn.onClick   = [this] { if (onAudioSettings) onAudioSettings(); };
 
     sessionBtn.onClick = [this] { setViewMode (0); if (onViewMode) onViewMode (0); };
     arrangeBtn.onClick = [this] { setViewMode (1); if (onViewMode) onViewMode (1); };
@@ -39,6 +33,7 @@ ControlBar::ControlBar()
 void ControlBar::setEdit (te::Edit* e)
 {
     transportBar.setEdit (e);
+    lcd.setEdit (e);
 }
 
 void ControlBar::setViewMode (int mode)
@@ -54,30 +49,12 @@ void ControlBar::updateViewButtons()
     mixBtn.setToggleState     (viewMode == 2, dontSendNotification);
 }
 
-void ControlBar::showExportMenu()
-{
-    PopupMenu m;
-    m.addItem (1, "Export Mixdown (WAV)...");
-    m.addItem (2, "Export Stems...");
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (exportBtn),
-                     [this] (int r)
-                     {
-                         if      (r == 1) { if (onExport)      onExport(); }
-                         else if (r == 2) { if (onExportStems) onExportStems(); }
-                     });
-}
-
 void ControlBar::resized()
 {
     auto r = getLocalBounds().reduced (6, 6);
 
     browserBtn.setBounds (r.removeFromLeft (66));
     r.removeFromLeft (8);
-    for (auto* b : { &newBtn, &openBtn, &saveBtn, &saveAsBtn, &importBtn, &exportBtn, &scanBtn, &audioBtn })
-    {
-        b->setBounds (r.removeFromLeft (60));
-        r.removeFromLeft (3);
-    }
 
     // Right side, laid out from the right edge inward: Editor | Mix | Arrange | Session.
     drawerBtn.setBounds (r.removeFromRight (62));
@@ -87,7 +64,21 @@ void ControlBar::resized()
     sessionBtn.setBounds (r.removeFromRight (62));
     r.removeFromRight (12);
 
-    transportBar.setBounds (r);   // center fills the remainder
+    // Centre priority (QC blocker fix): the transport's fixed controls get FIRST claim on the
+    // span — every button must stay clickable at any window width the shell allows. The LCD
+    // takes only the leftover, and hides entirely when that leftover is below its 150 px floor
+    // rather than starving the transport (it re-appears as soon as the window grows; with the
+    // file buttons gone it fits from the default width up).
+    const int transportW = jmin (TransportBar::preferredWidth, r.getWidth());
+    transportBar.setBounds (r.removeFromLeft (transportW));
+    r.removeFromLeft (6);
+
+    const bool lcdFits = r.getWidth() >= LcdDisplay::minimumWidth;
+    lcd.setVisible (lcdFits);
+    if (lcdFits)
+        lcd.setBounds (r.withSizeKeepingCentre (jmin (LcdDisplay::preferredWidth, r.getWidth()),
+                                                r.getHeight())
+                           .reduced (0, 4));
 }
 
 void ControlBar::paint (Graphics& g)

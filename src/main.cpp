@@ -35,17 +35,22 @@
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
 #include "ui/session/SessionView.h"
+#include "ui/session/SlotVisualState.h"
 #include "ui/export/ExportProgress.h"
 #include "ui/ControlBar.h"
+#include "ui/transport/LcdModel.h"
+#include "ui/tray/ChannelTray.h"
+#include "ui/menu/ForgeMenuModel.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "core/Log.h"
 
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
+enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
 
 //==============================================================================
 static File createSineWaveFile (double sampleRate, double seconds, double frequencyHz, float gain)
@@ -201,6 +206,7 @@ public:
         static_cast<ForgeUIBehaviour&> (engine.getUIBehaviour()).setSession (&session);
 
         setupControlBar();
+        setupMenuModel();   // shares setupControlBar's std::functions — must come after it (W04a)
         setupStatusStrip();
 
         addAndMakeVisible (controlBar);
@@ -209,6 +215,23 @@ public:
         addAndMakeVisible (mixerView);
         addAndMakeVisible (sessionView);
         addAndMakeVisible (browserPanel);
+        addChildComponent (channelTray);   // shown by the sidebar's Channel tab (W04a)
+
+        // Sidebar tabs (W04a): slim toggles across the top of the left band. Toggle state mirrors
+        // sidebarMode in resized(); clicking just flips the mode and relays out.
+        for (auto* tab : { &sidebarFilesTab, &sidebarChannelTab })
+        {
+            tab->setColour (TextButton::buttonColourId,   Colour (ForgeLookAndFeel::panelBg));
+            tab->setColour (TextButton::buttonOnColourId, Colour (ForgeLookAndFeel::raisedBg));
+            tab->setColour (TextButton::textColourOffId,  Colour (ForgeLookAndFeel::textSec));
+            tab->setColour (TextButton::textColourOnId,   Colour (ForgeLookAndFeel::textPrim));
+            addChildComponent (*tab);
+        }
+        sidebarFilesTab.setTooltip ("File browser");
+        sidebarChannelTab.setTooltip ("Selected track's channel strip");
+        sidebarFilesTab.onClick   = [this] { sidebarMode = SidebarMode::Browser; userPinnedBrowser = true;  resized(); };
+        sidebarChannelTab.onClick = [this] { sidebarMode = SidebarMode::Channel; userPinnedBrowser = false; resized(); };
+
         addAndMakeVisible (detailView);
         addAndMakeVisible (pianoRoll);
         addAndMakeVisible (browserResizer);
@@ -232,8 +255,8 @@ public:
 
         // Persist structural edits made via the arrange view's context menus / lane controls
         // (add/delete/rename track, delete clip, colour, mute/solo). ArrangeView fires this after
-        // it has already rebuilt itself, so we only need to save. (onClipSelected/onTrackSelected
-        // -> Inspector are left unwired until that feature exists — see docs/devlog/integration.md.)
+        // it has already rebuilt itself, so we only need to save. (onClipSelected routes the drawer
+        // editors; onTrackSelected binds the W04a channel tray — both wired below.)
         arrangeView.onEditMutated = [this]
         {
             if (! session.save())
@@ -245,6 +268,10 @@ public:
             // also guards against any path that doesn't route through here).
             if (sessionViewBinds() && session.getNumAudioTracks() != sessionView.getNumColumns())
                 sessionView.rebuild();
+
+            // Re-validate the tray's bound track eagerly (it self-clears if the track was deleted);
+            // the tray's own 10 Hz identity scan is the backstop for paths that bypass this hook.
+            channelTray.refreshNow();
         };
 
         // Authoritative arm state lives in the engine (the InputDeviceInstance targets), so the
@@ -307,6 +334,25 @@ public:
 
             resized();
         };
+
+        // Selecting a track in Arrange binds the channel tray (W04a). ArrangeView delivers a raw
+        // te::Track pointer — deselection fires nullptr — so the bind dynamic_casts: anything
+        // that isn't an AudioTrack clears the tray to its empty state. Selecting a track also
+        // flips the sidebar to the Channel tab when the sidebar is open (the GarageBand reveal),
+        // UNLESS the user explicitly parked it on Files (QC: never steal an explicit pane choice).
+        arrangeView.onTrackSelected = [this] (te::Track* t)
+        {
+            auto* at = dynamic_cast<te::AudioTrack*> (t);
+            channelTray.setTrack (at);
+
+            if (at != nullptr && browserVisible && ! userPinnedBrowser
+                && sidebarMode != SidebarMode::Channel)
+            {
+                sidebarMode = SidebarMode::Channel;
+                resized();
+            }
+        };
+
         detailView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
         pianoRoll.onEditMutated  = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
@@ -506,6 +552,7 @@ public:
             if (sessionViewBinds() && session.getNumAudioTracks() != sessionView.getNumColumns())
                 sessionView.rebuild();
             arrangeView.rebuild();
+            channelTray.refreshNow();   // re-validate the tray's bound track (W04a)
         };
 
         // ---- P5: markers / cue points ----
@@ -616,6 +663,13 @@ public:
             // inspector's gain slider after one forced sync tick — no re-select, no rebuild.
             MessageManager::callAsync ([this] { runLiveSyncSelftest(); });
         }
+        else if (mode == SelfTest::tray)
+        {
+            // Headless channel-tray gate (W04a P2): bind track 0, write volume/mute engine-side (the
+            // path another surface or a MIDI-learn CC takes), force one sync tick, assert the tray
+            // followed; then a null re-bind must land in the empty state.
+            MessageManager::callAsync ([this] { runTraySelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -655,6 +709,9 @@ public:
         sineFile.deleteFile();
     }
 
+    /** The menu-bar model MainWindow installs via setMenuBar (W04a). */
+    ForgeMenuModel& getMenuModel() { return menuModel; }
+
     void paint (Graphics& g) override
     {
         g.fillAll (Colour (ForgeLookAndFeel::shellBg));
@@ -668,13 +725,31 @@ public:
 
         auto work = r;
 
-        // Browser (left): panel + a thin draggable resizer hugging its right edge.
-        browserPanel.setVisible (browserVisible);
+        // Left sidebar (W04a): a multi-modal band — a slim tab row (Files | Channel) on top, then
+        // EITHER the file browser or the selected-track channel tray, chosen by sidebarMode. The B
+        // toggle shows/hides the whole band, exactly as it always hid the browser.
+        const bool showBrowser = browserVisible && sidebarMode == SidebarMode::Browser;
+        const bool showChannel = browserVisible && sidebarMode == SidebarMode::Channel;
+        sidebarFilesTab.setVisible (browserVisible);
+        sidebarChannelTab.setVisible (browserVisible);
+        browserPanel.setVisible (showBrowser);
+        channelTray.setVisible (showChannel);
         browserResizer.setVisible (browserVisible);
         if (browserVisible)
         {
             const int w = jlimit (browserMinWidth, browserMaxWidth, browserWidth);
-            browserPanel.setBounds (work.removeFromLeft (w));
+            auto band = work.removeFromLeft (w);
+
+            auto tabs = band.removeFromTop (sidebarTabH);
+            const int tabW = tabs.getWidth() / 2;
+            sidebarFilesTab.setBounds (tabs.removeFromLeft (tabW));
+            sidebarChannelTab.setBounds (tabs);
+            sidebarFilesTab.setToggleState (sidebarMode == SidebarMode::Browser, dontSendNotification);
+            sidebarChannelTab.setToggleState (sidebarMode == SidebarMode::Channel, dontSendNotification);
+
+            if (showBrowser) browserPanel.setBounds (band);
+            else             channelTray.setBounds (band);
+
             browserResizer.setBounds (work.removeFromLeft (resizerThickness));
         }
 
@@ -821,6 +896,7 @@ private:
     int  sySavedScanInterval = 4;                       // restore on ALL exit paths (persists to storage)
 
     ControlBar controlBar;
+    ForgeMenuModel menuModel;   // top menu-bar model (W04a): wired in setupMenuModel(), installed by MainWindow::setMenuBar
     TimelineView timelineView;
     ArrangeView arrangeView { timelineView };
     MarkerBar markerBar { timelineView };   // markers strip over the arrange timeline (shares the axis, P5)
@@ -828,6 +904,7 @@ private:
     SessionView sessionView { session };   // primary view: tracks×scenes clip-launch grid (Sheet 00)
     BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
     DetailView  detailView;     // bottom drawer: audio-clip inspector
+    ChannelTray channelTray { session };   // left sidebar Channel tab: selected-track strip (W04a)
     PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
     Label statusLabel;
     juce::uint32 statusHoldUntilMs = 0;   // transient status messages survive the 5Hz refresh until this time
@@ -861,6 +938,16 @@ private:
     static constexpr int resizerThickness = 5;
     int browserWidth = 220, browserMinWidth = 140, browserMaxWidth = 560;
     int drawerHeight = 160, drawerMinHeight = 90,  drawerMaxHeight = 420;
+
+    // W04a left-sidebar mode: the band hosts the file browser or the channel tray, picked by two
+    // slim tabs across its top. The B toggle still shows/hides the whole band.
+    SidebarMode sidebarMode = SidebarMode::Browser;
+    static constexpr int sidebarTabH = 22;
+    TextButton sidebarFilesTab { "Files" }, sidebarChannelTab { "Channel" };
+
+    // QC: track selection auto-flips the sidebar to Channel (the GarageBand reveal), but never
+    // over an EXPLICIT Files choice — a user browsing samples must not lose the pane mid-browse.
+    bool userPinnedBrowser = false;
 
     ResizerBar browserResizer { true,  browserMinWidth, browserMaxWidth };   // vertical handle (width)
     ResizerBar drawerResizer  { false, drawerMinHeight, drawerMaxHeight };   // horizontal handle (height)
@@ -902,6 +989,85 @@ private:
         tb.queryMidiClockEnabled = [this]           { return MidiClockSync::isSendingClockAny (engine); };
     }
 
+    // Menu-bar model (W04a): the same commands the buttons/keys already run, exposed as a
+    // discoverable index with shortcut labels. File/View entries SHARE the std::functions wired
+    // in setupControlBar() (call this after it), so menu and button can never drift. Transport
+    // entries mirror TransportBar.cpp's button lambdas; Record routes through toggleRecordTake
+    // and the SAME function is finally assigned to the TransportBar's Rec button, which was
+    // never wired anywhere (silent no-op — W04a dossier bug). Engine-state mutations end with a
+    // controlBar.setEdit(...) resync so the TransportBar toggles reflect the change immediately
+    // (its ChangeListener only fires on transport state changes, not on click/clock/count-in).
+    void setupMenuModel()
+    {
+        auto& cb = menuModel.callbacks;
+
+        // File — shared with the ControlBar buttons.
+        cb.onNewProject    = controlBar.onNew;
+        cb.onOpenProject   = controlBar.onOpen;
+        cb.onSave          = controlBar.onSave;
+        cb.onSaveAs        = controlBar.onSaveAs;
+        cb.onImportAudio   = controlBar.onImport;
+        cb.onExportMixdown = controlBar.onExport;
+        cb.onExportStems   = controlBar.onExportStems;
+        cb.onAudioSettings = controlBar.onAudioSettings;
+        cb.onPluginManager = controlBar.onScanPlugins;
+
+        // Edit
+        cb.onMidiLearn = [this] { showMidiLearnMenu(); };
+
+        // View — commands shared with the ControlBar; queries read the shell's own state.
+        cb.onViewMode      = controlBar.onViewMode;
+        cb.onToggleBrowser = controlBar.onToggleBrowser;
+        cb.onToggleDrawer  = controlBar.onToggleDrawer;
+        cb.queryViewMode       = [this] { return viewMode == ViewMode::Session ? 0
+                                               : viewMode == ViewMode::Arrange ? 1 : 2; };
+        cb.queryBrowserVisible = [this] { return browserVisible; };
+        cb.queryDrawerVisible  = [this] { return drawerVisible; };
+
+        // Transport — mirrors TransportBar.cpp's button lambdas; the edit is read LIVE per invocation.
+        cb.onTogglePlay   = [this] { if (auto* ed = session.getEdit()) EngineHelpers::togglePlay (*ed); };
+        cb.onToggleRecord = [this] { toggleRecordTake(); };
+        cb.onToggleLoop   = [this]
+        {
+            if (auto* t = session.getTransport())
+                t->looping = ! t->looping;
+            controlBar.setEdit (session.getEdit());   // resync the TransportBar toggles
+        };
+        cb.onToggleMetronome = [this]
+        {
+            if (auto* e = session.getEdit())
+                Metronome::enableClick (*e, ! Metronome::isClickEnabled (*e));
+            controlBar.setEdit (session.getEdit());
+        };
+        cb.onCountInBars = [this] (int bars)
+        {
+            if (auto* e = session.getEdit())
+                Metronome::setCountInBars (*e, bars);
+            controlBar.setEdit (session.getEdit());
+        };
+        cb.onToggleMidiClock = [this]
+        {
+            MidiClockSync::setSendClockToAll (engine, ! MidiClockSync::isSendingClockAny (engine));
+            controlBar.setEdit (session.getEdit());
+        };
+        cb.queryMetronomeEnabled = [this] { auto* e = session.getEdit(); return e != nullptr && Metronome::isClickEnabled (*e); };
+        cb.queryMidiClockEnabled = [this] { return MidiClockSync::isSendingClockAny (engine); };
+        cb.queryCountInBars      = [this] { auto* e = session.getEdit(); return e != nullptr ? Metronome::getCountInBars (*e) : 0; };
+
+        // Rec-button fix (W04a dossier): TransportBar::onRecord is fired by the Rec button but was
+        // never assigned — the button was a silent no-op; only the 'R' key recorded. Menu item,
+        // key, and button now all route through the one toggleRecordTake.
+        controlBar.getTransportBar().onRecord = [this] { toggleRecordTake(); };
+
+        // Help — a minimal About box. May be left unset (the model null-guards every callback).
+        cb.onAbout = []
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "About Forge",
+                                              "Forge " + JUCEApplication::getInstance()->getApplicationVersion()
+                                                  + "\nA native, Session-first DAW on JUCE + Tracktion Engine.");
+        };
+    }
+
     void setupStatusStrip()
     {
         // browserPanel (BrowserView), detailView (DetailView) and mixerView are real components now
@@ -934,11 +1100,36 @@ private:
 
     void setupResizers()
     {
+        // W04a: section sizes persist across launches via the engine's PropertiesFile (arbitrary
+        // Forge keys can't use PropertyStorage's closed SettingID enum; the PropertiesFile is the
+        // engine-sanctioned open store — PluginScanner already uses it). Loaded here (called once
+        // from the ctor), saved on every completed drag — writes are coalesced by the file, so
+        // per-drag saves are cheap.
+        {
+            auto& props = engine.getPropertyStorage().getPropertiesFile();
+            browserWidth = jlimit (browserMinWidth, browserMaxWidth,
+                                   props.getIntValue ("forgeBrowserWidth", browserWidth));
+            drawerHeight = jlimit (drawerMinHeight, drawerMaxHeight,
+                                   props.getIntValue ("forgeDrawerHeight", drawerHeight));
+        }
+
         browserResizer.getCurrentSize = [this] { return browserWidth; };
-        browserResizer.onResize       = [this] (int w) { browserWidth = w; resized(); };
+        browserResizer.onResize       = [this] (int w)
+        {
+            browserWidth = w;
+            resized();
+            engine.getPropertyStorage().getPropertiesFile()
+                .setValue ("forgeBrowserWidth", jlimit (browserMinWidth, browserMaxWidth, w));
+        };
 
         drawerResizer.getCurrentSize  = [this] { return drawerHeight; };
-        drawerResizer.onResize        = [this] (int h) { drawerHeight = h; resized(); };
+        drawerResizer.onResize        = [this] (int h)
+        {
+            drawerHeight = h;
+            resized();
+            engine.getPropertyStorage().getPropertiesFile()
+                .setValue ("forgeDrawerHeight", jlimit (drawerMinHeight, drawerMaxHeight, h));
+        };
     }
 
     //==============================================================================
@@ -2571,6 +2762,83 @@ private:
     }
 
     //==============================================================================
+    // --selftest-tray (W04a P2): prove the channel tray's bind -> engine-write -> forced-sync-tick
+    // loop headlessly, plus the null re-bind to the empty state. Mirrors --selftest-livesync: import
+    // a tone so track 0 is populated, bind the tray, write volume/mute engine-side, force one
+    // refreshNow() tick (the deterministic mirror of the 10 Hz poll), and assert the widgets moved.
+    // Every op here is synchronous on the message thread, so a single callAsync yield suffices.
+    void runTraySelftest()
+    {
+        auto* ed = session.getEdit();
+        if (ed == nullptr) { finishTraySelftest (false, 0.0, false, false); return; }
+
+        FORGE_LOG_INFO ("selftest-tray: import a clip, bind track 0, engine-write vol/mute, force a sync tick");
+
+        sineFile = createSineWaveFile (44100.0, 2.0, 440.0, 0.2f);
+        clip = session.importAudioFile (sineFile, te::TimePosition());
+        if (clip == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-tray: failed to import test tone");
+            finishTraySelftest (false, 0.0, false, false);
+            return;
+        }
+
+        auto tracks = te::getAudioTracks (*ed);
+        auto* track = tracks.isEmpty() ? nullptr : tracks[0];   // importAudioFile lands on track 0
+        if (track == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-tray: no audio track after import");
+            finishTraySelftest (false, 0.0, false, false);
+            return;
+        }
+
+        // Bind, then write engine-side and force one sync tick — the path under test.
+        channelTray.setTrack (track);
+        const bool boundSeen = channelTray.isShowingTrack();
+
+        EngineHelpers::setTrackVolumeDb (*track, -9.0f);
+        track->setMute (true);
+        channelTray.refreshNow();
+
+        const double faderDb  = channelTray.getFaderDb();
+        const bool   muteSeen = channelTray.getMuteShown();
+
+        // Null re-bind must land in the empty state (the "Select a track" hint).
+        channelTray.setTrack (nullptr);
+        const bool clearedSeen = ! channelTray.isShowingTrack();
+
+        finishTraySelftest (boundSeen, faderDb, muteSeen, clearedSeen);
+    }
+
+    void finishTraySelftest (bool boundSeen, double faderDb, bool muteSeen, bool clearedSeen)
+    {
+        // Same tolerance as the livesync mixer leg: the fader snaps to 0.1 dB and the engine's
+        // dB-to-fader-position curve is not bit-exact through a round-trip, so allow 0.15.
+        const bool faderPass = std::abs (faderDb - (-9.0)) <= 0.15;
+        const bool pass      = boundSeen && faderPass && muteSeen && clearedSeen;
+
+        String report;
+        report << "mode=tray" << newLine
+               << "boundSeen="   << (boundSeen ? 1 : 0) << newLine
+               << "faderDb="     << String (faderDb, 3) << newLine
+               << "faderPass="   << (faderPass ? 1 : 0) << newLine
+               << "muteSeen="    << (muteSeen ? 1 : 0) << newLine
+               << "clearedSeen=" << (clearedSeen ? 1 : 0) << newLine
+               << "result="      << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="     << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write tray selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Tray selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -2608,6 +2876,18 @@ private:
             if (session.createMidiClipInSlot (c.track, c.scene, c.name) == nullptr)
                 FORGE_LOG_WARN ("Screenshot harness: failed to create demo MIDI clip at ("
                                 + juce::String (c.track) + "," + juce::String (c.scene) + ")");
+
+        // W04a: a visible volume curve on track 0 so the arrange_automation state shows a real
+        // shape (rise-dip-rise) rather than an empty lane. Seam-committed, points persist for the
+        // duration of this throwaway demo edit only.
+        if (! tracks.isEmpty())
+            if (auto volParam = AutomationHelpers::getTrackVolumeParam (*tracks[0]))
+            {
+                AutomationHelpers::clearAutomation (*volParam);
+                AutomationHelpers::addPoint (*volParam, 0.0, 0.85f);
+                AutomationHelpers::addPoint (*volParam, 4.0, 0.35f);
+                AutomationHelpers::addPoint (*volParam, 8.0, 0.70f);
+            }
 
         // Launch scene 3 so the snapshot shows playing pads + an active scene row.
         session.launchScene (3);
@@ -2651,6 +2931,34 @@ private:
 
         setViewMode (ViewMode::Session);   captureView ("session");
         setViewMode (ViewMode::Arrange);   captureView ("arrange");
+
+        // W04a state-matrix: the same Arrange frame with track 0's automation lane EXPANDED, showing
+        // the demo volume curve — the visual proof the collapsed default screenshot cannot give.
+        arrangeView.setAutomationLaneExpanded (0, true);
+        captureView ("arrange_automation");
+        arrangeView.setAutomationLaneExpanded (0, false);
+
+        // W04a: the channel tray bound to track 0 on the sidebar's Channel tab, in Arrange — the
+        // GarageBand-inspector state.
+        {
+            auto tracks = te::getAudioTracks (*session.getEdit());
+            if (! tracks.isEmpty())
+                channelTray.setTrack (tracks[0]);
+        }
+        browserVisible = true;
+        sidebarMode    = SidebarMode::Channel;
+        captureView ("arrange_tray");
+        browserVisible = false;
+        sidebarMode    = SidebarMode::Browser;
+        channelTray.setTrack (nullptr);
+
+        // W04a: the LCD's count-in face via its demo seam (digit 3 of 4, pulse near the click) —
+        // a REAL count-in needs a capture device, so this state is injected, per the dossier.
+        setViewMode (ViewMode::Session);
+        controlBar.getLcdDisplay().setDemoState (forge::lcd::LcdState { {}, {}, {}, true, 3, 4, 0.1 });
+        captureView ("lcd_countin");
+        controlBar.getLcdDisplay().setEdit (session.getEdit());   // resume live polling
+
         setViewMode (ViewMode::Mixer);     captureView ("mix");
 
         // Prove vertical scroll headlessly: force a SHORT window so the vertical scrollbar appears and the
@@ -2686,6 +2994,7 @@ private:
         exportProgress.setVisible (false);
 
         detailView.setClip (nullptr);
+        channelTray.setTrack (nullptr);    // the outgoing Edit's tracks are about to die (W04a)
         pianoRoll.setMidiClip (nullptr);   // drop any MIDI clip held from the outgoing Edit
         bottomMode = BottomMode::Detail;
         controlBar.setEdit (nullptr);
@@ -2917,7 +3226,7 @@ private:
                << "clipLengthSecs="    << String (clipLen, 3) << newLine
                << "numClipComponents=" << numClipComps << newLine
                << "playheadX="         << playheadX << newLine
-               << "transportReadout="  << (controlBar.getTransportBar().readoutIsNonEmpty() ? 1 : 0) << newLine
+               << "transportReadout="  << (controlBar.getLcdDisplay().readoutIsNonEmpty() ? 1 : 0) << newLine
                << "hasContext="        << (hasContext ? 1 : 0) << newLine
                << "playing="           << (playing ? 1 : 0) << newLine
                << "position="          << String (posSecs, 3) << newLine
@@ -3053,6 +3362,276 @@ static void runLufsSelfTest()
 }
 
 //==============================================================================
+// --selftest-lcd: prove the W04a LCD display model + the pad pulse curve, headlessly. PURE — no
+// engine / edit / device (the model is plain ints/doubles/strings by design), so it runs and
+// quits before the window is built, like --selftest-lufs. Expected values are the skeptic-verified
+// acceptance table from the W04a dossier, hand-derived for a fresh Edit (120 BPM, 4/4, key C)
+// with count-in N=4 punching at 0 s: the engine pre-rolls (N + 0.5) beats, digit k flips exactly
+// on click beat k, and the first half-beat is the digit-0 "ready" lead-in.
+static void runLcdSelfTest()
+{
+    using forge::lcd::LcdInput;
+    using forge::lcd::computeLcdState;
+
+    int failures = 0;
+    juce::StringArray failed;
+    juce::String report;
+    report << "mode=lcd" << juce::newLine;
+
+    auto expect = [&] (const char* name, bool ok)
+    {
+        report << name << "=" << (ok ? "PASS" : "FAIL") << juce::newLine;
+        if (! ok) { ++failures; failed.add (name); }
+    };
+
+    // Base input: fresh-edit defaults (120 BPM, 4/4, key C).
+    LcdInput base;
+    base.timeSigString = "4/4";
+    base.keyString     = "C";
+
+    // -- Idle at position 0: 1|1, 120.0, C · 4/4, no count-in, phase 0.
+    {
+        const auto s = computeLcdState (base);
+        expect ("idlePosition",  s.positionText == "1|1");
+        expect ("idleTempo",     s.tempoText == "120.0");
+        expect ("idleKeySig",    s.keySigText == juce::String::fromUTF8 ("C \xc2\xb7 4/4"));
+        expect ("idleNoCountIn", ! s.countInActive && s.countInDigit == 0);
+        expect ("idlePhase",     s.pulsePhase == 0.0);
+    }
+
+    // -- Playing at 6.5 beats -> bar 2, beat 3, phase 0.5 (raw toBarsAndBeats values: bars=1,
+    //    wholeBeats=2, fractional 0.5 — skeptic-recomputed).
+    {
+        auto in = base;
+        in.bars = 1; in.beatInBar = 2; in.fractionalBeat = 0.5;
+        in.positionSeconds = 3.25;
+        const auto s = computeLcdState (in);
+        expect ("playPosition", s.positionText == "2|3");
+        expect ("playPhase",    s.pulsePhase == 0.5);
+    }
+
+    // -- Count-in acceptance table (click-grid form): the digit derives from WHOLE TIMELINE
+    //    BEATS (where the engine's clicks land), never from distances to the punch. Aligned
+    //    case first: N=4, punch at beat 0 (0 s), record latched from stopped; the engine
+    //    pre-rolls 4.5 beats and the position runs NEGATIVE up to the punch.
+    auto countIn = [&base] (double posSeconds, double currentBeat, double punchBeat, double punchSeconds)
+    {
+        auto in = base;
+        in.recording          = true;
+        in.startedFromStopped = true;
+        in.countInTotal       = 4;
+        in.punchTimeSeconds   = punchSeconds;
+        in.positionSeconds    = posSeconds;
+        in.currentBeat        = currentBeat;
+        in.punchBeat          = punchBeat;
+        in.bars = -2; in.beatInBar = 0;   // raw bars run negative in pre-roll; must never surface
+        return computeLcdState (in);
+    };
+
+    { const auto s = countIn (-2.25,  -4.5,  0.0, 0.0); expect ("countInLeadIn", s.countInActive && s.countInDigit == 0); }
+    { const auto s = countIn (-2.0,   -4.0,  0.0, 0.0); expect ("countInBeat1",  s.countInActive && s.countInDigit == 1); }
+    { const auto s = countIn (-1.0,   -2.0,  0.0, 0.0); expect ("countInBeat3",  s.countInActive && s.countInDigit == 3); }
+    { const auto s = countIn (-0.125, -0.25, 0.0, 0.0); expect ("countInBeat4",  s.countInActive && s.countInDigit == 4); }
+    { const auto s = countIn ( 0.0,    0.0,  0.0, 0.0); expect ("countInPunch", ! s.countInActive && s.countInDigit == 0); }   // pos !< punch -> punched in
+
+    // -- NON-ALIGNED punch (the QC major): recording from a mid-beat stop at beat 2.3. Clicks
+    //    land on whole beats -1, 0, 1, 2 (firstClick = ceil(2.3 - 4) = -1); each digit must
+    //    flip ON its click, not 0.7 beats early as the old distance form did.
+    { const auto s = countIn (-1.10, -2.2, 2.3, 1.15); expect ("countInNA_preClick", s.countInActive && s.countInDigit == 0); }   // before the first click
+    { const auto s = countIn (-0.85, -1.7, 2.3, 1.15); expect ("countInNA_stillLeadIn", s.countInActive && s.countInDigit == 0); } // old form said 1 here — must be 0
+    { const auto s = countIn (-0.50, -1.0, 2.3, 1.15); expect ("countInNA_beat1", s.countInActive && s.countInDigit == 1); }       // ON click beat -1
+    { const auto s = countIn ( 0.15,  0.3, 2.3, 1.15); expect ("countInNA_beat2", s.countInActive && s.countInDigit == 2); }
+    { const auto s = countIn ( 1.00,  2.0, 2.3, 1.15); expect ("countInNA_beat4", s.countInActive && s.countInDigit == 4); }       // ON click beat 2
+    { const auto s = countIn ( 1.15,  2.3, 2.3, 1.15); expect ("countInNA_punch", ! s.countInActive); }
+
+    // -- Skeptic guard 1: the same pre-punch shape WITHOUT the stopped-transport latch is a
+    //    mid-playback punch-in (no pre-roll, stale start time after a backward seek) — the
+    //    count-in face must stay off.
+    {
+        auto in = base;
+        in.recording          = true;
+        in.startedFromStopped = false;   // record() fired while already playing
+        in.countInTotal       = 4;
+        in.punchTimeSeconds   = 8.0;     // stale startTime ahead of the position
+        in.positionSeconds    = 4.0;
+        in.currentBeat        = 8.0;
+        in.punchBeat          = 16.0;
+        const auto s = computeLcdState (in);
+        expect ("phantomCountInSuppressed", ! s.countInActive && s.countInDigit == 0);
+    }
+
+    // -- Skeptic guard 2: FP overshoot/undershoot at an exact click boundary must not glitch
+    //    the digit — the epsilon inside floor()/ceil() absorbs it.
+    {
+        const auto s = countIn (-2.0, -4.0 - 1.0e-9, 0.0, 0.0);
+        expect ("epsilonAtBoundary", s.countInActive && s.countInDigit == 1);
+    }
+
+    // -- Beat-phase leg: the pulse phase is the fractional beat passed through untouched
+    //    (dossier: beatPhase at 3.25 beats == 0.25).
+    {
+        auto in = base;
+        in.fractionalBeat = 0.25;
+        expect ("beatPhase", computeLcdState (in).pulsePhase == 0.25);
+    }
+
+    // -- Pad pulse curve (SlotVisualState::padPulseAlpha — the W04a sequence-lighting leg;
+    //    documented curve values, float math, 1e-4 tolerance).
+    {
+        auto near = [] (float a, float b) { return std::abs (a - b) <= 1.0e-4f; };
+        expect ("pulsePlaying", near (padPulseAlpha (SlotVisualState::playing, 0.0),   1.0f)
+                             && near (padPulseAlpha (SlotVisualState::playing, 0.5),   0.775f)
+                             && near (padPulseAlpha (SlotVisualState::playing, 0.999), 0.55045f));
+        expect ("pulseQueued",  near (padPulseAlpha (SlotVisualState::queued,  0.0),   0.35f)
+                             && near (padPulseAlpha (SlotVisualState::queued,  0.5),   0.75f)
+                             && near (padPulseAlpha (SlotVisualState::queued,  0.999), 0.3508f));
+        expect ("pulseRecording", near (padPulseAlpha (SlotVisualState::recording, 0.0),   1.0f)
+                               && near (padPulseAlpha (SlotVisualState::recording, 0.5),   1.0f)
+                               && near (padPulseAlpha (SlotVisualState::recording, 0.999), 1.0f));
+        expect ("pulseOthers",  padPulseAlpha (SlotVisualState::empty,    0.5) == 0.0f
+                             && padPulseAlpha (SlotVisualState::hasClip,  0.5) == 0.0f
+                             && padPulseAlpha (SlotVisualState::stopping, 0.5) == 0.0f
+                             && padPulseAlpha (SlotVisualState::recArmed, 0.5) == 0.0f);
+        expect ("pulseWrap",    near (padPulseAlpha (SlotVisualState::playing,  1.25),
+                                      padPulseAlpha (SlotVisualState::playing,  0.25))
+                             && near (padPulseAlpha (SlotVisualState::playing, -0.25),
+                                      padPulseAlpha (SlotVisualState::playing,  0.75)));
+    }
+
+    const bool pass = failures == 0;
+
+    report << "checksFailed=" << failures << juce::newLine
+           << "result="       << (pass ? "PASS" : "FAIL") << juce::newLine
+           << "logFile="      << forge::log::getLogFile().getFullPathName() << juce::newLine;
+
+    const auto reportFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getChildFile ("forge_phase0_selftest.log");
+    if (! reportFile.replaceWithText (report))
+        FORGE_LOG_ERROR ("Failed to write lcd selftest report to: " + reportFile.getFullPathName());
+
+    FORGE_LOG_INFO ("LCD selftest " + juce::String (pass ? "PASS" : "FAIL")
+                    + (pass ? juce::String() : " — failing: " + failed.joinIntoString (", "))
+                    + " — report: " + reportFile.getFullPathName());
+}
+
+//==============================================================================
+// --selftest-menu: prove the menu-bar model is complete and safe. A PURE model gate — no engine,
+// edit, device, or window. The model is first walked and dispatched BARE (every std::function
+// unset: must no-op, never crash), then flag-capturing callbacks and tick queries are wired and
+// asserted. Known name/shortcut pairs are pinned (labels are display-only; keyPressed owns the
+// keys) so a shortcut rebind that forgets the menu table fails loudly here.
+static void runMenuSelfTest()
+{
+    ForgeMenuModel model;   // deliberately UNWIRED first
+
+    // Null-safety leg: dispatch through the bare model — silent no-op or the gate crashes.
+    model.menuItemSelected (ForgeMenuModel::cmdSave,         (int) ForgeMenuModel::menuFile);
+    model.menuItemSelected (ForgeMenuModel::cmdCountIn2Bars, (int) ForgeMenuModel::menuTransport);
+
+    // Shape leg: 5 named menus, expected item counts (getNumItems() excludes separators; the
+    // Count-In submenu counts as ONE item of the Transport menu).
+    auto names = model.getMenuBarNames();
+    const bool namesPass = names.size() == (int) ForgeMenuModel::numMenus
+                           && names[(int) ForgeMenuModel::menuFile]      == "File"
+                           && names[(int) ForgeMenuModel::menuTransport] == "Transport";
+
+    const int expectedCounts[] = { 9, 1, 5, 6, 1 };   // File, Edit, View, Transport, Help
+    bool countsPass = names.size() == (int) (sizeof (expectedCounts) / sizeof (expectedCounts[0]));
+    for (int m = 0; countsPass && m < names.size(); ++m)
+        countsPass = model.getMenuForIndex (m, names[m]).getNumItems() == expectedCounts[m];
+
+    // Id + shortcut leg: every real item has a non-zero id (0 = dismissed-without-selection;
+    // submenu parents legitimately carry 0), and known name/shortcut pairs hold.
+    // NOTE: MenuItemIterator stores a POINTER to the menu — the menu must be a named local,
+    // never a temporary, or the iterator dangles.
+    bool idsPass = true;
+    juce::String saveShortcut, openShortcut;
+
+    for (int m = 0; m < names.size(); ++m)
+    {
+        auto menu = model.getMenuForIndex (m, names[m]);
+
+        for (juce::PopupMenu::MenuItemIterator it (menu, true); it.next();)
+        {
+            auto& item = it.getItem();
+
+            if (! item.isSeparator && item.subMenu == nullptr && item.itemID == 0)
+                idsPass = false;
+
+            if (item.text == "Save")    saveShortcut = item.shortcutKeyDescription;
+            if (item.text == "Open...") openShortcut = item.shortcutKeyDescription;
+        }
+    }
+
+    const bool shortcutsPass = saveShortcut == "Ctrl+S" && openShortcut == "Ctrl+O";
+
+    // Dispatch leg: wire two flag-capturing callbacks and invoke them via menuItemSelected.
+    bool saveFired  = false;
+    int  viewModeArg = -1;
+    model.callbacks.onSave     = [&saveFired]           { saveFired = true; };
+    model.callbacks.onViewMode = [&viewModeArg] (int m) { viewModeArg = m; };
+    model.menuItemSelected (ForgeMenuModel::cmdSave,        (int) ForgeMenuModel::menuFile);
+    model.menuItemSelected (ForgeMenuModel::cmdViewArrange, (int) ForgeMenuModel::menuView);
+    const bool dispatchPass = saveFired && viewModeArg == 1;
+
+    // Tick leg: wire queries, rebuild (menus are built fresh on every getMenuForIndex call),
+    // and check ticks follow the queries; an UNSET query (metronome) must read unticked.
+    model.callbacks.queryViewMode       = [] { return 1; };      // Arrange is current
+    model.callbacks.queryBrowserVisible = [] { return true; };
+    model.callbacks.queryCountInBars    = [] { return 2; };
+
+    bool arrangeTicked = false, sessionTicked = false, browserTicked = false;
+    {
+        auto view = model.getMenuForIndex ((int) ForgeMenuModel::menuView, "View");
+        for (juce::PopupMenu::MenuItemIterator it (view, true); it.next();)
+        {
+            auto& item = it.getItem();
+            if (item.text == "Arrange")         arrangeTicked = item.isTicked;
+            if (item.text == "Session")         sessionTicked = item.isTicked;
+            if (item.text == "Browser Sidebar") browserTicked = item.isTicked;
+        }
+    }
+
+    bool twoBarsTicked = false, oneBarTicked = false, metronomeTicked = false;
+    {
+        auto transportMenu = model.getMenuForIndex ((int) ForgeMenuModel::menuTransport, "Transport");
+        for (juce::PopupMenu::MenuItemIterator it (transportMenu, true); it.next();)
+        {
+            auto& item = it.getItem();
+            if (item.text == "2 bars")          twoBarsTicked   = item.isTicked;
+            if (item.text == "1 bar")           oneBarTicked    = item.isTicked;
+            if (item.text == "Metronome Click") metronomeTicked = item.isTicked;   // query unset -> unticked
+        }
+    }
+
+    const bool ticksPass = arrangeTicked && ! sessionTicked && browserTicked
+                           && twoBarsTicked && ! oneBarTicked && ! metronomeTicked;
+
+    const bool pass = namesPass && countsPass && idsPass && shortcutsPass && dispatchPass && ticksPass;
+
+    juce::String report;
+    report << "mode=menu" << juce::newLine
+           << "menus="        << names.size() << juce::newLine
+           << "names="        << (namesPass     ? "PASS" : "FAIL") << juce::newLine
+           << "itemCounts="   << (countsPass    ? "PASS" : "FAIL") << juce::newLine
+           << "itemIds="      << (idsPass       ? "PASS" : "FAIL") << juce::newLine
+           << "saveShortcut=" << saveShortcut << juce::newLine
+           << "shortcuts="    << (shortcutsPass ? "PASS" : "FAIL") << juce::newLine
+           << "dispatch="     << (dispatchPass  ? "PASS" : "FAIL") << juce::newLine
+           << "ticks="        << (ticksPass     ? "PASS" : "FAIL") << juce::newLine
+           << "result="       << (pass          ? "PASS" : "FAIL") << juce::newLine
+           << "logFile="      << forge::log::getLogFile().getFullPathName() << juce::newLine;
+
+    const auto reportFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getChildFile ("forge_phase0_selftest.log");
+    if (! reportFile.replaceWithText (report))
+        FORGE_LOG_ERROR ("Failed to write menu selftest report to: " + reportFile.getFullPathName());
+
+    FORGE_LOG_INFO ("Menu selftest " + juce::String (pass ? "PASS" : "FAIL")
+                    + " — report: " + reportFile.getFullPathName());
+}
+
+//==============================================================================
 class ForgeApplication : public JUCEApplication
 {
 public:
@@ -3071,6 +3650,9 @@ public:
                             : commandLine.contains ("--selftest-midi")           ? "selftest-midi"
                             : commandLine.contains ("--selftest-controlsurface") ? "selftest-controlsurface" // before bare --selftest
                             : commandLine.contains ("--selftest-lufs")           ? "selftest-lufs"           // before bare --selftest
+                            : commandLine.contains ("--selftest-lcd")            ? "selftest-lcd"            // before bare --selftest
+                            : commandLine.contains ("--selftest-menu")           ? "selftest-menu"           // before bare --selftest
+                            : commandLine.contains ("--selftest-tray")           ? "selftest-tray"           // before bare --selftest
                             : commandLine.contains ("--selftest-automation")     ? "selftest-automation"     // before bare --selftest
                             : commandLine.contains ("--selftest-sync")           ? "selftest-sync"           // before bare --selftest
                             : commandLine.contains ("--selftest-livesync")       ? "selftest-livesync"       // before bare --selftest
@@ -3088,6 +3670,25 @@ public:
             return;
         }
 
+        // --selftest-lcd is a PURE model gate (no engine / edit / device) — asserts the W04a LCD
+        // display model's acceptance table and the pad pulse curve, then quits before the window
+        // is built, exactly like --selftest-lufs.
+        if (commandLine.contains ("--selftest-lcd"))
+        {
+            runLcdSelfTest();
+            quit();
+            return;
+        }
+
+        // --selftest-menu is likewise PURE: it walks the ForgeMenuModel command table with
+        // flag-capturing callbacks and quits before any window exists.
+        if (commandLine.contains ("--selftest-menu"))
+        {
+            runMenuSelfTest();
+            quit();
+            return;
+        }
+
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         const auto mode = commandLine.contains ("--screenshot")              ? SelfTest::screenshot
@@ -3100,6 +3701,7 @@ public:
                         : commandLine.contains ("--selftest-automation")     ? SelfTest::automation     // before bare --selftest
                         : commandLine.contains ("--selftest-sync")           ? SelfTest::sync           // before bare --selftest
                         : commandLine.contains ("--selftest-livesync")       ? SelfTest::livesync       // before bare --selftest
+                        : commandLine.contains ("--selftest-tray")           ? SelfTest::tray           // before bare --selftest
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
@@ -3135,10 +3737,25 @@ private:
         {
             setUsingNativeTitleBar (true);
             setContentOwned (c, true);
+
+            // Traditional top menu bar (W04a). setMenuBar creates the MenuBarComponent and
+            // reserves ~24 px above the content automatically; with the native title bar it sits
+            // at the top of the client area. The model is owned by the content component — set
+            // AFTER setContentOwned, cleared in the destructor BEFORE the content dies.
+            setMenuBar (&static_cast<MainComponent*> (c)->getMenuModel());
+
             setResizable (true, false);
-            setResizeLimits (760, 480, 10000, 10000);
+            setResizeLimits (760, 504, 10000, 10000);   // +24 for the menu bar so the shell keeps its floor
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+        }
+
+        ~MainWindow() override
+        {
+            // Detach the bar from the model before ResizableWindow destroys the content that owns
+            // it. ~DocumentWindow already does this; being explicit keeps the discipline visible
+            // if window teardown is ever restructured (setContentNonOwned, early content release).
+            setMenuBar (nullptr);
         }
 
         void closeButtonPressed() override { app.systemRequestedQuit(); }

@@ -26,7 +26,15 @@ public:
         recordRed = 0xffe24b4a,   // reserved: active recording / clipping
 
         automationBg    = 0xff202224,   // automation sub-lane body (a step darker than the clip lanes)
-        automationCurve = 0xff3fa7c9    // automation curve + point handles (cool teal, reads against the amber accent)
+        automationCurve = 0xff3fa7c9,   // automation curve + point handles (cool teal, reads against the amber accent)
+
+        // Semantic accent vocabulary (W04, INTERFACE.md §1): one colour = one meaning, everywhere.
+        // amber `accent` = interactive/selected · `recordRed` = recording/clipping · these two complete it:
+        playGreen  = 0xff5fbf6a,        // "sound is happening / will happen here": playing pads + transport play
+        playGreenDim = 0xff35703c,      // the queued/dimmed member of the play family (queued pads, pending launch)
+        timeTempo  = 0xff56b6c2,        // the transport-clock family: LCD text, tempo/beat indicators, count-in digits
+        lcdBg      = 0xff15191c,        // the LCD's inset screen face (a step darker than the shell, cool-tinted)
+        lcdFrame   = 0xff0d1012         // the LCD's recessed bezel line
     };
 
     ForgeLookAndFeel()

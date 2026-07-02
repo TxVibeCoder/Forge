@@ -1060,20 +1060,42 @@ void ArrangeView::refreshArmStates()
         lane->refreshControlStates();
 }
 
+void ArrangeView::setAutomationLaneExpanded (int trackIndex, bool shouldShow)
+{
+    if (edit == nullptr)
+        return;
+
+    const auto tracks = te::getAudioTracks (*edit);
+    if (! juce::isPositiveAndBelow (trackIndex, tracks.size()))
+        return;
+
+    // Same per-session view state the header A button flips; rebuild() recreates the lane stack
+    // with the new visibility (this is a harness/demo seam, not a per-tick path — rebuild is fine).
+    autoLaneStates[tracks[trackIndex]->itemID].expanded = shouldShow;
+    rebuild();
+}
+
 //==============================================================================
 void ArrangeView::selectClip (ClipComponent* cc)
 {
     selectedClip = (cc != nullptr ? &cc->getClip() : nullptr);
-    selectedTrack = nullptr;
+
+    // Clip selection FOLLOWS TO ITS TRACK (QC + the GarageBand pattern the channel tray cites):
+    // clicking a clip means working on that track, so the lane highlight and the tray both track
+    // the clip's owner instead of silently keeping a previously selected track bound.
+    selectedTrack = (selectedClip != nullptr ? selectedClip->getTrack() : nullptr);
 
     for (auto* lane : lanes)
     {
         lane->setSelectedClip (selectedClip);
-        lane->setTrackSelected (false);
+        lane->setTrackSelected (selectedTrack != nullptr && &lane->getTrack() == selectedTrack);
     }
 
     if (onClipSelected != nullptr)
         onClipSelected (selectedClip);
+
+    if (onTrackSelected != nullptr)
+        onTrackSelected (selectedTrack);
 }
 
 void ArrangeView::selectTrack (TrackLaneComponent* lane)
@@ -1104,6 +1126,11 @@ void ArrangeView::clearSelection()
 
     if (onClipSelected != nullptr)
         onClipSelected (nullptr);
+
+    // Deselection must NOTIFY (QC: the tray stayed bound to a deselected track because this
+    // path never fired) — the shell's null handling empties the tray.
+    if (onTrackSelected != nullptr)
+        onTrackSelected (nullptr);
 }
 
 void ArrangeView::notifyEditMutated()

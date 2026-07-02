@@ -1,8 +1,10 @@
 /*
     TransportBar — play / pause / stop / record / loop / metronome buttons plus a count-in
-    selector and a timecode + bars|beats readout. Observes the TransportControl
-    (ChangeBroadcaster) for button state and polls getPosition() on a 25Hz timer for the
-    readout. The record button defers to onRecord so the owner can wire arm + record/stop.
+    selector. Observes the TransportControl (ChangeBroadcaster) for button state. The record
+    button defers to onRecord so the owner can wire arm + record/stop.
+
+    The old timecode + bars|beats readout label (and the 25 Hz timer that fed it) is gone —
+    the LcdDisplay in the ControlBar supersedes it (W04a).
 
     The metronome toggle and count-in selector expose std::function seams (same shape as
     onRecord) so the shell can route them through the Metronome engine seam without this view
@@ -18,8 +20,7 @@
 namespace te = tracktion;
 
 class TransportBar : public juce::Component,
-                     private juce::ChangeListener,
-                     private juce::Timer
+                     private juce::ChangeListener
 {
 public:
     TransportBar();
@@ -54,13 +55,15 @@ public:
         (MidiClockSync::isSendingClockAny). If unset, the toggle reflects its own last state. */
     std::function<bool()> queryMidiClockEnabled;
 
-    bool readoutIsNonEmpty() const { return readout.getText().isNotEmpty(); }
+    /** The width the bar's fixed controls occupy (6 buttons + gaps + the count-in selector +
+        the 4 px side insets). Now that the bar hosts no stretching readout, the ControlBar
+        sizes it to this and gives the leftover span to the LCD. */
+    static constexpr int preferredWidth = 8 + 6 * (64 + 4) + 120;   // = 536
 
     void resized() override;
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void timerCallback() override;
     void updateButtons();
     void syncMetronomeControls();   // reflect engine truth into the click / clock toggles + count-in box
 
@@ -74,7 +77,6 @@ private:
                      metronomeButton { "Click" },
                      midiClockButton { "Clock" };
     juce::ComboBox   countInBox;
-    juce::Label readout;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TransportBar)
 };

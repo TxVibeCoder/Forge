@@ -12,7 +12,9 @@
 
     Receives scene names as PLAIN VALUES via setScenes() during a rebuild — it never caches a
     te::Scene* (R1). Per-row visual state (idle / queued / playing) is pushed in by the owner via
-    setSceneState() and rendered with the shared ForgeLookAndFeel accent, matching the slot pads.
+    setSceneState() and rendered with the shared ForgeLookAndFeel play-family colours (playGreen /
+    playGreenDim, W04a semantic accents), matching the slot pads. Amber stays on the interactive
+    MASTER chrome only.
 
     All engine ops route up through null-guarded std::function seams (onSceneLaunched,
     onSceneStopped, onStopAll); this component NEVER touches the te:: model directly.
@@ -30,8 +32,9 @@ namespace te = tracktion;
 
 //==============================================================================
 /** Per-row launch state for a scene row, mirroring the slot pad vocabulary (§d).
-    Drives the row's accent treatment: idle = quiet, queued = amber outline (about to fire),
-    playing = filled amber. Pushed in by the owner; the row never reads the engine itself. */
+    Drives the row's play-family treatment (W04a): idle = quiet, queued = playGreenDim outline
+    (about to fire), playing = filled playGreen. Pushed in by the owner; the row never reads the
+    engine itself. */
 enum class SceneLaunchState
 {
     idle,       // no clips queued / playing for this scene

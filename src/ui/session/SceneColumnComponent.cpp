@@ -10,10 +10,11 @@ using namespace juce;
     right-click (or the playing/queued affordance) fires onStopped(); both are wired up to the
     column's seams by SceneColumnComponent.
 
-    State render (mirrors the slot pad vocabulary, §d, named ForgeLookAndFeel colours only):
+    State render (mirrors the slot pad vocabulary, §d + the W04a semantic accents, named
+    ForgeLookAndFeel colours only — playing/queued speak the play-green family, never amber):
       - idle    → panelBg row, textPrim name, neutral ▶
-      - queued  → 2px accent outline (about to fire), amber ▶
-      - playing → accent-tinted fill + 2px accent outline, onAccent name, filled amber ▶
+      - queued  → 2px playGreenDim outline (about to fire), playGreenDim ▶
+      - playing → playGreen-tinted fill + 2px playGreen outline, dark name, playGreen ▶
 */
 class SceneColumnComponent::SceneRow : public Component
 {
@@ -57,30 +58,34 @@ public:
     {
         auto b = getLocalBounds().toFloat().reduced ((float) SessionLayout::slotPad);
 
-        // Base fill — panel row, tinted amber when this scene is the active (playing) row.
+        // Base fill — panel row, tinted playGreen when this scene is the active (playing) row
+        // (W04a: "sound is happening here" is green, never amber).
         const bool playing = (state == SceneLaunchState::playing);
         g.setColour (Colour (ForgeLookAndFeel::panelBg));
         g.fillRoundedRectangle (b, 3.0f);
 
         if (playing)
         {
-            g.setColour (Colour (ForgeLookAndFeel::accent).withAlpha (0.55f));
+            g.setColour (Colour (ForgeLookAndFeel::playGreen).withAlpha (0.55f));
             g.fillRoundedRectangle (b, 3.0f);
         }
 
-        // Border: black hairline normally; a 2px accent outline when queued or playing — the same
-        // "about-to-fire / firing" treatment the slot pads use, drawn last (§d).
+        // Border: black hairline normally; a 2px play-family outline when queued or playing — the
+        // same "about-to-fire / firing" treatment the slot pads use, drawn last (§d).
         g.setColour (Colours::black.withAlpha (0.6f));
         g.drawRoundedRectangle (b, 3.0f, 1.0f);
 
-        // Scene name, right of the ▶ button. onAccent on the amber playing fill, textPrim otherwise.
-        g.setColour (Colour (playing ? ForgeLookAndFeel::onAccent : ForgeLookAndFeel::textPrim));
+        // Scene name, right of the ▶ button. Dark ink on the green playing fill (onAccent means
+        // text-on-AMBER, so it isn't reused here), textPrim otherwise.
+        g.setColour (playing ? Colours::black.withAlpha (0.85f)
+                             : Colour (ForgeLookAndFeel::textPrim));
         g.setFont (Font (FontOptions (13.0f)));
         g.drawText (name, nameBounds, Justification::centredLeft, true);
 
         if (state == SceneLaunchState::queued || playing)
         {
-            g.setColour (Colour (ForgeLookAndFeel::accent));
+            g.setColour (Colour (playing ? ForgeLookAndFeel::playGreen
+                                         : ForgeLookAndFeel::playGreenDim));
             g.drawRoundedRectangle (b, 3.0f, 2.0f);
         }
     }
@@ -98,10 +103,12 @@ public:
 private:
     void refreshLaunchLook()
     {
-        // ▶ glyph: amber when queued/playing (the row is hot), primary text when idle.
-        const bool hot = (state != SceneLaunchState::idle);
+        // ▶ glyph: play-family when the row is hot (playGreen firing, playGreenDim about to fire),
+        // primary text when idle. Amber no longer marks launch state (W04a).
         launchButton.setColour (TextButton::textColourOffId,
-                                Colour (hot ? ForgeLookAndFeel::accent : ForgeLookAndFeel::textPrim));
+                                Colour (state == SceneLaunchState::playing ? ForgeLookAndFeel::playGreen
+                                      : state == SceneLaunchState::queued  ? ForgeLookAndFeel::playGreenDim
+                                                                           : ForgeLookAndFeel::textPrim));
     }
 
     static constexpr int launchBtnW = 26;   // ▶ button width (sheet 00: 26×22)

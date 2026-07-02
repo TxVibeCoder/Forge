@@ -521,6 +521,8 @@ void SessionView::refreshSlotStates()
 // 25 Hz poll (message thread, §e). For each visible pad re-resolve a LIVE slot FRESH via the const
 // getClipSlot (R1/R2), compute its state (computeSlotState gates the spin-locked queue read), and
 // push only when changed. Scene-row state is derived from the column states of that row.
+// W04a: one fractional-beat read per tick additionally drives the playing/queued beat pulse — only
+// those animated pads repaint per tick; everything else keeps the repaint-on-change behaviour.
 
 void SessionView::timerCallback()
 {
@@ -548,6 +550,25 @@ void SessionView::timerCallback()
 
     auto* transport = session.getTransport();
     const bool transportRunning = transport != nullptr && transport->isPlaying();
+
+    // W04a sequence lighting: ONE fractional-beat read per tick, derived from the transport (never
+    // a free-running animation). toBarsAndBeats is allocation-free on the message thread — a
+    // CachedValue position read plus a backwards scan of the prebuilt tempo Section vector — so it
+    // fits the existing 25 Hz poll budget. Phase is ABSENT while stopped: no animation.
+    bool   havePhase    = false;
+    double beatPhase    = 0.0;   // [0,1) within the current beat — drives the playing pulse
+    double twoBeatPhase = 0.0;   // [0,1) within a TWO-beat cycle — drives the queued half-rate pulse
+
+    if (transportRunning)
+    {
+        const auto bb = edit->tempoSequence.toBarsAndBeats (transport->getPosition());
+        beatPhase     = bb.getFractionalBeats().inBeats();
+        // Half-rate cycle from the beat-in-bar parity (getWholeBeats is >= 0 — beat-in-bar stays
+        // positive even at negative pre-roll time). Parity resets at odd-numerator bar boundaries;
+        // acceptable — the pulse stays beat-locked either way.
+        twoBeatPhase  = ((bb.getWholeBeats() % 2) + beatPhase) * 0.5;
+        havePhase     = true;
+    }
 
     const int nTracks = columns.size();
 
@@ -607,6 +628,16 @@ void SessionView::timerCallback()
 
                 columns[t]->setSlotVisual (s, state, label);
             }
+
+            // Beat pulse (W04a): pushed per tick ONLY for the animated states (playing / queued)
+            // while a phase is flowing; every other pad is parked at the no-pulse sentinel — a
+            // value that doesn't change, so the pad's change gate keeps it repaint-free (§e).
+            // Pure maths on the already-computed state; no logging on this poll path.
+            const float pulse = ! havePhase                          ? -1.0f
+                              : state == SlotVisualState::playing    ? padPulseAlpha (state, beatPhase)
+                              : state == SlotVisualState::queued     ? padPulseAlpha (state, twoBeatPhase)
+                                                                     : -1.0f;
+            columns[t]->setSlotPulse (s, pulse);
         }
 
         // Derive the scene row state from its slots: playing dominates queued dominates idle.

@@ -1,7 +1,16 @@
 /*
-    ControlBar — the single persistent top strip (Ableton-style). Merges the old title strip,
-    toolbar, and transport into one bar: left = region toggle + file commands; center = the
-    embedded TransportBar; right = the Arrange|Mix view switch + the Detail-drawer toggle.
+    ControlBar — the single persistent top strip (Ableton-style): left = the Browser region
+    toggle; center = the embedded TransportBar plus the transport LCD (W04a — it supersedes
+    the bar's old timecode readout); right = the Session|Arrange|Mix view switch + the
+    Detail-drawer toggle.
+
+    The file-command buttons (New/Open/Save/… /Plugins/Audio) moved to the W04a menu bar —
+    the charter's division of labor: the menu is the discoverable command index, the bar
+    keeps only the PERFORMANCE controls. Their std::function callbacks stay here (the shell
+    wires them once; ForgeMenuModel copies them), so the commands themselves are unchanged.
+    Removing ~500 px of buttons is also what lets the transport strip and the LCD both fit
+    at the default window width (QC blocker: the LCD's reserved floor was starving the
+    transport buttons).
 
     A dumb view: it owns no project logic, only forwards intent via std::function callbacks.
 */
@@ -9,6 +18,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "ui/transport/LcdDisplay.h"
 #include "ui/transport/TransportBar.h"
 
 namespace te = tracktion;
@@ -33,15 +43,15 @@ public:
     TransportBar&       getTransportBar()       { return transportBar; }
     const TransportBar& getTransportBar() const { return transportBar; }
 
+    LcdDisplay&       getLcdDisplay()       { return lcd; }
+    const LcdDisplay& getLcdDisplay() const { return lcd; }
+
 private:
     void updateViewButtons();
-    void showExportMenu();   // Export button -> popup: Mixdown (whole edit) / Stems (per track)
 
     juce::TextButton browserBtn { "Browser" };
-    juce::TextButton newBtn { "New" }, openBtn { "Open" }, saveBtn { "Save" },
-                     saveAsBtn { "Save As" }, importBtn { "Import" }, exportBtn { "Export" },
-                     scanBtn { "Plugins" }, audioBtn { "Audio" };
     TransportBar transportBar;
+    LcdDisplay lcd;
     juce::TextButton sessionBtn { "Session" }, arrangeBtn { "Arrange" }, mixBtn { "Mix" };
     juce::TextButton drawerBtn { "Editor" };
 

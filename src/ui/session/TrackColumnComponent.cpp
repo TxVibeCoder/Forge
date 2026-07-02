@@ -106,6 +106,12 @@ void TrackColumnComponent::setSlotVisual (int sceneIndex, SlotVisualState state,
         pad->setVisualState (state, std::move (label));
 }
 
+void TrackColumnComponent::setSlotPulse (int sceneIndex, float pulseAlpha)
+{
+    if (auto* pad = slots[sceneIndex])
+        pad->setPulseAlpha (pulseAlpha);
+}
+
 void TrackColumnComponent::setSlotSelected (int sceneIndex, bool shouldBeSelected)
 {
     if (auto* pad = slots[sceneIndex])
