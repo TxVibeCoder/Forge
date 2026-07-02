@@ -282,6 +282,22 @@ bind track 0, write volume −9 dB + mute engine-side, force one `refreshNow()` 
 - the tray reports bound; the fader reads −9 dB ± 0.15 and mute reads true after one sync tick;
 - `setTrack (nullptr)` lands in the empty state ("Select a track").
 
+## `Forge --selftest-popout` (tear-off panel round-trip)
+
+The acceptance gate for **W04b — tear-off panels** (design:
+[../docs/devlog/wave-04b-ux.md](../docs/devlog/wave-04b-ux.md)). Turn 1: both views are docked
+shell children → tear each off into a real visible `PopoutWindow` (the content becomes a direct
+child of the window), force one live mixer sync tick while popped out, then drive the REAL close
+path (`closeButtonPressed` → restore, which defers each window's destruction). Turn 2, after the
+deferred resets ran:
+
+### PASS criteria (all must hold)
+- parentage out (each view's parent == its popout) and back (parent == the shell, windows gone);
+- **noGhostOverlay** — BEFORE any rescue relayout, under the Session+Detail default both restored
+  views are already hidden and the piano-roll holds no keyboard focus (the QC blocker: a restored
+  view overlaying the shell at stale popout bounds);
+- after driving Mixer view / drawer+PianoRoll state, both views read visible in their home slots.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

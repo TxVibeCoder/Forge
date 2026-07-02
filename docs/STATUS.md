@@ -1,17 +1,16 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-01 (this session: **W04a — the UX wave, part 1: transport LCD ·
-channel tray · menu bar · sequence lighting** — the first slice of the INTERFACE.md §4 UX charter under
-Fable's design authority, on baseline `9a28845`, proven by THREE new pure/headless gates on a
-**fourteen-gate floor**; a 22-agent adversarial QC confirmed 10 distinct defects (1 blocker — the LCD's
-reserved width starving the transport buttons; fixed by moving the file-command buttons into the new menu bar
-and inverting the centre layout priority) — all fixed. Clean MSVC Debug build (0 warnings); **all FOURTEEN
-selftests PASS**; `--screenshot` renders an 8-state matrix. Full record →
-[devlog/wave-04a-ux.md](devlog/wave-04a-ux.md). Prior sessions this line of work: **W03 — automation lanes ·
-MIDI-clock out · async LUFS · live refresh** (`ffa494d`, pushed; →
-[devlog/wave-03-features.md](devlog/wave-03-features.md)); **W02** (`bb9ef5e`; →
-[devlog/wave-02-features.md](devlog/wave-02-features.md)); **Wave 01** (`e3b8c7c`); **W7** (`160f6cc`);
-**scroll + logging** (`8d15234`).)*
+*Living status document. Last updated 2026-07-02 (this session: **W04b — the UX wave, part 2: tear-off
+panels · animated slide-outs · timecode LCD zone · tray meter · accent sweep** — the W04 charter's remainder
+on baseline `ecfd5e1`, proven by `--selftest-popout` on a **fifteen-gate floor**; adversarial QC confirmed
+9 distinct defects (1 blocker — a restored popout view overlaying the shell at stale bounds; the gate was
+hardened with a no-ghost-overlay assert) — all fixed. Clean MSVC Debug build (0 warnings); **all FIFTEEN
+selftests PASS**; `--screenshot` renders a 9-state matrix incl. the window-level `shell_window` (the first
+frame showing the menu bar + four-zone LCD + shell together). Full record →
+[devlog/wave-04b-ux.md](devlog/wave-04b-ux.md). Earlier same continuous effort: **W04a** (`41e3139`; →
+[devlog/wave-04a-ux.md](devlog/wave-04a-ux.md)); **W03** (`ffa494d`; →
+[devlog/wave-03-features.md](devlog/wave-03-features.md)); **W02** (`bb9ef5e`); **Wave 01** (`e3b8c7c`);
+**W7** (`160f6cc`); **scroll + logging** (`8d15234`).)*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
@@ -407,6 +406,26 @@ the orchestrator) → 4 file-disjoint Fable agents → shell integration → 14-
   `lcd_countin` via the LCD's demo seam). The menu bar renders as window chrome above the shell content, so
   it is NOT in the component snapshots — a window-level capture is a W04b harness item.
 
+### W04b — the UX wave, part 2: tear-offs · slide-outs · timecode · tray meter — SHIPPED  (this session; baseline `ecfd5e1`)
+The W04 charter's remainder. Process: 2 spikes (tear-off mechanics skeptic-corrected pre-build) → 4
+file-disjoint agents + orchestrator shell work → integration → 15-gate floor → 18-agent QC (9 confirmed
+incl. 1 blocker, all fixed). Full record: [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
+- **Tear-off panels** (`ui/popout/PopoutWindow.{h,cpp}`): View ▸ Pop Out Mixer / Piano Roll float the live
+  shell members into desktop windows (reparented, never recreated; double-delete structurally impossible via
+  `setContentNonOwned`; deferred close; normal z-order; keys bubble to the shell; Mix-while-out fronts the
+  window; menu items tick while out; a project swap leaves tear-offs alone). Gate: **`--selftest-popout`**
+  with the no-ghost-overlay hardening.
+- **Animated slide-outs**: B/E ease ~160 ms via a dedicated scalar-lerp timer through `resized()`
+  (`ComponentAnimator` rejected — it fights the layout chain); `revealDrawer()` routes programmatic opens;
+  resizers inert mid-slide; persisted sizes untouched.
+- **The timecode LCD zone**: absolute time back as the width-gated 4th zone (sheds first; clamps negative
+  pre-roll to 0:00.000); default launch width now 1200 so all four zones show from first run.
+- **Shared PeakMeter** (`ui/common/PeakMeter.h`, extracted verbatim) + a **tray meter** (Edit-owned track
+  measurer; attachment asserted by the tray gate).
+- **Session tray-follow** (`SessionView::onTrackFocusChanged`, index-based) + a view-switch seed; **the
+  Arrange playhead → timeTempo** (brightened, dark-edged against the automation teal); the **window-level
+  screenshot** (`shell_window`).
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -553,7 +572,12 @@ tests/  SELFTEST.md
   empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
   (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
   remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
-- [x] **W04a — the UX wave, part 1 — DONE** (this session). Transport LCD (`--selftest-lcd`), channel tray
+- [x] **W04b — the UX wave, part 2 — DONE** (this session). Tear-off mixer/piano-roll windows
+  (`--selftest-popout`), animated B/E slide-outs, the timecode LCD zone, the shared PeakMeter + tray meter,
+  Session tray-follow, the playhead accent move. **Remaining (W04c/later):** an empty-centre hint, popout
+  position persistence, scene layout polish, further strip-widget extraction, a piano-roll playhead, a
+  window-SIZE state matrix. Details: [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md).
+- [x] **W04a — the UX wave, part 1 — DONE** (prior wave, same session). Transport LCD (`--selftest-lcd`), channel tray
   (`--selftest-tray`), menu bar (`--selftest-menu`, incl. the dead-Rec-button fix + the control-bar
   de-clutter), Session sequence lighting + the semantic accent switch (amber = selection only), persisted
   section sizes, the 8-state screenshot matrix. **Remaining (W04b):** popouts/tear-offs, animated slide-outs,
