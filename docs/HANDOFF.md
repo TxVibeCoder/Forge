@@ -50,47 +50,58 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What this session did — W05: global Undo/Redo + the polish sweep
+## What this session did — W06: the hands-on wave, part 1 (control bar & HUD)
 
-Landed in **`5e5dcf2` (code)** + a docs commit on the `7034955` baseline. Process: 2 source-verify
-dossiers (undo mechanics · polish inventory, both with cited line evidence) → 2 parallel file-disjoint
-agents (scene polish · strip widgets) + orchestrator-serial main.cpp work (the whole undo track + the two
-main.cpp polish items) → integration → **16-gate floor** → adversarial QC (**LIMIT-INTERRUPTED** — the
-session's agent limit hit mid-wave; 2 findings recovered from the transcript and fixed by hand; two
-dimensions owed). Full record: [devlog/wave-05-undo.md](devlog/wave-05-undo.md).
+A long, multi-phase session. The arc:
 
-- **Global Undo/Redo** (`main.cpp` + `ui/menu/ForgeMenuModel.{h,cpp}`): **Edit ▸ Undo / Redo** with live
-  enablement (a new `enabledWhen` command-table column over `canUndo`/`canRedo`) + Ctrl+Z / Ctrl+Shift+Z /
-  Ctrl+Y. A thin shell over the Edit's own `UndoManager`:
-  - the five `onEditMutated` hooks (arrange/detail/piano-roll/session/markers) seal a transaction eagerly
-    (`beginNewTransaction`) on top of the engine's 350 ms auto-seal → per-gesture undo units;
-  - **`Edit::undo()`/`redo()`**, never the raw UM (keeps the engine's selection refresh);
-  - **undo is a no-op with a status message WHILE RECORDING** — record-arm targets sit ON the undo stack
-    and `removeTarget` fails while recording, so an undo mid-take would silently retarget the capture;
-  - undo fires no `onEditMutated` and no view listens to the state tree, so the shell **saves first**
-    (disk must never stay newer than memory) then SYNCHRONOUSLY fans the refresh out: arrange rebuild,
-    session rebuild, mixer structural refresh, tray, markers — no timer can interleave a stale deref;
-  - a **detached-clip guard**: a redo-of-delete leaves the piano-roll holding a live but PARENTLESS
-    `MidiClip::Ptr` (edits would write to a dead state tree); the fan-out closes the roll back to Detail;
-  - `ensureScenes` stays deliberately OFF the stack (inhibitor + `clearUndoHistory` in `ProjectSession`).
-  - Gate: **`--selftest-undo`** — create/delete/undo/redo round-trip + a note-level leg, with
-    `canUndo`/`canRedo` transition asserts from a `clearUndoHistory` baseline.
-- **Scene-column polish** (the last W04 charter item): hover lifts rows to `raisedBg` (child-inclusive —
-  the fill holds over the ▶ button), tooltips name the hidden right-click stop (which now also works OVER
-  the button), full-width **"■ STOP ALL"**, and the queued/playing ring beat-pulses in parity with the
-  pads (change-gated + no-pulse sentinel, so static rows stay repaint-free).
-- **Strip-widget extraction** (`ui/common/StripWidgets.h`, NEW): tray↔mixer fader/knob/send styling +
-  range constants + `busLetter` once, in `forge::strip` — style-only free helpers (no `addAndMakeVisible`
-  inside), header-only (no CMake edit), zero behaviour change.
-- **The empty-centre hint** (W04b deferral): tearing the mixer off WHILE IN Mix view now paints an
-  explanation instead of a blank centre (W04b only covered selecting Mix while already torn off).
-- **Popout placement persistence** (W04b deferral): `getWindowStateAsString` per window
-  (`forgeMixerPopoutState`/`forgePianoRollPopoutState`), saved at restore-time AND shell teardown,
-  restored on tear-off. Saved while the window is still alive — restore defers destruction.
-- **QC — LIMIT-INTERRUPTED:** of three planned dimensions only **polish-regressions** ran; its 2 findings
-  were recovered from the workflow transcript, self-adjudicated, and fixed (the hint's raw em-dash through
-  `juce::String`'s ASCII-only `char*` ctor rendered mojibake; the scene-row hover fill dropped out over
-  the ▶ launch button). **undo-correctness + shell-integration NEVER RAN** — owed (see What's next).
+1. **Documentation audit** (`7f03974`): 4 read-only auditors + direct review brought README / INTERFACE /
+   ARCHITECTURE / FEATURE_CATALOG / DIRECTION current (they'd drifted — the whole W04 UX wave was still
+   marked "planned"; the counts said "five selftests"). LOGGING / mockups / all 26 devlogs verified clean.
+2. **The maintainer's first hands-on session** with the built app → **15 UI/UX notes**. Scoped by **7
+   source-verified investigation agents** (cited file:line + engine headers) into an **adversarially-
+   verified 5-wave plan** — 6 QC lenses + a completeness critic caught 3 structural blockers before any
+   code was written. **Locked decisions (load-bearing):** "+ session" means a new **scene row** (not a
+   project — File ▸ New already does that); instruments/library v1 = **self-rendered CC0 one-shots** only
+   (no third-party packs — public AGPLv3 repo); Session ↔ Arrange stay **separate** with an explicit
+   "Send to Arrangement" action *later* (never auto-mirror). Plan + decisions: memory [[forge-handson-wave-plan]].
+3. **W06 = plan Wave 1** (control bar & HUD), shipped in **`e670ab5` (code)** + docs on the `7f03974`
+   baseline. Built by **5 file-disjoint implementation agents** (each edited only its territory and
+   *proposed* the shared `main.cpp`/CMake wiring) → orchestrator consolidation (wiring + the new gate +
+   the build) → clean build (0 warnings) → **17-gate floor** → a **4-dimension adversarial QC**
+   (per-finding skeptics, default-refute) → 2 fixes. Full record: [devlog/wave-06-handson.md](devlog/wave-06-handson.md).
+4. **Waveform feature-mining backlog** (`758dbb1`): a candidate-feature list mined from the Waveform User
+   Guide (Tracktion's own DAW on the same engine) → [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md).
+   The guide PDF is copyrighted → `.gitignore`d (`*.pdf`), never committed.
+
+**Wave 1 shipped:**
+- **View buttons → top-left** (`ui/ControlBar.cpp`) and **Browser → a `juce::Path` folder icon** (the
+  first vector icon in the repo; amber-tinted when open; `ControlBar::setBrowserOpen` synced from the
+  shell at the open edge + the close-settle).
+- **Free-trigger launch** (`services/files/ProjectSession.{h,cpp}` + `ui/transport/TransportBar.{h,cpp}`):
+  a launch-quant `ComboBox` (None / … / 1 Bar / …) over the Edit-level global
+  `Edit::getLaunchQuantisation().type`. **`LaunchQType::none` = free trigger** (no bar-snap) — the engine
+  already implements the behavior; this only exposes the seam. New `launchQRoundTrip` leg in `--selftest-session`.
+- **Clickable tempo popup** (`ui/transport/LcdDisplay.{h,cpp}` + NEW `TempoPopup.{h,cpp}` + NEW `TapTempo.h`
+  + `engine/EngineHelpers.h`): the LCD's tempo zone opens a `juce::CallOutBox` (**first in the repo**) —
+  editable BPM field, ±0.1/±1.0 steppers, and **tap tempo** over a pure `TapTempo` estimator; writes route
+  through `EngineHelpers::setTempoAt` clamped [20,300]. Gate: **`--selftest-taptempo`**.
+- **File ▸ Exit** (Ctrl+Q → `systemRequestedQuit`; menu-gate File count 9 → 10) and a **cosmetic launch
+  splash** (`ui/SplashWindow.h` — honestly scoped: it can't mask the ~8 s engine ctor, and it's skipped
+  under every `--selftest-*`/`--screenshot` flag). **Clock button kept in the transport row** (the default).
+- **W06 QC (4 dims × per-finding skeptics):** 2 confirmed — the launch-quant combo collapsed to **0 px**
+  (unclickable) in the ~760–848 px window band (**fixed**: the count-in + launch-quant combos now share the
+  trailing space so neither vanishes); a stale folder-icon tint in the `arrange_tray` screenshot
+  (**fixed**). The correctness-critical dimensions — free-trigger index mapping and tempo write — verified
+  **clean**.
+
+> Prior wave (W05, `5e5dcf2`, PUSHED — same continuous session): **global Undo/Redo** (Edit ▸ Undo/Redo +
+> Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the Edit's own `UndoManager`; per-gesture transaction seals; a synchronous
+> cross-surface refresh fan-out; undo blocked while recording; a piano-roll detached-clip guard; gate
+> `--selftest-undo`), **scene-column polish**, the **tray↔mixer strip-widget extraction**
+> (`ui/common/StripWidgets.h`), the **empty-centre hint**, and **popout placement persistence**. ⚠ **W05's
+> adversarial QC was LIMIT-INTERRUPTED — its undo-correctness + shell-integration dimensions NEVER RAN and
+> are STILL OWED** (only polish-regressions ran; its 2 findings were fixed). Full record:
+> [devlog/wave-05-undo.md](devlog/wave-05-undo.md).
 
 > Prior wave (W04b, `cc27300`, PUSHED — same session): **tear-off mixer/piano-roll windows**
 > (`ui/popout/PopoutWindow.{h,cpp}`; reparented live shell members, never recreated; deferred close; keys
@@ -215,6 +226,10 @@ SIXTEEN selftests PASS:
   tooltips / full-width STOP ALL / beat-pulse parity), **the strip-widget extraction**
   (`ui/common/StripWidgets.h` — tray↔mixer styling once), **the empty-centre hint**, and **popout
   placement persistence**.
+- **W06 additions** (hands-on wave 1) — **view buttons top-left**, the **Browser folder icon** (first
+  `juce::Path` icon in the repo), a **free-trigger launch-quant selector** (`LaunchQType::none` over the
+  Edit-level global), a **clickable tempo popup** with tap-tempo (first `CallOutBox`; `EngineHelpers::setTempoAt`
+  clamps [20,300]; gate `--selftest-taptempo`), **File ▸ Exit**, and a **cosmetic launch splash**.
 
 Full feature list + roadmap in [STATUS.md](STATUS.md).
 
@@ -222,30 +237,35 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W05 (`5e5dcf2` + docs) is **committed + PUSHED to `origin/main`.** Hardware smoke tests and manual GUI
-> passes are **permanently parked** (see the standing constraints at the top); the path forward is the
-> headless-provable roadmap.
+> W06 (`e670ab5` + docs) + the Waveform backlog (`758dbb1`) are **committed + PUSHED to `origin/main`.**
+> Hardware smoke tests and manual GUI passes are **permanently parked** (standing constraints at the top);
+> the path forward is the headless-provable roadmap. **The active track is the hands-on wave plan**
+> ([[forge-handson-wave-plan]]) — Wave 1 (W06) shipped; Waves 2–5 remain.
 
-1. **⚠ FIRST: the owed W05 QC dimensions.** W05's adversarial QC was cut off by the session agent limit —
-   only polish-regressions ran (2 findings recovered + fixed). Run **undo-correctness** (transaction
-   granularity across all five mutation hooks; undo interleaved with launches/recording/project swaps;
-   the record gate; the detached-clip guard) and **shell-integration** (the refresh fan-out against every
-   surface incl. torn-off popouts; menu enablement; key routing with popout focus) as adversarial
-   dimensions with per-finding skeptics. The orchestrator's inline self-review found nothing, but that is
-   NOT adversarial verification — treat those areas as unverified until this runs.
-2. **UX leftovers (small).** A DetailView detached-clip guard (the piano-roll got one in W05; the audio
-   inspector edits a live-but-parentless clip as a safe no-op after a redo-of-delete); a piano-roll
-   playhead (a NEW feature — verified none exists); a window-SIZE dimension for the state matrix.
-3. **Deferred follow-ups (ticketed).** (a) **Ableton Link** — engine wrapper compiled out, library NOT
-   vendored; enabling = vendor `github.com/Ableton/link` + asio-standalone + an AGPLv3 license review (a
-   maintainer dependency decision). (b) **Aux-send knobs + return-strip insert rows are not live-synced**.
-   (c) **Plugin-param automation lanes** (vol/pan shipped; the seam generalizes). (d) **Audio-slot-record
-   edge-fade** remains blocked — no audio slot-record path exists. (e) The export progress panel sits at
-   ~100 % during a very long master-render loudness analysis (honest but unlabeled).
-4. **Carried-over polish** — **comping**; an optional **live short-term LUFS meter** (requires forking the
-   engine for a post-fader sample tap); macOS build (no Mac on hand).
-5. **Parked until hardware exists** — the Launchpad byte-mapping smoke test, physical-CC MIDI-learn drive,
-   and the APC40 mkII driver.
+1. **▶ NEXT: hands-on plan Wave 2 — Session grid interactions.** Delete clip · + Track · + Scene · real
+   file drag-drop (Session + Arrange). Run it the same way W06 did (file-disjoint implement agents →
+   orchestrator build + gates → adversarial QC). **Spike first on `+ Scene`**: `SessionLayout::numScenes`
+   is a compile-time `constexpr = 16` threaded through ~13 sites (incl. the 25 Hz poll's flat index math
+   `t*numScenes+s`) and `TrackColumnComponent` builds its pads once in the ctor with no grow method — so
+   `+scene` is **M**, folds INTO the `SessionView` serial spine, and reconciles a latent mismatch (the
+   engine already grows scenes past 16 via `ensureScenes(sceneIndex+1)` while the UI is fixed at 16). Full
+   ticketed detail (files, seams, gates, effort, the two later waves) is in the plan.
+2. **⚠ STILL OWED: the W05 QC dimensions.** W05's adversarial QC was limit-interrupted — **undo-correctness**
+   (transaction granularity across the 5 mutation hooks; undo interleaved with launch/record/project-swap;
+   the record gate; the detached-clip guard) and **shell-integration** (the refresh fan-out vs. every
+   surface incl. torn-off popouts; menu enablement; key routing with popout focus) **never ran**. Treat
+   those areas as unverified until an adversarial pass runs them.
+3. **Later hands-on waves.** Wave 3 = per-track mixer strips under each Session column (ChannelTray →
+   Arrange-only; keep Mix view); Wave 4 = self-rendered CC0 instruments/library + a note-writing demo
+   project (today's demo clips are EMPTY — silent); Wave 5 (deferred) = the explicit Session → Arrangement
+   "Send to" bridge (the real answer to the "Session clip doesn't appear in Arrange" note).
+4. **Candidate-feature source.** [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md) — a
+   ranked backlog mined from the Waveform guide (launcher expressiveness / follow-actions / performance
+   recording top the list, all engine-native). Feeds planning; open design calls flagged in the doc.
+5. **Deferred/parked (unchanged).** Ableton Link (vendoring decision); aux-send/return live-sync;
+   plugin-param automation lanes; comping; live short-term LUFS meter (needs an engine fork); macOS build;
+   and — parked until hardware exists — the Launchpad byte-mapping smoke test, physical-CC MIDI-learn, and
+   the APC40 mkII driver.
 
 ---
 
@@ -291,6 +311,30 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   name. Use **`--screenshot`** to *see* the UI (renders each view to `%TEMP%\forge_shot_*.png`) and a headless
   selftest hook (like `--selftest-session`) to *exercise* it. (Manual passes are off the table per the
   standing constraints — the W04 state-matrix screenshot harness is the planned substitute.)
+- **A splash can't mask Forge's startup (W06).** `te::Engine` is a `ForgeApplication` DATA MEMBER, so its
+  ctor (which enumerates audio devices, ~8 s) runs BEFORE `ForgeApplication::initialise()` — the earliest a
+  window can show. A splash added in `initialise()` is therefore cosmetic only. Anything that genuinely
+  wants to shorten perceived startup must move `te::Engine` out of member-init into a lazy path (a bring-up
+  order change). Also: gate any startup window behind `mode == SelfTest::none` so the headless floor never
+  spawns one.
+- **A crowded flexible strip starves its LAST element (W06).** `TransportBar::resized()` gave the count-in
+  combo `removeFromLeft` priority, so the new launch-quant combo (last) collapsed to 0 px across the
+  ~760–848 px window band. Fix pattern: when two flexible controls share leftover space, **split it** (each
+  keeps a floor, both grow to preferred once there's room) rather than first-come-first-served. No gate
+  caught it (harness windows are 1040/1200/1480 px) — QC did. The window minimum is 760 px.
+- **Click-through-except-a-zone for an overlay display (W06).** `LcdDisplay` must stay click-through except
+  its tempo readout: it caches the painted `tempoZoneBounds` in a member, sets
+  `setInterceptsMouseClicks(true, false)`, and overrides `hitTest` to return true ONLY inside that rect
+  (and clears the rect in the branches where the readout isn't painted, so a stale zone can't stay live).
+  `juce::CallOutBox::launchAsynchronously` (first use in the repo) hosts the popup — non-modal, self-owning.
+- **A heterogeneous braced-init-list won't deduce a common base pointer (W06).** `for (juce::Component* c :
+  { &folderIconBtn, &textBtnA, ... })` fails when the elements are different subclasses (`FolderIconButton*`
+  vs `TextButton*`) — MSVC can't deduce the `initializer_list` element type. Call `addAndMakeVisible` per
+  element instead of looping over a braced list of mixed pointer types.
+- **`te::TimePosition` is a strong type (W06).** It is NOT implicitly constructible from the literal `0` —
+  use `te::TimePosition()` (== position 0). Bit the tap-tempo gate's engine-write leg.
+- **`juce::String`'s `char*` ctor is ASCII-only (W05).** A non-ASCII byte (em-dash) renders mojibake +
+  jasserts under a debugger. Use plain ASCII in `char*` literals or `String::fromUTF8` with escaped bytes.
 - **A `LevelMeasurer` can die under a UI meter (W03 — was a latent product UAF).** The master measurer lives
   ON `EditPlaybackContext` (freed by `freePlaybackContext` / device restarts); track/return measurers live on
   a `LevelMeterPlugin` the engine's plugin cull can reclaim after a track delete. Holding a raw
@@ -406,10 +450,12 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED.** W05 (`5e5dcf2`) + its docs commit are on **`origin/main`**; the
-  working tree is **clean** and the pushed set was **sanitized** (only placeholder `C:\Users\…` / `<user>`
-  forms in doc text — no real machine paths / identity leaks). Prior history: W04b (`cc27300`), W04a
-  (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`), Wave 01 (`e3b8c7c`), all pushed.
+- **Latest work is committed + PUSHED.** W06 (`e670ab5` code + docs) + the Waveform backlog (`758dbb1`) are
+  on **`origin/main`** (tip `758dbb1`); the working tree is **clean** (the local `Waveform User Guide.pdf`
+  is `.gitignore`d — copyrighted, never committed) and every pushed set was **sanitized** (only placeholder
+  `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Prior history: W05
+  (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
+  Wave 01 (`e3b8c7c`), all pushed.
   Sanitizing is a live discipline, not
   a formality: a prior wave's CLI caught + scrubbed a stray sibling-project name in a comment before its commit —
   it would have been the first private-project-name leak into the public repo. **Public repo = sanitize before
