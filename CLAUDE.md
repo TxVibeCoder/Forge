@@ -62,14 +62,14 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-THREE gates as of W09): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-FOUR gates as of W10): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
-  `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`;   (⚠ new gate names that CONTAIN an
-  existing name must be ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`; verify the
-  report's `mode=` line)
+  `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`;   (⚠ new gate
+  names that CONTAIN an existing name must be ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`;
+  verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
@@ -91,6 +91,14 @@ conflict, surface it.
 - **MIDI slot recording is transport-driven, not launch-driven** — arm the slot's `itemID` + `transport.record()`;
   never `launchSlot` on the record path. Capture must be **slot-only** (disarm the track's MIDI target first) or
   notes double-capture to the arrangement.
+- **`AudioTrack::playSlotClips` is the engine's per-track Session↔Arrange playback switch (W10)** — the arranger
+  node is gated on `!playSlotClips`, the flag **latches TRUE** the moment a slot on that track plays, and
+  **nothing in the engine's live path clears it**. Any op that wants a track's **arrange** clips audible must set
+  it false (the engine's Session→Arrange handoff — it stops that track's still-playing slots). A clip that's
+  visibly on the timeline can still be silent because of this.
+- **A clip copied out of a `ClipSlot` carries slot-normalized state (W10)** — auto-tempo on, a full-length loop
+  range, `start=0`. To place it on the linear timeline as a plain one-shot, `disableLooping()` +
+  `setAutoTempo(false)`. **Never** `setLoopRangeBeats({})` to clear the loop — it re-asserts `setAutoTempo(true)`.
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

@@ -1,6 +1,13 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W09 — the hands-on wave, part 4:
+*Living status document. Last updated 2026-07-02 (latest: **W10 — the hands-on wave, part 5 (the last): the
+Session → Arrangement "Send to" bridge** on the W09 tip `76d8f38` — the fifth and FINAL build wave off the
+maintainer's first hands-on session; the hands-on plan is now **COMPLETE**. An explicit one-directional "Send to
+Arrangement" copies a filled Session slot's clip onto the same track's linear timeline (append-at-end ·
+single-clip); a 5-dimension adversarial QC fixed 2 confirmed defects (the [HIGH] `playSlotClips` silence + the
+[Medium] slot auto-tempo/loop carry-over) and refuted 3 clean; **all TWENTY-FOUR selftests PASS**. Full record →
+[devlog/wave-10-send-to-arrangement.md](devlog/wave-10-send-to-arrangement.md). Prior this session: **W09 — the
+hands-on wave, part 4:
 self-rendered instruments + an audible demo** on the W08 tip `1a59973` — the fourth build wave off the
 maintainer's first hands-on session. Makes the app **audibly playable out of the box**: per-track instrument
 presets (a 4OSC kick, a 4OSC bass, a **Sampler** loaded with a **self-rendered CC0 piano one-shot** —
@@ -560,6 +567,34 @@ record: [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md).
   `kickIsSynth/pianoIsSampler/pianoFileExists/clipHasNotes` all 1, `noteCount=16`); the base `session`
   screenshot shows the note-seeded groove (Keys = a Sampler). **Committed + PUSHED to `origin/main`**
   (`573170c` code + docs, with W07/W08, sanitize-clean).
+
+### W10 — the hands-on wave, part 5 (the last): the Session → Arrangement "Send to" bridge — SHIPPED  (baseline `76d8f38`)
+Wave 5 of the hands-on plan — the **final** one. An explicit, one-directional "Send to Arrangement" action; the
+real answer to the maintainer's *"Session clip doesn't appear in Arrange"* note (intended behavior — Session ↔
+Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine across the shared/serial files):
+3 source-verify agents → frozen design → 2 maintainer product calls → orchestrator build + the 24th gate →
+5-dimension adversarial QC → 2 fixes. Full record: [devlog/wave-10-send-to-arrangement.md](devlog/wave-10-send-to-arrangement.md).
+- **The seam** (`ProjectSession::sendSlotToArrangement`): reads the slot clip via the const `getClipSlot`, copies
+  it onto the **same** track's linear timeline via Tracktion's own `insertClipWithState(state.createCopy(), …)`
+  clone idiom (re-IDs + repositions in one call; carries the wave source / MIDI sequence faithfully — a **copy,
+  not a move**, so the slot is untouched). **Appended at the end** of the track's arrange content
+  (`getTotalRange().getEnd()`; 0 for an empty lane). Maintainer calls: **append-at-end · single-clip**.
+- **Menu + refresh** (`SessionView` + `main.cpp`): a "Send to Arrangement" item on a filled slot → a new
+  `onSendToArrangement` shell callback → seam + `sealUndoTransaction` + `save` + **`arrangeView.rebuild()`** (the
+  load-bearing refresh — ArrangeView has no clip-add listener) + a status message.
+- **QC (5 dimensions): 2 CONFIRMED fixed, 3 REFUTED clean.** ① **[HIGH]** the sent clip was **silent** in Arrange
+  (`AudioTrack::playSlotClips` latches true on slot-launch and nothing in the engine clears it → arranger output
+  gated off) — fixed by the seam flipping the flag false (the engine's Session→Arrange handoff). ② **[Medium,
+  latent]** the copy inherited the slot's auto-tempo + full-length loop range → would **re-tile on an edge-drag**
+  — fixed by normalizing to a plain one-shot (`disableLooping()` + `setAutoTempo(false)`; **not**
+  `setLoopRangeBeats({})`, which re-asserts auto-tempo). REFUTED clean: wave-source & field fidelity,
+  undo/lifetime, placement/refresh.
+- **Gate `--selftest-sendarrange`** (floor 23→24): a MIDI leg (fidelity · source-intact · append · audibility ·
+  non-looping · undo round-trip) + a **wave leg** (import a sine WAV → send → non-looping, non-auto-tempo
+  WaveAudioClip whose source survived the copy) — both fixes proven headlessly.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-FOUR selftests PASS**; the 10-state screenshot
+  matrix renders. After W10 the hands-on plan is **complete**; the Waveform feature-mining backlog is the next
+  planning source.
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

@@ -459,6 +459,31 @@ its sample on an AsyncUpdater; playback engagement is covered by `--selftest-ses
 > follow-up (QC NIT, not gated): the gate proves the piano one-shot exists on disk but not that the Sampler
 > *ingested* it (an async load) — a render/ingestion leg would prove the final audible link.
 
+## `Forge --selftest-sendarrange` (Session → Arrangement "Send to" bridge)
+
+The acceptance gate for **W10 — the Session → Arrangement bridge** (design:
+[../docs/devlog/wave-10-send-to-arrangement.md](../docs/devlog/wave-10-send-to-arrangement.md)). Synchronous.
+Two legs: a **MIDI leg** (seed 4 notes into slot (0,0), send it onto track 0's linear timeline) and a **wave
+leg** (a self-generated sine WAV imported into slot (1,0), sent onto track 1) — the wave leg exercises the
+`AudioClipBase` normalization the MIDI leg can't reach. It does NOT render audio; audibility is proven by the
+`playSlotClips` state flip, not by sampling non-zero output.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `sourceIntact` | the send is a COPY, not a move — the source slot still holds its clip | 1 |
+| `arrangeClipAppeared` / `secondAppended` | a new clip lands on the timeline; a 2nd send appends after the 1st | 1 / 1 (`clipsAfterSecond=2`) |
+| `noteCountPreserved` | the copied MidiClip carries the SAME note count (the sequence rode along in the state clone) | 1 (`copiedNotes=4`) |
+| `landedAtStart` | the first send appends at 0:00 on the empty lane | 1 |
+| `copyNotLooping` | the slot's inherited loop range was cleared → a plain one-shot | 1 |
+| `arrangeAudible` | a track with `playSlotClips` latched TRUE is flipped back to arrange playback by the send | 1 |
+| `undoRemovedCopy` / `sourceIntactAfterUndo` | one Ctrl+Z removes the copy and leaves the source slot filled | 1 / 1 |
+| `waveIsAudioClip` / `waveNotLooping` / `waveNoAutoTempo` | the wave copy is a non-looping, non-auto-tempo `WaveAudioClip` | 1 / 1 / 1 |
+| `waveSourceMatches` | the wave copy's audio source survived the state copy (matches the slot clip's source) | 1 |
+
+> Verified 2026-07-02: **PASS** (all legs 1), bringing the floor to **24 gates**. `--selftest-sendarrange` does
+> not collide with any existing gate name (no substring relationship), and is ordered before the bare
+> `--selftest` in both command-line ladders; verify the report's `mode=sendarrange` line.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

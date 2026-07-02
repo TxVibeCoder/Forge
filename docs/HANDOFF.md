@@ -2,29 +2,32 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of the
-> **"W09 — the hands-on wave, part 4: self-rendered instruments + an audible demo"** wave — the fourth build
-> wave off the maintainer's first hands-on session. ⚠ **W05's owed adversarial-QC dimensions remain PARTIALLY
-> owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout focus routing
-> were not re-run).
+> **"W10 — the hands-on wave, part 5 (the last): the Session → Arrangement 'Send to' bridge"** wave — the fifth
+> and **final** build wave off the maintainer's first hands-on session. **The hands-on plan is now COMPLETE.**
+> ⚠ **W05's owed adversarial-QC dimensions remain PARTIALLY owed** (the broad undo-correctness sweep across all
+> five W05 mutation hooks + torn-off-popout focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c` code + a docs commit) are PUSHED to
-`origin/main`** (sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings) ·
-**all TWENTY-THREE selftests PASS** — the W08 twenty-two plus **`--selftest-demo`**; `--screenshot`'s base
-`session` state now shows the note-seeded groove (Keys = a Sampler, scene 0 the hero groove).
-Shipped (the hands-on plan's Wave 4): the app is **audibly playable out of the box** — per-track instrument
-presets (a 4OSC **kick**, a 4OSC **bass**, and a **Sampler** loaded with a **self-rendered CC0 piano
-one-shot**), a note-written **C-minor demo** (4-on-floor kick · walking bass · Cm–Ab–Bb–Cm chord stabs), and a
-**first-launch welcome demo** (a brand-new user opens into a playable session; File > New still gives empty;
-in-memory only, does not auto-play). NEW: `InstrumentSamples.{h,cpp}` (a procedural CC0 piano one-shot,
-xorshift32-deterministic, generated into `%APPDATA%\Forge\library`) + `PluginHost::applyInstrumentPreset` + the
-Sampler registered as a built-in instrument. The maintainer chose **HYBRID, no browsable library** (a browsable
-library needs new browser→slot interaction, deferred to its own wave). W09 adversarial QC (3 dimensions):
-**NO blockers, NO majors** — all clean (the instrument-layer finder refuted 10 candidate bugs against the
-engine source); one doc-drift fixed, hardening notes documented. Full record →
-[devlog/wave-09-instruments.md](devlog/wave-09-instruments.md). The remaining hands-on plan (Wave 5) + the
-locked decisions (+session = scene · self-rendered CC0 · Session/Arrange stay separate) are in the maintainer's
-memory ([[forge-handson-wave-plan]]).
+**`main`**. **W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c`) are PUSHED to `origin/main`**; **W10 is
+committed LOCALLY (code + docs), pending the maintainer's push go-ahead** (sanitize-clean). Last build **clean**
+(MSVC Debug, 0 warnings) · **all TWENTY-FOUR selftests PASS** — the W09 twenty-three plus **`--selftest-sendarrange`**.
+Shipped (the hands-on plan's Wave 5, the last): an explicit, **one-directional "Send to Arrangement"** action —
+right-click a filled Session slot → **"Send to Arrangement"** copies that clip onto the **same track's** linear
+Arrange timeline, **appended at the end** (the maintainer's two calls this wave: append-at-end · single-clip).
+The source slot is never touched (a **copy, not a move**); nothing auto-mirrors (a locked decision). This is the
+real answer to the first-hands-on note *"Session clip doesn't appear in Arrange."* NEW seam
+`ProjectSession::sendSlotToArrangement` (Tracktion's own `insertClipWithState` clone idiom — carries the wave
+source / MIDI sequence faithfully) + a SessionView menu item + the `arrangeView.rebuild()` refresh + gate
+`--selftest-sendarrange`. **W10 adversarial QC (5 dimensions):** 2 CONFIRMED defects **fixed** — ① **[HIGH]** the
+sent clip was **silent** in Arrange playback (`AudioTrack::playSlotClips` latches true on slot-launch and nothing
+in the engine clears it → the seam flips it false, the engine's Session→Arrange handoff) and ② **[Medium,
+latent]** the copy inherited the slot's auto-tempo + loop range and would **re-tile on an edge-drag** (→
+normalized to a plain one-shot via `disableLooping()` + `setAutoTempo(false)`); 3 dimensions (wave-source
+fidelity · undo/lifetime · placement/refresh) **REFUTED clean**. Both fixes are headlessly proven by the gate
+(`arrangeAudible` · `copyNotLooping` · a full wave leg). Full record →
+[devlog/wave-10-send-to-arrangement.md](devlog/wave-10-send-to-arrangement.md). The locked hands-on decisions
+(+session = scene · self-rendered CC0 · Session/Arrange stay separate) are in the maintainer's memory
+([[forge-handson-wave-plan]]).
 
 > **⚠ W08 deferred findings (found by QC, NOT fixed — maintainer said document-only):** ① **[LOW/cosmetic] the
 > Ableton master-strip opportunity** — the scene column runs full-height while the band shortens only the pad
@@ -64,13 +67,24 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W09 (self-rendered instruments + an audible demo)
+## What the LATEST wave did — W10 (the Session → Arrangement "Send to" bridge)
 
-The current wave is **W09** — summarised in the intro blockquote above and recorded in full in
-[devlog/wave-09-instruments.md](devlog/wave-09-instruments.md): per-track instrument presets (4OSC kick/bass +
-a Sampler with a self-rendered CC0 piano one-shot), a note-written C-minor demo, and a first-launch welcome
-demo, built by one instrument-layer agent + orchestrator (demo builder / gate / first-launch hook), then a
-3-dimension adversarial QC (NO blockers/majors; the instrument-layer finder refuted 10 candidate bugs).
+The current wave is **W10** — summarised in the intro blockquote above and recorded in full in
+[devlog/wave-10-send-to-arrangement.md](devlog/wave-10-send-to-arrangement.md): the explicit, one-directional
+"Send to Arrangement" action (right-click a filled Session slot → copy that clip onto the same track's linear
+Arrange timeline, appended at the end). New `ProjectSession::sendSlotToArrangement` seam (Tracktion's own
+`insertClipWithState` clone idiom) + a SessionView menu item + the shell's `arrangeView.rebuild()` refresh + gate
+`--selftest-sendarrange`. Single-CLI wave (the change is a tight spine across the shared/serial files), then a
+5-dimension adversarial QC: **2 CONFIRMED defects fixed** (the [HIGH] `playSlotClips` silence + the [Medium]
+slot auto-tempo/loop carry-over) and **3 dimensions REFUTED clean**; both fixes headlessly proven by the gate.
+**After W10 the hands-on plan is complete.**
+
+## What a prior wave did — W09 (self-rendered instruments + an audible demo)
+
+Recorded in [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md): per-track instrument presets (4OSC
+kick/bass + a Sampler with a self-rendered CC0 piano one-shot), a note-written C-minor demo, and a first-launch
+welcome demo, built by one instrument-layer agent + orchestrator, then a 3-dimension adversarial QC (NO
+blockers/majors; the instrument-layer finder refuted 10 candidate bugs).
 
 ## What a prior wave did — W08 (per-track Session mixer strips)
 
@@ -271,17 +285,20 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W07 + W08 are **committed + PUSHED to `origin/main`** (sanitize-clean). Hardware smoke tests and manual GUI passes are
-> **permanently parked** (standing constraints at the top); the path forward is the headless-provable
-> roadmap. **The active track is the hands-on wave plan** ([[forge-handson-wave-plan]]) — Waves 1 (W06) + 2
-> (W07) + 3 (W08) + 4 (W09) shipped; only Wave 5 remains.
+> W07 + W08 + W09 are **committed + PUSHED to `origin/main`** (sanitize-clean); **W10 is committed LOCALLY,
+> pending push**. Hardware smoke tests and manual GUI passes are **permanently parked** (standing constraints at
+> the top); the path forward is the headless-provable roadmap. **The hands-on wave plan
+> ([[forge-handson-wave-plan]]) is now COMPLETE** — Waves 1 (W06) · 2 (W07) · 3 (W08) · 4 (W09) · 5 (W10) all
+> shipped. The **Waveform feature-mining backlog** ([devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md))
+> is now the primary planning source.
 
-1. **▶ NEXT: hands-on plan Wave 5 (the last) — the Session → Arrangement "Send to" bridge.** An explicit,
-   one-directional "Send to Arrangement" action (never auto-mirror — a locked decision): take a Session
-   clip/scene and place it on the linear Arrange timeline. This is the real answer to the maintainer's "Session
-   clip doesn't appear in Arrange" note. Run it the established way (source-verify → agents → orchestrator build
-   + gates → adversarial QC). After Wave 5 the hands-on plan is complete; the Waveform feature-mining backlog
-   (item 5) becomes the next planning source.
+1. **✅ DONE: hands-on plan Wave 5 (the last) — the Session → Arrangement "Send to" bridge** shipped as **W10**
+   (see the latest-wave section above). The hands-on plan is complete. **W10 follow-ups (documented, not built):**
+   (a) **whole-scene "Send to Arrangement"** — send every filled clip in a scene to its track, aligned at one
+   start (the natural next extension; deferred by the single-clip scope choice); (b) **send-as-loop** — the copy
+   is normalized to a one-shot (the conventional default); a sent loop *staying* a tempo-locked loop is a one-line
+   product toggle if wanted; (c) runtime-audio rendering of the arrangement (audibility is proven by the
+   `playSlotClips` state assertion, not by sampling non-zero output — same class as the W09 render-leg follow-up).
 2. **W09 follow-ups (documented, not fixed).** (a) **A render/ingestion gate leg** — `--selftest-demo` proves the
    piano one-shot exists on disk + the Sampler is inserted, but not that the Sampler *ingested* the sample (an
    async load); pumping the loop + asserting a note renders to non-zero audio would prove the final audible link.
@@ -341,6 +358,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-dragdrop # session+arrange file-import + replace-undo gate (W07) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sessionmixer # per-track Session strip vol/pan/M-S sync gate (W08) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-demo     # audible demo: instrument presets + seeded notes (W09) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sendarrange # Session→Arrange copy: fidelity + audibility + one-shot + undo (W10) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -514,10 +532,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09
-  (`573170c` code + docs) are on **`origin/main`** — the sanitize scan ran clean before the push (only
-  placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Local
-  `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
+- **W10 is committed LOCALLY (code + docs), pending the maintainer's push go-ahead; W07–W09 are on `origin/main`.**
+  W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c` code + docs) are pushed — the sanitize scan ran clean
+  before each push (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity
+  leaks). W10's own pre-push sanitize scan is clean (tracked-set `rg` matched only gitignored `*.local.md` /
+  `*.log`). Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
