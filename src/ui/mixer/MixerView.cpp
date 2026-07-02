@@ -1,6 +1,7 @@
 #include "ui/mixer/MixerView.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "ui/common/PeakMeter.h"             // shared level bar (W04b extraction)
+#include "ui/common/StripWidgets.h"          // shared fader/knob/toggle styling + ranges (W05)
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
@@ -9,46 +10,18 @@
 
 using namespace juce;
 
-namespace
-{
-    // Fader travel in dB. -60 reads as -inf-ish silence at the bottom; +6 of headroom up top.
-    // This matches the range mapped by EngineHelpers::set/getTrackVolumeDb (which clamps the
-    // underlying 0..1 volume parameter into dB), so the slider position round-trips cleanly.
-    constexpr double kMinDb =  -60.0;
-    constexpr double kMaxDb =    6.0;
-
-    // Pan travel: hard-left (-1) .. centre (0) .. hard-right (+1).
-    constexpr double kMinPan = -1.0;
-    constexpr double kMaxPan =  1.0;
-
-    // Aux-send knob travel in dB. Bottom of the knob (kMinSendDb) reads as "no send"; the seam
-    // reports <= kMinSendDb (engine silence) when a track has no send plugin for that bus, so the
-    // knob sits at the bottom until the user dials one in. +6 of headroom up top, matching the fader.
-    constexpr double kMinSendDb = -60.0;
-    constexpr double kMaxSendDb =   6.0;
-
-    /** Applies Forge's shared vertical dB-fader styling (range, readout, colours) to a slider.
-        One source for the strip / master / return faders so their look can't drift apart. The
-        caller sets the text-box style afterwards (its width differs per strip) and wires
-        setValue/onValueChange. */
-    inline void styleDbFader (Slider& f)
-    {
-        f.setSliderStyle (Slider::LinearVertical);
-        f.setRange (kMinDb, kMaxDb, 0.1);
-        f.setNumDecimalPlacesToDisplay (1);
-        f.setTextValueSuffix (" dB");
-        f.setDoubleClickReturnValue (true, 0.0);   // double-click -> unity (0 dB)
-        f.setColour (Slider::thumbColourId,          Colour (ForgeLookAndFeel::accent));
-        f.setColour (Slider::trackColourId,          Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-        f.setColour (Slider::backgroundColourId,     Colour (ForgeLookAndFeel::raisedBg));
-        f.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
-        f.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
-    }
-}
+// Fader/pan/send ranges + the fader/pan/send/toggle styling + busLetter now live in the shared
+// ui/common/StripWidgets.h (W05), so the mixer strips and the Arrange channel tray draw from one
+// definition. Bring the send range + busLetter into scope so the value-clamp / tooltip / label
+// call sites below stay byte-identical; the style helpers are called via the forge::strip::
+// qualifier. (The fader/pan ranges are consumed inside the style helpers, not at any call site here.)
+using forge::strip::kMinSendDb;
+using forge::strip::kMaxSendDb;
+using forge::strip::busLetter;
 
 // PeakMeter — the shared thin vertical level bar — now lives in ui/common/PeakMeter.h (W04b),
 // consumed here and by the Arrange channel tray. Its ballistics constants + dbToMeterFraction
-// helper moved with it; the fader/pan/send constants above stay local to the mixer.
+// helper moved with it.
 
 //==============================================================================
 /*  InsertPanel — the list of a track's insert plugins plus a "+" add button. Each existing
@@ -415,13 +388,7 @@ public:
             const int busIdx = b;
 
             auto* knob = knobs.add (new Slider());
-            knob->setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-            knob->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-            knob->setRange (kMinSendDb, kMaxSendDb, 0.1);
-            knob->setDoubleClickReturnValue (true, kMinSendDb);   // double-click -> no send
-            knob->setColour (Slider::thumbColourId,             Colour (ForgeLookAndFeel::accent));
-            knob->setColour (Slider::rotarySliderFillColourId,  Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-            knob->setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+            forge::strip::styleSendKnob (*knob);
             knob->setTooltip ("Send to Return " + busLetter (busIdx));
 
             if (getLevelFn)
@@ -472,8 +439,6 @@ public:
     }
 
 private:
-    static juce::String busLetter (int b) { return String::charToString ((juce_wchar) ('A' + b)); }
-
     int trackIdx = 0;
     std::function<float (int, int)>        getLevelFn;
     std::function<void (int, int, float)>  setLevelFn;
@@ -511,13 +476,7 @@ public:
         addAndMakeVisible (nameLabel);
 
         // --- Pan (rotary, -1..+1) ---------------------------------------------------------
-        pan.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-        pan.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-        pan.setRange (kMinPan, kMaxPan, 0.01);
-        pan.setDoubleClickReturnValue (true, 0.0);     // double-click -> centre
-        pan.setColour (Slider::thumbColourId,           Colour (ForgeLookAndFeel::accent));
-        pan.setColour (Slider::rotarySliderFillColourId, Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-        pan.setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+        forge::strip::stylePanKnob (pan);
         pan.setValue (EngineHelpers::getTrackPan (track), dontSendNotification);
         pan.onValueChange = [this] { EngineHelpers::setTrackPan (track, (float) pan.getValue()); };
         pan.onDragStart   = [this] { panDragging = true; };
@@ -550,7 +509,7 @@ public:
         addAndMakeVisible (meter);
 
         // --- Volume fader (vertical, dB) --------------------------------------------------
-        styleDbFader (fader);
+        forge::strip::styleDbFader (fader);
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::stripW - 8, 16);
         fader.setValue (EngineHelpers::getTrackVolumeDb (track), dontSendNotification);
         fader.onValueChange = [this] { EngineHelpers::setTrackVolumeDb (track, (float) fader.getValue()); };
@@ -559,13 +518,11 @@ public:
         addAndMakeVisible (fader);
 
         // --- M / S toggles ----------------------------------------------------------------
+        // Shared style (W05) + add-and-show; the lambda keeps the caller-owned addAndMakeVisible
+        // (styleStripToggle is style-only — see StripWidgets.h).
         auto configureToggle = [this] (TextButton& b)
         {
-            b.setClickingTogglesState (true);
-            b.setColour (TextButton::buttonColourId,   Colour (ForgeLookAndFeel::raisedBg));
-            b.setColour (TextButton::buttonOnColourId, Colour (ForgeLookAndFeel::accent));
-            b.setColour (TextButton::textColourOffId,  Colour (ForgeLookAndFeel::textSec));
-            b.setColour (TextButton::textColourOnId,   Colour (ForgeLookAndFeel::onAccent));
+            forge::strip::styleStripToggle (b);
             addAndMakeVisible (b);
         };
 
@@ -725,7 +682,7 @@ public:
         // (pollMeter) — nothing to provision here, and no mutation of the Edit.
         addAndMakeVisible (meter);
 
-        styleDbFader (fader);
+        forge::strip::styleDbFader (fader);
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::masterW - 8, 16);
 
         if (auto mv = edit.getMasterVolumePlugin())
@@ -857,7 +814,7 @@ public:
         };
         addAndMakeVisible (enableButton);
 
-        styleDbFader (fader);
+        forge::strip::styleDbFader (fader);
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::returnW - 8, 16);
         fader.onValueChange = [this]
         {
@@ -870,13 +827,12 @@ public:
 
         addAndMakeVisible (meter);
 
+        // Shared style (W05) + add-and-show. ReturnStrip::refresh() toggles these buttons' VISIBILITY
+        // (placeholder vs. live) independently — which is exactly why styleStripToggle is style-only
+        // and the addAndMakeVisible stays here (see StripWidgets.h).
         auto configureToggle = [this] (TextButton& b)
         {
-            b.setClickingTogglesState (true);
-            b.setColour (TextButton::buttonColourId,   Colour (ForgeLookAndFeel::raisedBg));
-            b.setColour (TextButton::buttonOnColourId, Colour (ForgeLookAndFeel::accent));
-            b.setColour (TextButton::textColourOffId,  Colour (ForgeLookAndFeel::textSec));
-            b.setColour (TextButton::textColourOnId,   Colour (ForgeLookAndFeel::onAccent));
+            forge::strip::styleStripToggle (b);
             addAndMakeVisible (b);
         };
         configureToggle (muteButton);

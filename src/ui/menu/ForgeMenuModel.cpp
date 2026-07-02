@@ -37,6 +37,7 @@ namespace
         int         intArg           = 0;
         BoolFn CB::* tick            = nullptr;    // ticked when query() is true...
         IntQFn CB::* radioTick       = nullptr;    // ...or when query() == intArg (radio groups)
+        BoolFn CB::* enabledWhen     = nullptr;    // greyed out when query() is false (unset = enabled)
     };
 
     const Command commandTable[] =
@@ -52,8 +53,10 @@ namespace
         { .id = M::cmdAudioSettings,  .menu = M::menuFile,      .name = "Audio Settings...",                            .separatorBefore = true, .action = &CB::onAudioSettings },
         { .id = M::cmdPluginManager,  .menu = M::menuFile,      .name = "Plugin Manager...",                            .action = &CB::onPluginManager },
 
-        // Edit (thin and honest — no global undo/redo exists yet; note-level copy/paste stays view-local)
-        { .id = M::cmdMidiLearn,      .menu = M::menuEdit,      .name = "MIDI Learn...",    .shortcut = "Ctrl+L",       .action = &CB::onMidiLearn },
+        // Edit (W05: global Undo/Redo over the Edit's UndoManager; note-level copy/paste stays view-local)
+        { .id = M::cmdUndo,           .menu = M::menuEdit,      .name = "Undo",             .shortcut = "Ctrl+Z",       .action = &CB::onUndo, .enabledWhen = &CB::queryCanUndo },
+        { .id = M::cmdRedo,           .menu = M::menuEdit,      .name = "Redo",             .shortcut = "Ctrl+Shift+Z", .action = &CB::onRedo, .enabledWhen = &CB::queryCanRedo },
+        { .id = M::cmdMidiLearn,      .menu = M::menuEdit,      .name = "MIDI Learn...",    .shortcut = "Ctrl+L",       .separatorBefore = true, .action = &CB::onMidiLearn },
 
         // View (the mode trio radio-ticks against queryViewMode; the region toggles tick their visibility)
         { .id = M::cmdViewSession,    .menu = M::menuView,      .name = "Session",          .shortcut = "F8",           .intAction = &CB::onViewMode, .intArg = 0, .radioTick = &CB::queryViewMode },
@@ -98,6 +101,12 @@ namespace
             if (const auto& query = cb.*(row.radioTick); query)
                 item.isTicked = (query() == row.intArg);
         }
+
+        // Enablement (W05): a wired query gates the item live on every menu open; an UNSET query
+        // leaves the item enabled (the null-safe convention every other column follows).
+        if (row.enabledWhen != nullptr)
+            if (const auto& query = cb.*(row.enabledWhen); query)
+                item.isEnabled = query();
 
         return item;
     }

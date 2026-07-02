@@ -4,17 +4,17 @@
     viewport, fixed to the right edge at SessionLayout::sceneColW px).
 
     Top band: an amber MASTER header (height SessionLayout::headerH so it aligns with the track
-    headers) carrying a "stop all" ■ button and a "SCENES" sublabel. Below it, one launch row per
-    scene — a ▶ launch button plus the scene name (or the row number) — laid to the same row
-    geometry the grid uses (header at top, per-track clip-stop footer reserved at the bottom, the
-    numScenes rows dividing the middle evenly) so each scene row aligns horizontally with the clip
-    slot row in every track column.
+    headers) carrying a full-width "■ STOP ALL" button and a "SCENES" sublabel on its own line
+    below it. Under the header, one launch row per scene — a ▶ launch button plus the scene name
+    (or the row number) — laid to the same row geometry the grid uses (header at top, per-track
+    clip-stop footer reserved at the bottom, the numScenes rows dividing the middle evenly) so
+    each scene row aligns horizontally with the clip slot row in every track column.
 
     Receives scene names as PLAIN VALUES via setScenes() during a rebuild — it never caches a
     te::Scene* (R1). Per-row visual state (idle / queued / playing) is pushed in by the owner via
-    setSceneState() and rendered with the shared ForgeLookAndFeel play-family colours (playGreen /
-    playGreenDim, W04a semantic accents), matching the slot pads. Amber stays on the interactive
-    MASTER chrome only.
+    setSceneState(), the beat-pulse alpha via setScenePulse(), and rendered with the shared
+    ForgeLookAndFeel play-family colours (playGreen / playGreenDim, W04a semantic accents),
+    matching the slot pads. Amber stays on the interactive MASTER chrome only.
 
     All engine ops route up through null-guarded std::function seams (onSceneLaunched,
     onSceneStopped, onStopAll); this component NEVER touches the te:: model directly.
@@ -60,6 +60,12 @@ public:
     /** Pushes a row's launch state (idle / queued / playing) and repaints just that row.
         No-op for an out-of-range index. Called by the owner's poll on the message thread. */
     void setSceneState (int sceneIndex, SceneLaunchState state);
+
+    /** Pushes a row's beat-pulse alpha for its queued/playing ring (padPulseAlpha output;
+        negative = no pulse flowing). Change-gated inside the row — an unchanged value never
+        repaints — so idle rows stay repaint-free across the owner's 25 Hz poll (§e).
+        No-op for an out-of-range index. */
+    void setScenePulse (int sceneIndex, float pulseAlpha);
 
     /** Number of scene launch rows currently built (for diagnostics / self-tests). */
     int getNumSceneRows() const;

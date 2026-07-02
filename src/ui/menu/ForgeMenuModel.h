@@ -43,6 +43,7 @@ public:
         cmdImportAudio, cmdExportMixdown, cmdExportStems,
         cmdAudioSettings, cmdPluginManager,
 
+        cmdUndo, cmdRedo,   // W05
         cmdMidiLearn,
 
         cmdViewSession, cmdViewArrange, cmdViewMix,
@@ -68,6 +69,8 @@ public:
                               onAudioSettings, onPluginManager;
 
         // Edit
+        std::function<void()> onUndo, onRedo;                       // W05
+        std::function<bool()> queryCanUndo, queryCanRedo;           // W05: item enablement (unset = enabled)
         std::function<void()> onMidiLearn;
 
         // View

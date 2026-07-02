@@ -48,7 +48,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -260,6 +260,12 @@ public:
         // editors; onTrackSelected binds the W04a channel tray — both wired below.)
         arrangeView.onEditMutated = [this]
         {
+            // W05: seal the finished gesture as ONE undo transaction (the engine's 350 ms timer
+            // is the backstop for paths that bypass these hooks; beginNewTransaction on an empty
+            // group is a harmless no-op, so double-fires are safe).
+            if (auto* ed = session.getEdit())
+                ed->getUndoManager().beginNewTransaction();
+
             if (! session.save())
                 FORGE_LOG_ERROR ("Failed to save project — I/O error");
 
@@ -354,8 +360,8 @@ public:
             }
         };
 
-        detailView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
-        pianoRoll.onEditMutated  = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        detailView.onEditMutated = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        pianoRoll.onEditMutated  = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
         // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
         // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
@@ -398,7 +404,7 @@ public:
 
         // Session grid — mirror the arrange wiring. The view delegates all engine ops to ProjectSession;
         // here we only route selection/creation to the shared piano-roll drawer and the record arm path.
-        sessionView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        sessionView.onEditMutated = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
         // Session focus follows to the channel tray (W04b): SessionView announces focus-TRACK
         // changes (arrow keys / pad clicks) as an INDEX — it caches no track pointers (R1) — so
@@ -597,7 +603,7 @@ public:
         markerBar.onMoveMarker    = [this] (te::EditItemID id, te::TimePosition t)      { session.moveMarker (id, t); };
         markerBar.onRenameMarker  = [this] (te::EditItemID id, const juce::String& n)   { session.renameMarker (id, n); };
         markerBar.onJumpTransport = [this] (te::TimePosition t)                         { session.jumpTransportTo (t); };
-        markerBar.onEditMutated   = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project after marker edit"); };
+        markerBar.onEditMutated   = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project after marker edit"); };
 
         // ---- P2: MIDI-learn ----
         // A confirmation when a learn binds. (Real-hardware CC routing into handleIncomingController is a
@@ -706,6 +712,15 @@ public:
             // as --selftest-midilearn).
             MessageManager::callAsync ([this] { beginPopoutSelftest(); });
         }
+        else if (mode == SelfTest::undo)
+        {
+            // Headless undo/redo gate (W05): explicit transactions (the engine's 350 ms
+            // auto-seal needs loop time; explicit beginNewTransaction is deterministic) around
+            // a slot-clip create + delete, then undo/redo round-trips + a note-edit leg —
+            // asserting canUndo/canRedo transitions at every step. Synchronous on the message
+            // thread, so a single callAsync yield suffices.
+            MessageManager::callAsync ([this] { runUndoSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -739,6 +754,13 @@ public:
 
         // W04b: close tear-off windows while the views they host are still alive (the dtor BODY
         // runs before member destruction; the after-the-views declaration order is the backstop).
+        // W05: persist their placements first (quit-with-popout-open path).
+        if (pianoRollPopout != nullptr)
+            engine.getPropertyStorage().getPropertiesFile()
+                .setValue ("forgePianoRollPopoutState", pianoRollPopout->getWindowStateAsString());
+        if (mixerPopout != nullptr)
+            engine.getPropertyStorage().getPropertiesFile()
+                .setValue ("forgeMixerPopoutState", mixerPopout->getWindowStateAsString());
         pianoRollPopout.reset();
         mixerPopout.reset();
 
@@ -756,6 +778,19 @@ public:
     void paint (Graphics& g) override
     {
         g.fillAll (Colour (ForgeLookAndFeel::shellBg));
+
+        // W05: tearing the mixer off WHILE in Mix view leaves the centre empty (setViewMode's
+        // front-the-popout guard only covers selecting Mix afterwards) — say so instead of
+        // presenting a dead pane.
+        if (viewMode == ViewMode::Mixer && mixerPopout != nullptr)
+        {
+            g.setColour (Colour (ForgeLookAndFeel::textSec));
+            g.setFont (Font (FontOptions (14.0f)));
+            // ASCII only: juce::String's char* ctor is ASCII-only (a raw em-dash renders mojibake
+            // + jasserts — the recovered QC finding; the escaped-UTF-8 idiom is overkill here).
+            g.drawText ("Mixer is popped out - press F11 or View > Mix to bring it forward",
+                        getLocalBounds(), Justification::centred, false);
+        }
     }
 
     void resized() override
@@ -1096,6 +1131,10 @@ private:
         cb.onPluginManager = controlBar.onScanPlugins;
 
         // Edit
+        cb.onUndo        = [this] { doUndo(); };
+        cb.onRedo        = [this] { doRedo(); };
+        cb.queryCanUndo  = [this] { auto* e = session.getEdit(); return e != nullptr && e->getUndoManager().canUndo(); };
+        cb.queryCanRedo  = [this] { auto* e = session.getEdit(); return e != nullptr && e->getUndoManager().canRedo(); };
         cb.onMidiLearn = [this] { showMidiLearnMenu(); };
 
         // View — commands shared with the ControlBar; queries read the shell's own state.
@@ -1219,13 +1258,27 @@ private:
         mixerPopout = std::make_unique<PopoutWindow> ("Forge — Mixer", mixerView,
                                                       [this] { restoreMixer(); });
         mixerPopout->onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
+
+        // W05: restore the window's last position/size (saved at restore/close time). JUCE's
+        // restoreWindowStateFromString includes an off-screen rescue, so a stale multi-monitor
+        // state can't strand the window.
+        if (const auto state = engine.getPropertyStorage().getPropertiesFile()
+                                   .getValue ("forgeMixerPopoutState"); state.isNotEmpty())
+            mixerPopout->restoreWindowStateFromString (state);
+
         resized();   // re-lay-out the shell without the torn-off view (the guards skip it)
+        repaint();   // the empty-centre hint may now apply (tearing off while in Mix view)
     }
 
     void restoreMixer()
     {
         if (mixerPopout == nullptr)
             return;
+
+        // Persist the window placement NOW, while the window is definitely alive — the deferred
+        // lambda may run mid-close (W05; the dtor-body reset path saves too, for quit-with-open).
+        engine.getPropertyStorage().getPropertiesFile()
+            .setValue ("forgeMixerPopoutState", mixerPopout->getWindowStateAsString());
 
         // Reparent home, and hide until the post-reset relayout decides — the view arrives from
         // the window VISIBLE at stale popout bounds, topmost, and the synchronous resized() below
@@ -1246,6 +1299,7 @@ private:
             {
                 self->mixerPopout.reset();
                 self->resized();
+                self->repaint();   // clear the empty-centre hint if we were in Mix view (W05)
             }
         });
     }
@@ -1257,6 +1311,11 @@ private:
         pianoRollPopout = std::make_unique<PopoutWindow> ("Forge — Piano Roll", pianoRoll,
                                                           [this] { restorePianoRoll(); });
         pianoRollPopout->onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
+
+        if (const auto state = engine.getPropertyStorage().getPropertiesFile()
+                                   .getValue ("forgePianoRollPopoutState"); state.isNotEmpty())
+            pianoRollPopout->restoreWindowStateFromString (state);
+
         resized();   // the drawer falls back to the DetailView while the roll is out
     }
 
@@ -1264,6 +1323,9 @@ private:
     {
         if (pianoRollPopout == nullptr)
             return;
+
+        engine.getPropertyStorage().getPropertiesFile()
+            .setValue ("forgePianoRollPopoutState", pianoRollPopout->getWindowStateAsString());
 
         addChildComponent (pianoRoll);
         pianoRoll.setVisible (false);   // hidden until the post-reset relayout decides (QC blocker)
@@ -1345,6 +1407,73 @@ private:
 
         if (drawerSlide >= 0)   // a close is in flight: retarget to open from the current height
             startSlide();
+    }
+
+    //==============================================================================
+    // W05 undo/redo — a thin shell over the Edit's own UndoManager. Transaction granularity is
+    // already per-gesture: the engine's UndoTransactionTimer seals a transaction 350 ms after
+    // each change burst (deferred while the mouse is down), and the onEditMutated hooks seal
+    // eagerly (sealUndoTransaction). ensureScenes stays deliberately OFF the stack (inhibitor +
+    // clearUndoHistory in ProjectSession — do not "fix").
+    void sealUndoTransaction()
+    {
+        if (auto* ed = session.getEdit())
+            ed->getUndoManager().beginNewTransaction();
+    }
+
+    void doUndo()  { undoOrRedo (true); }
+    void doRedo()  { undoOrRedo (false); }
+
+    void undoOrRedo (bool isUndo)
+    {
+        auto* ed = session.getEdit();
+        if (ed == nullptr)
+            return;
+
+        // Record gate: record-arm targets sit ON the undo stack (setTarget/removeTarget write
+        // through the UM) and removeTarget fails while recording — an undo mid-take would
+        // silently retarget the capture. An explicit no-op + status message beats relying on
+        // Edit::undoOrRedo's force-stop.
+        if (ed->getTransport().isRecording())
+        {
+            statusLabel.setText ("Undo is disabled while recording", dontSendNotification);
+            statusHoldUntilMs = Time::getMillisecondCounter() + 4000;
+            return;
+        }
+
+        auto& um = ed->getUndoManager();
+        if (isUndo ? ! um.canUndo() : ! um.canRedo())
+            return;
+
+        if (isUndo) ed->undo();   // Edit::undo, not the raw UM — keeps the engine's selection refresh
+        else        ed->redo();
+
+        // Undo/redo does NOT fire onEditMutated and no Forge view listens to the state tree, so
+        // fan the refresh out explicitly. SAVE first-class: Forge writes the file on every
+        // mutation, so an unsaved undo leaves DISK newer than memory (a crash would "restore"
+        // the pre-undo state).
+        if (! session.save())
+            FORGE_LOG_ERROR ("Failed to save project after undo/redo");
+
+        arrangeView.rebuild();          // no self-heal timer — stale ClipComponents otherwise (UAF)
+        if (sessionViewBinds())
+            sessionView.rebuild();      // synchronous, so no column ever derefs a resurrected/deleted track
+        mixerView.refreshControls();    // structural guard rebuilds strips if the track set changed
+        channelTray.refreshNow();
+        markerBar.refresh();
+
+        // The piano-roll can now hold a DETACHED clip (a redo-of-delete keeps the Ptr alive but
+        // parentless — further edits would write to a dead state tree with no visible effect).
+        if (auto* mc = pianoRoll.getClip())
+            if (! mc->state.getParent().isValid())
+            {
+                pianoRoll.setMidiClip (nullptr);
+                bottomMode = BottomMode::Detail;
+                resized();
+            }
+
+        statusLabel.setText (isUndo ? "Undo" : "Redo", dontSendNotification);
+        statusHoldUntilMs = Time::getMillisecondCounter() + 1500;
     }
 
     void startSlide()
@@ -1446,6 +1575,15 @@ private:
         // Ctrl/Cmd file commands first (isCommandDown() == Ctrl on Windows).
         if (mods.isCommandDown())
         {
+            // W05: undo/redo. Ctrl+Z / Ctrl+Shift+Z, with Ctrl+Y as the Windows-convention alias.
+            if (letter == 'Z')
+            {
+                if (mods.isShiftDown()) doRedo();
+                else                    doUndo();
+                return true;
+            }
+            if (letter == 'Y') { doRedo(); return true; }
+
             if (letter == 'S')
             {
                 if (mods.isShiftDown())  { if (controlBar.onSaveAs) controlBar.onSaveAs(); }
@@ -3230,6 +3368,103 @@ private:
     }
 
     //==============================================================================
+    // --selftest-undo (W05): prove the undo/redo round-trip headlessly against the Edit's own
+    // UndoManager. Explicit beginNewTransaction calls make the gate deterministic (the engine's
+    // 350 ms auto-seal timer needs message-loop time); clearUndoHistory first gives a guaranteed
+    // clean baseline whatever ran before. Legs: slot-clip create -> delete -> undo -> redo (with
+    // canUndo/canRedo transition asserts at every step), then a MIDI-note add undone on the
+    // resurrected clip. All synchronous message-thread work.
+    void runUndoSelftest()
+    {
+        auto* ed = session.getEdit();
+        if (ed == nullptr) { finishUndoSelftest (false, false, false, false, false, false, false, false); return; }
+
+        FORGE_LOG_INFO ("selftest-undo: slot-clip create/delete + note-edit undo/redo round-trips");
+
+        auto& um = ed->getUndoManager();
+        um.clearUndoHistory();
+        const bool baselineClean = ! um.canUndo() && ! um.canRedo();
+
+        auto slotClip = [this]() -> te::Clip*
+        {
+            auto* s = session.getClipSlot (0, 0);
+            return s != nullptr ? s->getClip() : nullptr;
+        };
+
+        // T1: create a born-audible MIDI clip in slot (0,0).
+        um.beginNewTransaction();
+        const bool created = session.createMidiClipInSlot (0, 0, "UNDO") != nullptr
+                             && slotClip() != nullptr;
+        const bool canUndoAfterCreate = um.canUndo();
+
+        // T2: delete it.
+        um.beginNewTransaction();
+        if (auto* c = slotClip())
+            c->removeFromParent();
+        const bool emptyAfterDelete = slotClip() == nullptr;
+
+        // Undo T2 -> the clip is back; redo T2 -> gone again.
+        ed->undo();
+        const bool filledAfterUndo = slotClip() != nullptr;
+        const bool canRedoAfterUndo = um.canRedo();
+
+        ed->redo();
+        const bool emptyAfterRedo = slotClip() == nullptr;
+
+        // Note leg: bring the clip back (undo T2 again) and undo a single note add.
+        ed->undo();
+        bool noteLegOk = false;
+
+        if (auto* mc = dynamic_cast<te::MidiClip*> (slotClip()))
+        {
+            auto& seq = mc->getSequence();
+            const int before = seq.getNumNotes();
+
+            um.beginNewTransaction();
+            seq.addNote (60, te::BeatPosition::fromBeats (0.0), te::BeatDuration::fromBeats (1.0),
+                         100, 0, &um);
+            const bool added = seq.getNumNotes() == before + 1;
+
+            ed->undo();
+            noteLegOk = added && seq.getNumNotes() == before && um.canRedo();
+        }
+
+        finishUndoSelftest (baselineClean, created, canUndoAfterCreate, emptyAfterDelete,
+                            filledAfterUndo, canRedoAfterUndo, emptyAfterRedo, noteLegOk);
+    }
+
+    void finishUndoSelftest (bool baselineClean, bool created, bool canUndoAfterCreate,
+                             bool emptyAfterDelete, bool filledAfterUndo, bool canRedoAfterUndo,
+                             bool emptyAfterRedo, bool noteLegOk)
+    {
+        const bool pass = baselineClean && created && canUndoAfterCreate && emptyAfterDelete
+                          && filledAfterUndo && canRedoAfterUndo && emptyAfterRedo && noteLegOk;
+
+        String report;
+        report << "mode=undo" << newLine
+               << "baselineClean="     << (baselineClean ? 1 : 0) << newLine
+               << "clipCreated="       << (created ? 1 : 0) << newLine
+               << "canUndoAfterCreate=" << (canUndoAfterCreate ? 1 : 0) << newLine
+               << "emptyAfterDelete="  << (emptyAfterDelete ? 1 : 0) << newLine
+               << "filledAfterUndo="   << (filledAfterUndo ? 1 : 0) << newLine
+               << "canRedoAfterUndo="  << (canRedoAfterUndo ? 1 : 0) << newLine
+               << "emptyAfterRedo="    << (emptyAfterRedo ? 1 : 0) << newLine
+               << "noteLeg="           << (noteLegOk ? 1 : 0) << newLine
+               << "result="            << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write undo selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Undo selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -3970,7 +4205,7 @@ static void runMenuSelfTest()
                            && names[(int) ForgeMenuModel::menuFile]      == "File"
                            && names[(int) ForgeMenuModel::menuTransport] == "Transport";
 
-    const int expectedCounts[] = { 9, 1, 7, 6, 1 };   // File, Edit, View (+2 W04b pop-outs), Transport, Help
+    const int expectedCounts[] = { 9, 3, 7, 6, 1 };   // File, Edit (+2 W05 undo/redo), View, Transport, Help
     bool countsPass = names.size() == (int) (sizeof (expectedCounts) / sizeof (expectedCounts[0]));
     for (int m = 0; countsPass && m < names.size(); ++m)
         countsPass = model.getMenuForIndex (m, names[m]).getNumItems() == expectedCounts[m];
@@ -4092,6 +4327,7 @@ public:
                             : commandLine.contains ("--selftest-sync")           ? "selftest-sync"           // before bare --selftest
                             : commandLine.contains ("--selftest-livesync")       ? "selftest-livesync"       // before bare --selftest
                             : commandLine.contains ("--selftest-popout")         ? "selftest-popout"         // before bare --selftest
+                            : commandLine.contains ("--selftest-undo")           ? "selftest-undo"           // before bare --selftest
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -4139,6 +4375,7 @@ public:
                         : commandLine.contains ("--selftest-livesync")       ? SelfTest::livesync       // before bare --selftest
                         : commandLine.contains ("--selftest-tray")           ? SelfTest::tray           // before bare --selftest
                         : commandLine.contains ("--selftest-popout")         ? SelfTest::popout         // before bare --selftest
+                        : commandLine.contains ("--selftest-undo")           ? SelfTest::undo           // before bare --selftest
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));

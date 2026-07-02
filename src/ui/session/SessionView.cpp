@@ -530,7 +530,8 @@ void SessionView::refreshSlotStates()
 // getClipSlot (R1/R2), compute its state (computeSlotState gates the spin-locked queue read), and
 // push only when changed. Scene-row state is derived from the column states of that row.
 // W04a: one fractional-beat read per tick additionally drives the playing/queued beat pulse — only
-// those animated pads repaint per tick; everything else keeps the repaint-on-change behaviour.
+// those animated pads (and scene rows, which pulse with the same phases) repaint per tick;
+// everything else keeps the repaint-on-change behaviour.
 
 void SessionView::timerCallback()
 {
@@ -653,12 +654,22 @@ void SessionView::timerCallback()
                                         : anyQueued  ? SceneLaunchState::queued
                                                      : SceneLaunchState::idle;
 
-        if (scenes != nullptr
-            && isPositiveAndBelow (s, lastSceneState.size())
-            && lastSceneState.getReference (s) != rowState)
+        if (scenes != nullptr && isPositiveAndBelow (s, lastSceneState.size()))
         {
-            lastSceneState.set (s, rowState);
-            scenes->setSceneState (s, rowState);
+            if (lastSceneState.getReference (s) != rowState)
+            {
+                lastSceneState.set (s, rowState);
+                scenes->setSceneState (s, rowState);
+            }
+
+            // Beat-pulse parity with the pads (W04a): reuse the SAME per-tick phases and curve
+            // (padPulseAlpha) for the launched/queued row's ring; every other row is parked at
+            // the no-pulse sentinel, so its change gate keeps it repaint-free (§e).
+            const float rowPulse = ! havePhase                             ? -1.0f
+                                 : rowState == SceneLaunchState::playing   ? padPulseAlpha (SlotVisualState::playing, beatPhase)
+                                 : rowState == SceneLaunchState::queued    ? padPulseAlpha (SlotVisualState::queued,  twoBeatPhase)
+                                                                           : -1.0f;
+            scenes->setScenePulse (s, rowPulse);
         }
     }
 }

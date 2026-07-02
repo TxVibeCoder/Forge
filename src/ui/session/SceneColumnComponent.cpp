@@ -5,31 +5,51 @@ using namespace juce;
 
 //==============================================================================
 /*  SceneRow — one scene-launch row: a ▶ launch button on the left and the scene name (or its
-    1-based row number) filling the rest. The row holds its scene index and a pushed-in
-    SceneLaunchState only — never a te::Scene*. The launch button fires onLaunched(); a
-    right-click (or the playing/queued affordance) fires onStopped(); both are wired up to the
-    column's seams by SceneColumnComponent.
+    1-based row number) filling the rest. The row holds its scene index, a pushed-in
+    SceneLaunchState, and a pushed-in beat-pulse alpha only — never a te::Scene*. The launch
+    button fires onLaunched(); a right-click (or the playing/queued affordance) fires onStopped();
+    both are wired up to the column's seams by SceneColumnComponent, and both are named in the
+    row's tooltip (the right-click stop is otherwise undiscoverable).
 
     State render (mirrors the slot pad vocabulary, §d + the W04a semantic accents, named
-    ForgeLookAndFeel colours only — playing/queued speak the play-green family, never amber):
-      - idle    → panelBg row, textPrim name, neutral ▶
+    ForgeLookAndFeel colours only — playing/queued speak the play-green family, never amber;
+    hover lifts the base fill to neutral raisedBg — chrome, not a semantic accent):
+      - idle    → panelBg row (raisedBg while hovered), textPrim name, neutral ▶
       - queued  → 2px playGreenDim outline (about to fire), playGreenDim ▶
       - playing → playGreen-tinted fill + 2px playGreen outline, dark name, playGreen ▶
+    The queued/playing outline beat-pulses via the pushed-in pulse alpha, matching the pads.
 */
-class SceneColumnComponent::SceneRow : public Component
+class SceneColumnComponent::SceneRow : public Component,
+                                       public SettableTooltipClient
 {
 public:
     SceneRow (int idx, const String& displayName)
         : sceneIndex (idx), name (displayName)
     {
+        // Idle-hover affordance: repaint on mouse enter/exit ONLY (no polling) so paint() can
+        // lift the base fill to raisedBg while the pointer is over the row.
+        setRepaintsOnMouseActivity (true);
+
+        // Name BOTH interactions in one tooltip — the row (SettableTooltipClient) covers the
+        // name area and the ▶ button carries the same text.
+        const String tip = "Launch " + name + String::fromUTF8 (" \xe2\x80\x94 right-click stops the row");
+        setTooltip (tip);
+
         // ▶ launch button. Transparent fill so the row's own paint() shows through; the glyph
         // recolours with state via refreshLaunchLook().
         launchButton.setButtonText (String::charToString ((juce_wchar) 0x25b6));   // ▶
         launchButton.setColour (TextButton::buttonColourId, Colours::transparentBlack);
         launchButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textPrim));
-        launchButton.setTooltip ("Launch " + name);
+        launchButton.setTooltip (tip);
         launchButton.onClick = [this] { if (onLaunched) onLaunched (sceneIndex); };
         addAndMakeVisible (launchButton);
+
+        // Route the button's mouse events through the row too: setRepaintsOnMouseActivity only
+        // sees the ROW's own enter/exit, so without this the hover fill drops out (and never
+        // re-fires) while the pointer crosses the ▶ button — a visible flicker over the row's
+        // primary click target. This also makes right-click-stop work over the button, which
+        // the shared tooltip already promises.
+        launchButton.addMouseListener (this, false);
 
         refreshLaunchLook();
     }
@@ -46,6 +66,19 @@ public:
         }
     }
 
+    /** Pushed every poll tick while this row is animated (queued / playing), and parked at the
+        negative no-pulse sentinel otherwise — the change gate below (copied from
+        ClipSlotComponent::setPulseAlpha) is what keeps static rows repaint-free (§e): a row
+        repaints per tick ONLY while its pulse value is actually moving. */
+    void setPulse (float newPulseAlpha)
+    {
+        if (! approximatelyEqual (pulseAlpha, newPulseAlpha))
+        {
+            pulseAlpha = newPulseAlpha;
+            repaint();
+        }
+    }
+
     /** Right-click anywhere on the row stops this scene's clips (the symmetric of left-click
         launch), routed up through the column's onSceneStopped seam. */
     void mouseDown (const MouseEvent& e) override
@@ -54,14 +87,22 @@ public:
             onStopped (sceneIndex);
     }
 
+    // Explicit repaint on enter/exit: covers the events the ▶ button forwards via its mouse
+    // listener (child→outside / outside→child), which setRepaintsOnMouseActivity can't see.
+    void mouseEnter (const MouseEvent&) override { repaint(); }
+    void mouseExit  (const MouseEvent&) override { repaint(); }
+
     void paint (Graphics& g) override
     {
         auto b = getLocalBounds().toFloat().reduced ((float) SessionLayout::slotPad);
 
-        // Base fill — panel row, tinted playGreen when this scene is the active (playing) row
-        // (W04a: "sound is happening here" is green, never amber).
+        // Base fill — panel row, lifted to raisedBg while hovered (neutral chrome, NOT a semantic
+        // accent: hover is not launch state; enter/exit-driven, never polled — and child-inclusive,
+        // so the fill holds while the pointer is over the ▶ button), tinted playGreen when this
+        // scene is the active (playing) row (W04a: "sound is happening here" is green, never amber).
         const bool playing = (state == SceneLaunchState::playing);
-        g.setColour (Colour (ForgeLookAndFeel::panelBg));
+        g.setColour (Colour (isMouseOverOrDragging (true) ? ForgeLookAndFeel::raisedBg
+                                                          : ForgeLookAndFeel::panelBg));
         g.fillRoundedRectangle (b, 3.0f);
 
         if (playing)
@@ -84,8 +125,14 @@ public:
 
         if (state == SceneLaunchState::queued || playing)
         {
+            // Beat-pulse parity with the slot pads (W04a): the pushed-in pulseAlpha modulates the
+            // ring. pulseAlpha < 0 => no beat pulse flowing (transport not running / poll edge):
+            // fall back to the state's peak so the ring never vanishes (mirrors the pad render).
+            const float ringAlpha = playing ? (pulseAlpha >= 0.0f ? pulseAlpha : 1.0f)
+                                            : (pulseAlpha >= 0.0f ? pulseAlpha : 0.75f);
+
             g.setColour (Colour (playing ? ForgeLookAndFeel::playGreen
-                                         : ForgeLookAndFeel::playGreenDim));
+                                         : ForgeLookAndFeel::playGreenDim).withAlpha (ringAlpha));
             g.drawRoundedRectangle (b, 3.0f, 2.0f);
         }
     }
@@ -116,6 +163,7 @@ private:
     const int sceneIndex;
     const String name;
     SceneLaunchState state = SceneLaunchState::idle;
+    float pulseAlpha = -1.0f;   // negative = no pulse flowing (transport stopped / poll edge)
 
     TextButton launchButton;
     Rectangle<int> nameBounds;
@@ -126,9 +174,10 @@ private:
 //==============================================================================
 SceneColumnComponent::SceneColumnComponent()
 {
-    // MASTER "stop all" ■ — stops every launched clip in the grid. Amber-on-raised, matching
-    // the mixer's transport affordances.
-    stopAllButton.setButtonText (String::charToString ((juce_wchar) 0x25a0));   // ■
+    // MASTER "stop all" — stops every launched clip in the grid. Labelled across the full control
+    // row (legibility: a lone ■ read as decoration); amber-on-raised, matching the mixer's
+    // transport affordances (W04a: amber stays on interactive MASTER chrome only).
+    stopAllButton.setButtonText (String::charToString ((juce_wchar) 0x25a0) + " STOP ALL");   // ■ STOP ALL
     stopAllButton.setColour (TextButton::buttonColourId,  Colour (ForgeLookAndFeel::raisedBg));
     stopAllButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::accent));
     stopAllButton.setTooltip ("Stop all clips");
@@ -183,6 +232,12 @@ void SceneColumnComponent::setSceneState (int sceneIndex, SceneLaunchState state
         row->setState (state);
 }
 
+void SceneColumnComponent::setScenePulse (int sceneIndex, float pulseAlpha)
+{
+    if (auto* row = rows[sceneIndex])
+        row->setPulse (pulseAlpha);
+}
+
 int SceneColumnComponent::getNumSceneRows() const
 {
     return rows.size();
@@ -193,12 +248,12 @@ void SceneColumnComponent::resized()
     auto r = getLocalBounds();
 
     // MASTER band across the top — same height as the track header so it aligns horizontally.
+    // Stacked down the band: MASTER, the full-width "■ STOP ALL" control row, then the SCENES
+    // sublabel on its own line in the remaining (formerly dead) space.
     auto header = r.removeFromTop (SessionLayout::headerH).reduced (6, 4);
     masterLabel.setBounds (header.removeFromTop (20));
-    auto controlRow = header.removeFromTop (24);
-    stopAllButton.setBounds (controlRow.removeFromLeft (28));
-    controlRow.removeFromLeft (6);
-    scenesLabel.setBounds (controlRow);
+    stopAllButton.setBounds (header.removeFromTop (24));
+    scenesLabel.setBounds (header);
 
     // Reserve the per-track clip-stop footer height at the bottom so the scene rows occupy the
     // SAME vertical band as the slot pads in every track column (header / rows / stop-footer).

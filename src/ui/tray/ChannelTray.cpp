@@ -1,5 +1,6 @@
 #include "ui/tray/ChannelTray.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "ui/common/StripWidgets.h"          // shared fader/knob/toggle styling + ranges (W05)
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
@@ -10,21 +11,16 @@ using namespace juce;
 
 namespace
 {
-    // Fader travel in dB — matches the mixer strip fader so the two surfaces read identically
-    // (and matches the range EngineHelpers::set/getTrackVolumeDb round-trips cleanly).
-    constexpr double kMinDb = -60.0;
-    constexpr double kMaxDb =   6.0;
+    // Fader/pan/send ranges + the fader/pan/send/toggle styling + busLetter are shared with the
+    // mixer strips via ui/common/StripWidgets.h (W05) — same values, one definition, so the two
+    // surfaces can't drift. Bring the send range + busLetter into scope so the sync-clamp / tooltip
+    // / label call sites stay byte-identical; the style helpers are called via forge::strip::.
+    // (The fader/pan ranges are consumed inside those helpers, not at any call site here.)
+    using forge::strip::kMinSendDb;
+    using forge::strip::kMaxSendDb;
+    using forge::strip::busLetter;
 
-    // Pan travel: hard-left (-1) .. centre (0) .. hard-right (+1).
-    constexpr double kMinPan = -1.0;
-    constexpr double kMaxPan =  1.0;
-
-    // Aux-send knob travel in dB. The seam reports engine silence (<= -100) for "no send", so the
-    // knob clamps to the bottom until the user dials one in — same convention as the mixer.
-    constexpr double kMinSendDb = -60.0;
-    constexpr double kMaxSendDb =   6.0;
-
-    // Layout constants (compact tray variants of the MixerView strip metrics).
+    // Layout constants (compact tray variants of the MixerView strip metrics) — tray-local.
     constexpr int bandH      = 6;     // track-colour band across the top (painted, not a child)
     constexpr int nameH      = 20;
     constexpr int panH       = 48;
@@ -34,8 +30,6 @@ namespace
     constexpr int controlsH  = 26;    // the M/S row at the bottom
     constexpr int faderMinH  = 110;   // insert rows never squeeze the fader below this
     constexpr int meterW     = 10;    // peak-meter bar beside the fader (W04b)
-
-    juce::String busLetter (int b) { return String::charToString ((juce_wchar) ('A' + b)); }
 }
 
 //==============================================================================
@@ -50,13 +44,7 @@ ChannelTray::ChannelTray (ProjectSession& s)
     addAndMakeVisible (nameLabel);
 
     // --- Pan (rotary, -1..+1) ----------------------------------------------------------------
-    pan.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-    pan.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-    pan.setRange (kMinPan, kMaxPan, 0.01);
-    pan.setDoubleClickReturnValue (true, 0.0);   // double-click -> centre
-    pan.setColour (Slider::thumbColourId,             Colour (ForgeLookAndFeel::accent));
-    pan.setColour (Slider::rotarySliderFillColourId,  Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-    pan.setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+    forge::strip::stylePanKnob (pan);
     pan.setTooltip ("Pan");
     pan.onValueChange = [this]
     {
@@ -71,13 +59,7 @@ ChannelTray::ChannelTray (ProjectSession& s)
     for (int b = 0; b < auxBusCount; ++b)
     {
         auto* knob = sendKnobs.add (new Slider());
-        knob->setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-        knob->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-        knob->setRange (kMinSendDb, kMaxSendDb, 0.1);
-        knob->setDoubleClickReturnValue (true, kMinSendDb);   // double-click -> no send
-        knob->setColour (Slider::thumbColourId,             Colour (ForgeLookAndFeel::accent));
-        knob->setColour (Slider::rotarySliderFillColourId,  Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-        knob->setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+        forge::strip::styleSendKnob (*knob);
         knob->setTooltip ("Send to Return " + busLetter (b));
         knob->onValueChange = [this, b, knob]
         {
@@ -107,16 +89,7 @@ ChannelTray::ChannelTray (ProjectSession& s)
     addAndMakeVisible (addInsertButton);
 
     // --- Volume fader (vertical, dB text box below) --------------------------------------------
-    fader.setSliderStyle (Slider::LinearVertical);
-    fader.setRange (kMinDb, kMaxDb, 0.1);
-    fader.setNumDecimalPlacesToDisplay (1);
-    fader.setTextValueSuffix (" dB");
-    fader.setDoubleClickReturnValue (true, 0.0);   // double-click -> unity (0 dB)
-    fader.setColour (Slider::thumbColourId,          Colour (ForgeLookAndFeel::accent));
-    fader.setColour (Slider::trackColourId,          Colour (ForgeLookAndFeel::accent).withAlpha (0.5f));
-    fader.setColour (Slider::backgroundColourId,     Colour (ForgeLookAndFeel::raisedBg));
-    fader.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
-    fader.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
+    forge::strip::styleDbFader (fader);
     fader.setTextBoxStyle (Slider::TextBoxBelow, false, preferredWidth - 32, 16);
     fader.onValueChange = [this]
     {
@@ -131,13 +104,11 @@ ChannelTray::ChannelTray (ProjectSession& s)
     addAndMakeVisible (meter);
 
     // --- M / S toggles --------------------------------------------------------------------------
+    // Shared style (W05) + add-and-show; the lambda keeps the caller-owned addAndMakeVisible
+    // (styleStripToggle is style-only — see StripWidgets.h).
     auto configureToggle = [this] (TextButton& b)
     {
-        b.setClickingTogglesState (true);
-        b.setColour (TextButton::buttonColourId,   Colour (ForgeLookAndFeel::raisedBg));
-        b.setColour (TextButton::buttonOnColourId, Colour (ForgeLookAndFeel::accent));
-        b.setColour (TextButton::textColourOffId,  Colour (ForgeLookAndFeel::textSec));
-        b.setColour (TextButton::textColourOnId,   Colour (ForgeLookAndFeel::onAccent));
+        forge::strip::styleStripToggle (b);
         addAndMakeVisible (b);
     };
     configureToggle (muteButton);
