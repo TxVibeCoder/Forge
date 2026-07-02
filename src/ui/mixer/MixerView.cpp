@@ -75,39 +75,49 @@ public:
         detach();
     }
 
-    /** Registers as a Client on `m`'s measurer so getAndClearAudioLevel() returns live peaks. */
+    /** Registers as a Client on `m`'s measurer so getAndClearAudioLevel() returns live peaks.
+
+        LIFETIME: the source is held as a juce::WeakReference (LevelMeasurer is declared weak-
+        referenceable in the engine), because a measurer's OWNER can die under us on the message
+        thread — the master measurer lives on the playback context (freed by freePlaybackContext /
+        device restarts), and a track measurer's LevelMeterPlugin can be reclaimed by the engine's
+        plugin cull after a track delete. The weak ref nulls itself exactly when the owner dies, so
+        detach() skips removeClient precisely when calling it would walk freed memory (the W03
+        sync-gate teardown spun forever on exactly that). A dead measurer's client list died with
+        it, so skipping the unregister is the correct teardown, not a leak. */
     void attach (te::LevelMeasurer* m)
     {
-        if (m == measurer)
+        // Note: a dead-and-recycled source at the same address compares as changed here, because
+        // the weak ref reads back null once the old owner died — which forces the re-register the
+        // fresh measurer needs.
+        if (measurer.get() == m)
             return;
 
         detach();
         measurer = m;
 
-        if (measurer != nullptr)
-            measurer->addClient (client);
+        if (m != nullptr)
+            m->addClient (client);
     }
 
     void detach()
     {
-        if (measurer != nullptr)
-        {
-            measurer->removeClient (client);
-            measurer = nullptr;
-        }
+        if (auto* m = measurer.get())
+            m->removeClient (client);   // owner still alive: unregister properly
 
+        measurer = nullptr;
         client.reset();
         currentDb = kMeterMinDb;
         repaint();
     }
 
-    bool hasSource() const noexcept { return measurer != nullptr; }
+    bool hasSource() const noexcept { return measurer.get() != nullptr; }
 
     /** Pull the latest peak off the measurer and apply decay. Called on the MixerView timer.
         `secondsSinceLast` is the timer interval, used for the fall-off rate. */
     void poll (float secondsSinceLast)
     {
-        if (measurer == nullptr)
+        if (measurer.get() == nullptr)
             return;
 
         // Peak across the active channels (mono bar shows the hotter side).
@@ -159,7 +169,7 @@ public:
     }
 
 private:
-    te::LevelMeasurer* measurer = nullptr;
+    juce::WeakReference<te::LevelMeasurer> measurer;   // nulls itself when the owner dies (see attach)
     te::LevelMeasurer::Client client;
     float currentDb = kMeterMinDb;
 
@@ -636,6 +646,8 @@ public:
         pan.setColour (Slider::rotarySliderOutlineColourId, Colour (ForgeLookAndFeel::hairline));
         pan.setValue (EngineHelpers::getTrackPan (track), dontSendNotification);
         pan.onValueChange = [this] { EngineHelpers::setTrackPan (track, (float) pan.getValue()); };
+        pan.onDragStart   = [this] { panDragging = true; };
+        pan.onDragEnd     = [this] { panDragging = false; };
         addAndMakeVisible (pan);
 
         // --- Aux sends (only when the aux seam is bound) ----------------------------------
@@ -668,6 +680,8 @@ public:
         fader.setTextBoxStyle (Slider::TextBoxBelow, false, MixerLayout::stripW - 8, 16);
         fader.setValue (EngineHelpers::getTrackVolumeDb (track), dontSendNotification);
         fader.onValueChange = [this] { EngineHelpers::setTrackVolumeDb (track, (float) fader.getValue()); };
+        fader.onDragStart   = [this] { faderDragging = true; };
+        fader.onDragEnd     = [this] { faderDragging = false; };
         addAndMakeVisible (fader);
 
         // --- M / S toggles ----------------------------------------------------------------
@@ -702,6 +716,37 @@ public:
     }
 
     PeakMeter& getMeter() { return meter; }
+
+    /** Engine→widget sync for one 28 Hz tick: pulls fader/pan/M/S/name from the live track so a
+        change made on another surface (MIDI-learn hardware, automation) appears here without a
+        re-select. Skips any control mid-interaction; all writes use dontSendNotification, so no
+        engine write-back can loop. Slider::setValue and Button::setToggleState self-no-op on
+        unchanged values and the name is edge-compared, so a steady-state tick repaints nothing.
+        Hot path — never logs. */
+    void syncControls()
+    {
+        if (! faderDragging && ! fader.hasKeyboardFocus (true))
+            fader.setValue (EngineHelpers::getTrackVolumeDb (track), dontSendNotification);
+
+        if (! panDragging && ! pan.hasKeyboardFocus (true))
+            pan.setValue (EngineHelpers::getTrackPan (track), dontSendNotification);
+
+        if (! muteButton.isMouseButtonDown())
+            muteButton.setToggleState (track.isMuted (false), dontSendNotification);
+
+        if (! soloButton.isMouseButtonDown())
+            soloButton.setToggleState (track.isSolo (false), dontSendNotification);
+
+        const auto liveName = track.getName();
+        if (nameLabel.getText() != liveName)
+            nameLabel.setText (liveName, dontSendNotification);
+    }
+
+    /** Fader value (dB) currently shown — selftest seam (read via MixerView::getStripFaderDb). */
+    double getFaderDb() const { return fader.getValue(); }
+
+    /** Mute-button state currently shown — selftest seam (read via MixerView::getStripMuted). */
+    bool isMuteShown() const { return muteButton.getToggleState(); }
 
     void paint (Graphics& g) override
     {
@@ -761,6 +806,10 @@ private:
     te::AudioTrack& track;
     std::function<void()> onInsertsChanged;
 
+    // Set for the duration of a mouse drag on the matching slider — syncControls() skips a
+    // control the user is holding, so the 28 Hz engine→widget sync never fights a gesture.
+    bool faderDragging = false, panDragging = false;
+
     Label nameLabel;
     Slider fader, pan;
     TextButton muteButton { "M" }, soloButton { "S" };
@@ -815,13 +864,22 @@ public:
             if (auto mv = edit.getMasterVolumePlugin())
                 mv->setVolumeDb (jlimit (-100.0f, 12.0f, (float) fader.getValue()));
         };
+        fader.onDragStart = [this] { faderDragging = true; };
+        fader.onDragEnd   = [this] { faderDragging = false; };
         addAndMakeVisible (fader);
     }
 
     /*  Re-points the meter at the CURRENT playback context's master output measurer and pulls a
         sample. masterLevels is post master-fader and reading it mutates nothing in the Edit; the
         context comes and goes with the transport graph, so we re-bind every poll. PeakMeter::
-        attach() no-ops when the source is unchanged and detaches (empties the bar) on nullptr. */
+        attach() no-ops when the source is unchanged and detaches (empties the bar) on nullptr —
+        and its WeakReference source makes a freed context's dead measurer safe to rebind over
+        (the W03 sync-gate teardown spun forever on the old raw-pointer detach).
+
+        Also live-syncs the fader from the master volume plugin (guarded: never mid-gesture, and
+        with dontSendNotification so nothing writes back) so an external change — MIDI-learn,
+        automation — shows without a rebuild. A null plugin is skipped silently: the ctor already
+        logged it once, and this poll is a hot path that must never log.                        */
     void pollMeter (float secondsSinceLast)
     {
         te::LevelMeasurer* src = nullptr;
@@ -830,6 +888,10 @@ public:
 
         meter.attach (src);
         meter.poll (secondsSinceLast);
+
+        if (! faderDragging && ! fader.hasKeyboardFocus (true))
+            if (auto mv = edit.getMasterVolumePlugin())
+                fader.setValue (mv->getVolumeDb(), dontSendNotification);
     }
 
     void paint (Graphics& g) override
@@ -867,6 +929,11 @@ private:
     static constexpr int meterW  = 10;
 
     te::Edit& edit;
+
+    // Set for the duration of a fader drag — pollMeter's fader sync skips a held control, so the
+    // 28 Hz engine→widget sync never fights a gesture.
+    bool faderDragging = false;
+
     Label nameLabel;
     Slider fader;
     PeakMeter meter;
@@ -923,6 +990,8 @@ public:
             if (returnTrack != nullptr)
                 EngineHelpers::setTrackVolumeDb (*returnTrack, (float) fader.getValue());
         };
+        fader.onDragStart = [this] { faderDragging = true; };
+        fader.onDragEnd   = [this] { faderDragging = false; };
         addAndMakeVisible (fader);
 
         addAndMakeVisible (meter);
@@ -1001,8 +1070,35 @@ public:
 
     bool isLive() const noexcept { return returnTrack != nullptr; }
 
-    /** Pull a meter sample (no-op until the bus is live). Called on the MixerView timer — never logs. */
-    void pollMeter (float dt) { if (returnTrack != nullptr) meter.poll (dt); }
+    /** Pull a meter sample and live-sync fader/M/S from the return track (no-op until the bus is
+        live). Guards mirror ChannelStrip::syncControls; called on the MixerView timer — never logs. */
+    void pollMeter (float dt)
+    {
+        // Re-resolve through the seam BEFORE any dereference (the SessionView R1 rule): the cached
+        // track can be deleted out from under us (e.g. the return lane's Delete Track in Arrange),
+        // and MixerView's structural guard deliberately excludes aux tracks from its count — so a
+        // stale pointer here would be a deterministic 28 Hz use-after-free (W03 QC blocker).
+        auto* live = (session != nullptr) ? session->getAuxReturnTrack (busIndex) : nullptr;
+        if (live != returnTrack)
+        {
+            refresh();   // re-resolves the pointer and flips back to placeholder if the bus died
+            return;
+        }
+
+        if (returnTrack == nullptr)
+            return;
+
+        meter.poll (dt);
+
+        if (! faderDragging && ! fader.hasKeyboardFocus (true))
+            fader.setValue (EngineHelpers::getTrackVolumeDb (*returnTrack), dontSendNotification);
+
+        if (! muteButton.isMouseButtonDown())
+            muteButton.setToggleState (returnTrack->isMuted (false), dontSendNotification);
+
+        if (! soloButton.isMouseButtonDown())
+            soloButton.setToggleState (returnTrack->isSolo (false), dontSendNotification);
+    }
 
     void paint (Graphics& g) override
     {
@@ -1068,6 +1164,10 @@ private:
     int busIndex = 0;
     te::AudioTrack* returnTrack = nullptr;   // re-resolved each refresh; never cached across one
 
+    // Set for the duration of a fader drag — pollMeter's sync skips a held control, so the
+    // 28 Hz engine→widget sync never fights a gesture.
+    bool faderDragging = false;
+
     Label nameLabel;
     TextButton enableButton;
     Slider fader;
@@ -1097,7 +1197,7 @@ void MixerView::setEdit (te::Edit* e)
     rebuild();
 
     if (edit != nullptr)
-        startTimerHz (28);   // ~28 Hz meter polling — only while an edit is bound
+        startTimerHz (28);   // ~28 Hz meter + control live-sync poll — only while an edit is bound
     else
         stopTimer();
 }
@@ -1110,6 +1210,8 @@ void MixerView::setSession (ProjectSession* s)
 
 void MixerView::rebuild()
 {
+    lastLoggedTrackCount = -1;   // re-arm the poll's edge-triggered mismatch WARN
+
     strips.clear();
     returnStrips.clear();
     master.reset();
@@ -1176,16 +1278,53 @@ void MixerView::rebuild()
 
 void MixerView::timerCallback()
 {
+    if (edit == nullptr)
+        return;
+
+    // Structural guard FIRST (same poll-rebuild model as SessionView): if the live non-aux track
+    // count no longer matches our strips, the ChannelStrips hold stale track references — rebuild
+    // BEFORE any strip dereferences one (a track added/deleted in Arrange never rebuilds us
+    // directly). The count mirrors rebuild()'s own filter exactly.
+    int live = 0;
+    for (auto* t : te::getAudioTracks (*edit))
+        if (t != nullptr && ! (session != nullptr && session->isAuxReturnTrack (*t)))
+            ++live;
+
+    if (live != strips.size())
+    {
+        // Edge-triggered (NOT per-tick): only log when the live count differs from the last value
+        // we logged, so a persistent mismatch across ticks emits a single WARN rather than 28/s.
+        if (live != lastLoggedTrackCount)
+        {
+            FORGE_LOG_WARN ("Track count mismatch in mixer poll: " + juce::String (live)
+                            + " live vs " + juce::String (strips.size()) + " (rebuilding)");
+            lastLoggedTrackCount = live;
+        }
+
+        rebuild();
+        return;
+    }
+
     constexpr float dt = 1.0f / 28.0f;
 
+    // Meters + engine→widget control sync per strip; the returns and master sync inside their
+    // own pollMeter. No logging below this line (hot path).
     for (auto* strip : strips)
+    {
         strip->getMeter().poll (dt);
+        strip->syncControls();
+    }
 
     for (auto* r : returnStrips)
         r->pollMeter (dt);
 
     if (master != nullptr)
         master->pollMeter (dt);
+}
+
+void MixerView::refreshControls()
+{
+    timerCallback();
 }
 
 void MixerView::resized()
@@ -1238,4 +1377,20 @@ void MixerView::paint (Graphics& g)
 int MixerView::getNumStrips() const
 {
     return strips.size();
+}
+
+double MixerView::getStripFaderDb (int index) const
+{
+    if (auto* s = strips[index])   // OwnedArray operator[] is range-checked (nullptr out of range)
+        return s->getFaderDb();
+
+    return 0.0;
+}
+
+bool MixerView::getStripMuted (int index) const
+{
+    if (auto* s = strips[index])
+        return s->isMuteShown();
+
+    return false;
 }

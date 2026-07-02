@@ -88,10 +88,13 @@ namespace
 
     // Analyses a freshly-rendered whole-edit WAV for its integrated loudness and logs it. Returns the
     // result so callers can surface it. Whole-edit only — stems exclude the master chain, so their
-    // per-file LUFS is not a master measurement. Message/worker-thread; blocking file IO.
-    forge::dsp::LoudnessAnalyzer::Result analyseRenderedLoudness (const juce::File& wav)
+    // per-file LUFS is not a master measurement. Message/worker-thread; blocking file IO (logging from
+    // the export worker thread is contract-legal — see docs/LOGGING.md). shouldAbort is forwarded to
+    // analyzeFile so a cancelled worker can interrupt the read within one chunk.
+    forge::dsp::LoudnessAnalyzer::Result analyseRenderedLoudness (const juce::File& wav,
+                                                                  const std::function<bool()>& shouldAbort = {})
     {
-        const auto result = forge::dsp::LoudnessAnalyzer::analyzeFile (wav);
+        const auto result = forge::dsp::LoudnessAnalyzer::analyzeFile (wav, shouldAbort);
         FORGE_LOG_INFO ("Export loudness (" + wav.getFileName() + "): " + describeLoudness (result));
         return result;
     }
@@ -364,16 +367,18 @@ bool renderStems (te::Edit& edit, const juce::File& outputDir, juce::String& err
 // Asynchronous export -----------------------------------------------------------------------
 
 // The background render worker. It owns nothing: it holds references to the AsyncRender that
-// created it and to the RenderTask (which the AsyncRender owns on the message thread). It only
-// runs the per-block runJob() loop off the message thread, then marshals the pass result back.
+// created it and to the RenderTask (which the AsyncRender owns on the message thread). It runs the
+// per-block runJob() loop off the message thread and — for a whole-edit pass — the integrated
+// loudness analysis of the finished file, then marshals the pass result (+ optional loudness) back.
 //
 // Cancellation is delivered by AsyncRender::cancel() / the destructor calling
 // task.signalJobShouldExit() on the message thread — renderNextBlock() sees shouldExit() within
 // one block, deletes the partial file, and runJob() returns jobHasFinished, so the loop exits.
 struct AsyncRender::PassThread : public juce::Thread
 {
-    PassThread (AsyncRender& ownerIn, te::Renderer::RenderTask& taskIn)
-        : juce::Thread ("Forge export render"), owner (ownerIn), task (taskIn) {}
+    PassThread (AsyncRender& ownerIn, te::Renderer::RenderTask& taskIn, bool measureLoudnessIn)
+        : juce::Thread ("Forge export render"), owner (ownerIn), task (taskIn),
+          measureLoudness (measureLoudnessIn) {}
 
     void run() override
     {
@@ -401,20 +406,39 @@ struct AsyncRender::PassThread : public juce::Thread
             err = "The render finished but no file was produced.";
         }
 
+        // Integrated-loudness analysis runs HERE, on the worker, so a very long master doesn't block
+        // the UI at completion. It is safe now because the render loop above has exited: the RenderTask
+        // finalised (closed) the output file before its final runJob() returned, so the file is fully
+        // written on disk. We read only task.params.destFile (a by-value juce::File the worker already
+        // touches) and the abort predicate — no AsyncRender member, so this stays clear of the message
+        // thread's state. The abort predicate lets a cancel/teardown join interrupt the read promptly.
+        std::optional<LoudnessResult> measured;
+
+        if (ok && measureLoudness)
+        {
+            auto abortNow = [this] { return threadShouldExit() || task.shouldExit(); };
+            measured = analyseRenderedLoudness (task.params.destFile, abortNow);
+
+            if (abortNow())
+                measured.reset();   // aborted mid-analysis → surface nothing (drop the partial/silence)
+        }
+
         // Marshal the result back to the message thread. The liveness token makes this a no-op if
-        // the handle was destroyed before the message is delivered.
+        // the handle was destroyed before the message is delivered; the measured Result is 4 floats
+        // carried by value, so a late-delivered message dies harmlessly.
         auto aliveToken = owner.alive;
         auto* self = &owner;
 
-        juce::MessageManager::callAsync ([aliveToken, self, ok, err]
+        juce::MessageManager::callAsync ([aliveToken, self, ok, err, measured]
         {
             if (aliveToken != nullptr && aliveToken->load())
-                self->onPassWorkerFinished (ok, err);
+                self->onPassWorkerFinished (ok, err, measured);
         });
     }
 
     AsyncRender& owner;
     te::Renderer::RenderTask& task;
+    const bool measureLoudness;   // ctor-time value copy (never a cross-thread read of owner.isStems)
 };
 
 AsyncRender::AsyncRender (te::Edit& editIn,
@@ -550,7 +574,10 @@ void AsyncRender::startPass (int index)
         return;
     }
 
-    worker = std::make_unique<PassThread> (*this, *currentTask);
+    // measureLoudness = ! isStems: only the whole-edit pass carries the master chain, so only it gets
+    // an integrated-loudness measurement. Passed by value at construction so the worker never reads a
+    // member of *this (which lives on the message thread).
+    worker = std::make_unique<PassThread> (*this, *currentTask, ! isStems);
 
     if (! worker->startThread())
     {
@@ -572,7 +599,7 @@ void AsyncRender::startPass (int index)
     }
 }
 
-void AsyncRender::onPassWorkerFinished (bool ok, juce::String error)
+void AsyncRender::onPassWorkerFinished (bool ok, juce::String error, std::optional<LoudnessResult> measured)
 {
     if (finished)
         return;
@@ -584,6 +611,13 @@ void AsyncRender::onPassWorkerFinished (bool ok, juce::String error)
     }
 
     currentTask.reset();   // message-thread destroy, as the sync path does each loop iteration
+
+    // Publish the worker-measured whole-edit loudness (message-thread member write) BEFORE finishAll
+    // runs, so getLoudness() — read from the caller's onComplete — sees it. Gated exactly as the
+    // publication in finishAll: success, whole-edit only, and not cancelled (a cancelled export drops
+    // loudness even if the render finished). The worker only sets `measured` for a non-stem pass.
+    if (ok && ! isStems && ! cancelRequested.load() && measured)
+        loudness = *measured;
 
     if (ok)
     {
@@ -674,21 +708,16 @@ void AsyncRender::finishAll()
     auto completeCb = std::move (onComplete);
 
     // Additive loudness surfacing — whole-edit success only (stems exclude the master chain, so a per-stem
-    // LUFS is not a master measurement). We are on the message thread; the worker has joined and the file is
-    // fully written (currentTask.reset above flushed it), so this neither races teardown nor touches the
-    // audio thread. It IS synchronous: analyseRenderedLoudness reads + DSP-processes the whole rendered file
-    // here, which briefly blocks the UI at completion for a very long master (an accepted tradeoff for this
-    // offline/on-render feature; moving it to a background thread is a possible follow-up). getLoudness()
-    // exposes the result for a caller reading it from onComplete; onLoudness fires it directly here.
-    if (ok && ! isStems && ! passes.empty() && passes.front().destFile.existsAsFile())
+    // LUFS is not a master measurement). The measurement itself ran on the render worker (see PassThread::run)
+    // and was already published into `loudness` by onPassWorkerFinished, so this block does NO analysis and
+    // never blocks the UI — it just fires the callback for the value the worker computed. getLoudness() exposes
+    // the same value for a caller reading it from onComplete; onLoudness fires it directly here.
+    if (ok && ! isStems && loudness)
     {
-        loudness = analyseRenderedLoudness (passes.front().destFile);   // writes the member BEFORE any callback
+        auto loudnessCb = std::move (onLoudness);
 
-        if (onLoudness)
-        {
-            auto loudnessCb = std::move (onLoudness);
+        if (loudnessCb)
             loudnessCb (*loudness);   // may destroy *this — no member is read afterwards
-        }
     }
 
     if (completeCb)

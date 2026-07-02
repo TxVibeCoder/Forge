@@ -505,6 +505,7 @@ TrackLaneComponent::TrackLaneComponent (TimelineView& v, te::AudioTrack& t)
     configureToggle (muteButton);
     configureToggle (soloButton);
     configureToggle (armButton);
+    configureToggle (autoButton);
 
     muteButton.onClick = [this]
     {
@@ -526,6 +527,14 @@ TrackLaneComponent::TrackLaneComponent (TimelineView& v, te::AudioTrack& t)
         repaint();
     };
 
+    // Expands/collapses this track's automation sub-lane. Pure view state owned by ArrangeView
+    // (no Edit mutation, so no onEditMutated here).
+    autoButton.onClick = [this]
+    {
+        if (onAutomationToggled != nullptr)
+            onAutomationToggled (track, autoButton.getToggleState());
+    };
+
     refreshControlStates();
     rebuildClips();
 }
@@ -542,6 +551,11 @@ void TrackLaneComponent::refreshControlStates()
     muteButton.setToggleState (track.isMuted (false), dontSendNotification);
     soloButton.setToggleState (track.isSolo (false),  dontSendNotification);
     armButton.setToggleState  (armed,                 dontSendNotification);
+
+    // The A (automation lane) indicator is view state owned by ArrangeView, queried the same way
+    // as arm so it too survives rebuild().
+    if (queryAutomationShown != nullptr)
+        autoButton.setToggleState (queryAutomationShown (track), dontSendNotification);
 }
 
 void TrackLaneComponent::setSelectedClip (te::Clip* clip)
@@ -691,17 +705,19 @@ void TrackLaneComponent::resized()
 {
     using namespace ArrangeLayout;
 
-    // Lay out the M / S / R toggle buttons in a row across the bottom half of the header.
+    // Lay out the M / S / R / A toggle buttons in a row across the bottom half of the header.
     auto header = getLocalBounds().removeFromLeft (headerW);
     header.removeFromLeft (10);                     // colour swatch column
     auto controls = header.removeFromBottom (header.getHeight() / 2).reduced (4, 4);
 
-    const int bw = jmax (18, (controls.getWidth() - 8) / 3);
+    const int bw = jmax (18, (controls.getWidth() - 12) / 4);
     muteButton.setBounds (controls.removeFromLeft (bw));
     controls.removeFromLeft (4);
     soloButton.setBounds (controls.removeFromLeft (bw));
     controls.removeFromLeft (4);
     armButton.setBounds  (controls.removeFromLeft (bw));
+    controls.removeFromLeft (4);
+    autoButton.setBounds (controls.removeFromLeft (bw));
 
     const int clipAreaW = jmax (0, getWidth() - headerW);
 
@@ -809,6 +825,9 @@ void ArrangeView::buildSnapSelector()
 
 void ArrangeView::setEdit (te::Edit* e)
 {
+    if (edit != e)
+        autoLaneStates.clear();   // per-session view state; another Edit's itemIDs mean nothing here
+
     edit = e;
     rebuild();
 }
@@ -816,6 +835,7 @@ void ArrangeView::setEdit (te::Edit* e)
 void ArrangeView::rebuild()
 {
     lanes.clear();
+    autoLanes.clear();
     ruler.reset();
     playhead.reset();
 
@@ -913,10 +933,44 @@ void ArrangeView::rebuild()
 
             lane->onEditMutated = [this] { notifyEditMutated(); };
 
+            // ---- W03: per-track automation sub-lane (collapsed by default; A button toggles) ----
+            // View state (expanded flag + param choice) is keyed by track itemID in autoLaneStates
+            // so it survives rebuild(); the components themselves are recreated every pass, exactly
+            // like the lanes, so neither array ever holds a stale engine object.
+            const auto trackID = track->itemID;
+            const auto laneState = autoLaneStates[trackID];   // default-constructs collapsed/Volume on first sight
+
+            auto* autoLane = autoLanes.add (new AutomationLane (view, *track, laneState.param));
+
+            autoLane->onEditMutated  = [this] { notifyEditMutated(); };
+            autoLane->onParamChanged = [this, trackID] (AutomationLane::Param p)
+            {
+                autoLaneStates[trackID].param = p;
+            };
+
+            // Safe capture: lane and autoLane are siblings owned by this ArrangeView and are
+            // destroyed together by the next rebuild(), so the pointer can never outlive its target.
+            lane->onAutomationToggled = [this, trackID, autoLane] (te::AudioTrack&, bool shouldShow)
+            {
+                autoLaneStates[trackID].expanded = shouldShow;
+                autoLane->setVisible (shouldShow);
+                resized();   // re-flow the stack; the playhead overlay grows to span the expansion
+            };
+
+            lane->queryAutomationShown = [this] (te::AudioTrack& t)
+            {
+                const auto it = autoLaneStates.find (t.itemID);
+                return it != autoLaneStates.end() && it->second.expanded;
+            };
+
+            addChildComponent (*autoLane);            // visibility mirrors the expanded view state
+            autoLane->setVisible (laneState.expanded);
+
             addAndMakeVisible (lane);
 
-            // The lane ctor ran refreshControlStates() before queryArmed was wired; re-derive now
-            // so a track that is still armed in the engine shows armed immediately after rebuild().
+            // The lane ctor ran refreshControlStates() before queryArmed/queryAutomationShown were
+            // wired; re-derive now so a track that is still armed in the engine (or has an expanded
+            // automation lane) shows the right indicators immediately after rebuild().
             lane->refreshControlStates();
         }
 
@@ -945,10 +999,23 @@ void ArrangeView::resized()
     const int laneAreaBottom = jmax (rulerH, getHeight() - hintH);
 
     int y = rulerH;
-    for (auto* lane : lanes)
+    for (int i = 0; i < lanes.size(); ++i)
     {
-        lane->setBounds (0, y, getWidth(), laneH);
-        y += laneH + gap;
+        lanes.getUnchecked (i)->setBounds (0, y, getWidth(), laneH);
+        y += laneH;
+
+        // W03: an expanded automation sub-lane sits directly below its track lane; the stack
+        // (and the playhead span computed from y below) grows to fit. Collapsed lanes cost
+        // nothing, so the all-collapsed layout is byte-identical to the pre-W03 one.
+        auto* autoLane = autoLanes[i];   // parallel array; operator[] is range-checked
+
+        if (autoLane != nullptr && autoLane->isVisible())
+        {
+            autoLane->setBounds (0, y, getWidth(), autoLaneH);
+            y += autoLaneH;
+        }
+
+        y += gap;
     }
 
     if (playhead != nullptr)

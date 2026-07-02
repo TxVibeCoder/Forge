@@ -18,6 +18,12 @@
     Ctrl/Cmd during a drag bypasses snap. setSnapEnabled/isSnapEnabled remain as thin wrappers
     over the division model for the existing toolbar seam.
 
+    Automation (W03): each lane header carries an A toggle (beside M/S/R) that expands a 46 px
+    AutomationLane directly below that track lane, showing the track's Volume or Pan curve on
+    the same time axis (see ui/arrange/AutomationLane.h). Subsequent lanes shift down and the
+    playhead overlay grows to span the expanded stack. Expanded/param view state is in-memory
+    per session, keyed by track itemID so it survives rebuild(); nothing is persisted in v1.
+
     Message-thread only.
 */
 
@@ -25,16 +31,21 @@
 
 #include <JuceHeader.h>
 
+#include "ui/arrange/AutomationLane.h"
+
+#include <map>
+
 namespace te = tracktion;
 
 //==============================================================================
 namespace ArrangeLayout
 {
-    constexpr int headerW = 150;   // track header strip width
-    constexpr int laneH   = 76;    // track lane height
-    constexpr int gap     = 4;     // vertical gap between lanes
-    constexpr int rulerH  = 22;    // bars|beats ruler strip height (top of clip area)
-    constexpr int hintH   = 20;    // one-line info/help strip across the very bottom
+    constexpr int headerW   = 150; // track header strip width
+    constexpr int laneH     = 76;  // track lane height
+    constexpr int gap       = 4;   // vertical gap between lanes
+    constexpr int rulerH    = 22;  // bars|beats ruler strip height (top of clip area)
+    constexpr int hintH     = 20;  // one-line info/help strip across the very bottom
+    constexpr int autoLaneH = 46;  // automation sub-lane height (shown below an expanded track lane)
 }
 
 //==============================================================================
@@ -230,6 +241,11 @@ public:
     /** Authoritative arm state for this track, queried from the engine on every refresh so the
         R button never relies on a stale local flag (set by ArrangeView during rebuild). */
     std::function<bool (te::AudioTrack&)> queryArmed;
+    /** Toggles this track's automation sub-lane (the A button beside M/S/R). */
+    std::function<void (te::AudioTrack&, bool)> onAutomationToggled;
+    /** Authoritative expanded state of this track's automation sub-lane, queried from ArrangeView's
+        view-state map on every refresh so the A button survives rebuild() (mirrors queryArmed). */
+    std::function<bool (te::AudioTrack&)> queryAutomationShown;
     /** Invoked after a control (mute/solo/colour) mutates the Edit, so the shell can save. */
     std::function<void()> onEditMutated;
 
@@ -238,7 +254,7 @@ private:
     te::AudioTrack& track;
     juce::OwnedArray<ClipComponent> clipComps;
 
-    juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" };
+    juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" }, autoButton { "A" };
     bool armed = false;
     bool trackSelected = false;
 
@@ -382,8 +398,20 @@ private:
     TimelineView& view;
     te::Edit* edit = nullptr;
     juce::OwnedArray<TrackLaneComponent> lanes;
+    juce::OwnedArray<AutomationLane> autoLanes;    // parallel to lanes (same index); hidden unless expanded
     std::unique_ptr<TimeRulerComponent> ruler;
     std::unique_ptr<PlayheadComponent> playhead;
+
+    /** In-memory per-session automation-lane view state, keyed by track itemID so it survives
+        rebuild() (the lane components themselves are recreated every pass). Cleared when a
+        different Edit is bound; nothing is persisted in v1. */
+    struct AutomationLaneState
+    {
+        bool expanded = false;
+        AutomationLane::Param param = AutomationLane::Param::volume;
+    };
+
+    std::map<te::EditItemID, AutomationLaneState> autoLaneStates;
 
     te::Clip* selectedClip = nullptr;
     te::Track* selectedTrack = nullptr;

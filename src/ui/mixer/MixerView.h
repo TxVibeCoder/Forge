@@ -11,8 +11,14 @@
 
     Fader/pan moves push to the engine live (via EngineHelpers); M/S call AudioTrack::set
     Mute/setSolo. Strips are rebuilt from scratch on setEdit() (no ValueTree-listener storms —
-    same manual-rebuild model as ArrangeView). Peak meters are polled by a single ~28 Hz timer
-    owned by MixerView, which runs only while an Edit is bound.
+    same manual-rebuild model as ArrangeView). A single ~28 Hz timer owned by MixerView, running
+    only while an Edit is bound, polls the peak meters AND live-syncs every strip's controls from
+    the engine, so a value changed on another surface (MIDI-learn hardware, the inspector,
+    automation) appears here without re-selecting. Sync writes use dontSendNotification and skip
+    any control the user is interacting with (drag flags / text-box focus / a held button), so a
+    gesture is never fought and no feedback loop can form. The tick guards structure first: a
+    live track-count mismatch rebuilds the strips before any stale track reference is
+    dereferenced.
 
     Message-thread only.
 */
@@ -44,7 +50,7 @@ public:
     ~MixerView() override;
 
     /** Binds the view to an Edit (or nullptr) and rebuilds one strip per audio track
-        plus the master strip. Starts/stops the meter timer with the binding. */
+        plus the master strip. Starts/stops the meter/live-sync poll timer with the binding. */
     void setEdit (te::Edit*);
 
     /** Binds the aux seam (buses/sends). Call ONCE after construction, before/around setEdit;
@@ -58,6 +64,17 @@ public:
 
     /** Track-strip count (excludes the master strip), for diagnostics / self-tests. */
     int getNumStrips() const;
+
+    /** Runs one poll tick synchronously (structural guard + meters + engine→widget control sync)
+        — the deterministic, headless mirror of the 28 Hz timer for selftests (same seam shape as
+        SessionView::refreshSlotStates). */
+    void refreshControls();
+
+    /** Fader value (dB) shown by the track strip at `index`, or 0.0 out of range — selftest seam. */
+    double getStripFaderDb (int index) const;
+
+    /** Mute-button state shown by the track strip at `index`, or false out of range — selftest seam. */
+    bool getStripMuted (int index) const;
 
 private:
     class ChannelStrip;   // track strip — defined in the .cpp
@@ -78,6 +95,10 @@ private:
     juce::OwnedArray<ChannelStrip> strips;
     juce::OwnedArray<ReturnStrip>  returnStrips;   // always MixerLayout::auxBusCount of them
     std::unique_ptr<MasterStrip> master;
+
+    // Edge-trigger gate for the 28 Hz track-count-mismatch WARN: log only when the live count
+    // differs from the last value we logged (reset to -1 in rebuild()), never on every poll tick.
+    int lastLoggedTrackCount = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MixerView)
 };

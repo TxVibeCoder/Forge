@@ -15,6 +15,7 @@
 #include "services/files/ProjectSession.h"
 #include "services/export/Exporter.h"
 #include "engine/EngineHelpers.h"
+#include "engine/AutomationHelpers.h"
 #include "engine/RecordController.h"
 #include "engine/PluginScanner.h"
 #include "engine/PluginHost.h"
@@ -23,6 +24,8 @@
 #include "engine/ForgeUIBehaviour.h"
 #include "engine/LaunchpadDriver.h"
 #include "engine/ControlSurfaceHost.h"
+#include "engine/MidiClockSync.h"
+#include "engine/MidiClockProbe.h"
 #include "engine/dsp/LoudnessAnalyzer.h"
 #include "ui/arrange/ArrangeView.h"
 #include "ui/markers/MarkerBar.h"
@@ -40,7 +43,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 
@@ -590,6 +593,29 @@ public:
             // emits the expected note-on — proving the Forge-native Launchpad driver end-to-end, no hardware.
             MessageManager::callAsync ([this] { beginControlSurfaceSelftest(); });
         }
+        else if (mode == SelfTest::automation)
+        {
+            // Headless automation-read gate: import a tone on track 0, write a falling volume curve
+            // (fader pos 0.8 @ t=0 -> 0.2 @ t=2s, linear), force the read stream live via updateStream,
+            // then roll and poll volParam->getCurrentValue() to prove the curve drives the parameter
+            // during playback. Event-driven like the other gates: begin after yielding to the loop.
+            MessageManager::callAsync ([this] { beginAutomationSelftest(); });
+        }
+        else if (mode == SelfTest::sync)
+        {
+            // Headless MIDI-clock-out gate: freeze the periodic MIDI rescan, inject a capture probe
+            // over a REAL system MIDI out, roll the transport, and assert the engine emitted SPP +
+            // start/continue + ~bpm*24 clocks + a midiStop on the stop edge. Zero-MIDI-outs machines
+            // take an honest SKIP-degrade path. Event-driven yield discipline like --selftest-midi.
+            MessageManager::callAsync ([this] { beginSelfTestSync(); });
+        }
+        else if (mode == SelfTest::livesync)
+        {
+            // Headless cross-surface live-refresh gate (W03 P5): an engine-side write (the path a
+            // MIDI-learn CC or another surface takes) must appear on the mixer fader/mute and the
+            // inspector's gain slider after one forced sync tick — no re-select, no rebuild.
+            MessageManager::callAsync ([this] { runLiveSyncSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -729,6 +755,19 @@ private:
     int  recordPhase = 0;      // record-selftest state machine: 1 = input opened, 2 = recording
     int  playbackPollTicks = 0;// playback-selftest bounded poll: 10 Hz ticks elapsed
 
+    // --selftest-automation state: prove a volume automation CURVE drives volParam during playback.
+    te::AutomatableParameter::Ptr auVolParam;   // track-0 volume param carrying the test curve
+    bool   auReadingAutomation = false;         // automation read enabled on the record manager
+    bool   auAutomationActive  = false;         // volParam->isAutomationActive() after updateStream()
+    int    auNumPoints         = 0;             // curve point count (must be 2)
+    float  auStaticValueAt1p5  = -1.0f;         // curve math at 1.5 s (must be ~0.35, pre-playback)
+    bool   auEarlyCaptured     = false;         // first poll tick sampled (early value)
+    bool   auLateCaptured      = false;         // a poll tick landed in the 1.5..2.4 s late window
+    float  auEarlyValue        = -1.0f;         // getCurrentValue() early (expect >= 0.7)
+    float  auLateValue         = -1.0f;         // getCurrentValue() late  (expect <= 0.45)
+    double auEarlyPos          = -1.0;          // transport position at the early sample (diagnostic)
+    int    automationPollTicks = 0;             // automation bounded poll: 10 Hz ticks elapsed (cap 40 = ~4 s)
+
     // --selftest-midi state machine (event-driven; mirrors the record selftest's yield discipline).
     static constexpr const char* kSelfTestMidiName = "Forge SelfTest MIDI";
     int  miPhase = 0;                                   // 1=created 2=enabled 3=armed+rolling 4=on 5=off
@@ -764,6 +803,22 @@ private:
     CapturingMidiSink* csSink = nullptr;                // non-owning; owned by the driver inside controlSurface
     bool csClipCreated = false, csInputLaunched = false, csLedCaptured = false;
     int  csExpectedNote = -1, csExpectedVel = -1, csExpectedChan = -1;
+
+    // --selftest-sync (MIDI-clock-out) state. The probe is a shared_ptr because dm.midiOutputs holds
+    // shared_ptr<MidiOutputDevice>; we keep our own handle so we can snapshot() + tear down deterministically.
+    int  syPhase = 0;                                   // 1 = scan settled, 2 = rolled, 3 = stop edge drained
+    std::shared_ptr<MidiClockProbeDevice> syProbe;      // our capture device (also lives in dm.midiOutputs)
+    std::shared_ptr<te::MidiOutputDevice> syEvicted;    // the engine's own entry we evicted; re-inserted at teardown
+    std::unique_ptr<juce::XmlElement> syPropsSnapshot;  // the real device's persisted props BEFORE the probe touched them
+    juce::String syOutName;                             // chosen MIDI-out name (diagnostic)
+    bool syDegraded      = false;                       // true => zero MIDI outs (honest SKIP-degrade path)
+    bool syProbeOpen     = false;                       // probe's juce::MidiOutput actually opened (isOpen)
+    bool syPropRoundTrip = false;                       // setSendingClock(true) -> isSendingClock() == true
+    bool syEnabledOK     = false;                       // probe->isEnabled() after ctor+force (stale-props guard)
+    bool syRolled        = false;                       // transport.isPlaying() after play()
+    int  sySpp = 0, syStartCont = 0, syClock = 0, syStop = 0;   // captured message-type counts
+    double syExpectedClocks = 0.0;                      // seconds * (bpm/60) * 24
+    int  sySavedScanInterval = 4;                       // restore on ALL exit paths (persists to storage)
 
     ControlBar controlBar;
     TimelineView timelineView;
@@ -838,6 +893,13 @@ private:
         tb.queryMetronomeEnabled = [this]            { auto* e = session.getEdit(); return e != nullptr && Metronome::isClickEnabled (*e); };
         tb.onCountInBarsChanged  = [this] (int bars) { if (auto* e = session.getEdit()) Metronome::setCountInBars (*e, bars); };
         tb.queryCountInBars      = [this]            { auto* e = session.getEdit(); return e != nullptr ? Metronome::getCountInBars (*e) : 0; };
+
+        // MIDI-clock out (W03): route the Clock toggle through the MidiClockSync seam. Device-level
+        // (persists per MIDI-out via the engine's props), so no edit guard — and wired here, before
+        // controlBar.setEdit, so the first sync reflects engine truth including persisted state.
+        // (QC caught the seam left unwired at integration — the toggle was inert.)
+        tb.onMidiClockToggled    = [this] (bool on) { MidiClockSync::setSendClockToAll (engine, on); };
+        tb.queryMidiClockEnabled = [this]           { return MidiClockSync::isSendingClockAny (engine); };
     }
 
     void setupStatusStrip()
@@ -1496,6 +1558,145 @@ private:
     }
 
     //==============================================================================
+    // Automation-read selftest (W03 acceptance gate): headlessly prove that a volume automation
+    // CURVE drives the track's volume during playback. Import a tone on track 0, write two points
+    // to its volParam curve (slider pos 0.8 @ t=0 -> 0.2 @ t=2s, linear), force the read stream live
+    // (updateStream, else activation waits on a deferred 10 ms timer), roll the transport, and poll
+    // volParam->getCurrentValue(): it must read high early (>= 0.7) and low late (<= 0.45, curve is
+    // 0.35 at 1.5 s). We assert on getCurrentValue() (the atomic the curve writes), NEVER the async
+    // dB CachedValue. Looping is disabled so position can't wrap before the late sample.
+    void beginAutomationSelftest()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishAutomationSelftest(); return; }
+
+        FORGE_LOG_INFO ("selftest-automation: importing tone + writing a volume curve on track 0");
+
+        // 1. Import a tone on track 0 so there's audio to drive (30 s so the 0..4 s window never runs out).
+        sineFile = createSineWaveFile (44100.0, 30.0, 440.0, 0.2f);
+        clip = session.importAudioFile (sineFile, te::TimePosition());
+        if (clip == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-automation: failed to import test tone");
+            finishAutomationSelftest();
+            return;
+        }
+        arrangeView.rebuild();
+
+        // 2. Grab the track-0 volume automation parameter via the seam.
+        auto* track = te::getAudioTracks (*edit)[0];
+        if (track == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-automation: no audio track 0");
+            finishAutomationSelftest();
+            return;
+        }
+
+        auVolParam = AutomationHelpers::getTrackVolumeParam (*track);
+        if (auVolParam == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-automation: track 0 has no volume parameter");
+            finishAutomationSelftest();
+            return;
+        }
+
+        // 3. Write a falling volume curve (slider position units): 0.8 @ t=0 -> 0.2 @ t=2s, linear.
+        AutomationHelpers::clearAutomation (*auVolParam);
+        AutomationHelpers::addPoint (*auVolParam, 0.0, 0.8f, 0.0f);
+        AutomationHelpers::addPoint (*auVolParam, 2.0, 0.2f, 0.0f);   // addPoint calls updateStream()
+
+        // 4. Force automation read ON (defaults true; assert so a stale/toggled state can't silently
+        //    gate the whole path off) and capture the static preconditions.
+        edit->getAutomationRecordManager().setReadingAutomation (true);
+        auReadingAutomation = edit->getAutomationRecordManager().isReadingAutomation();
+        auAutomationActive  = AutomationHelpers::isActive (*auVolParam);
+        auNumPoints         = AutomationHelpers::getNumPoints (*auVolParam);
+        auStaticValueAt1p5  = AutomationHelpers::getValueAt (*auVolParam, 1.5);
+
+        // Preconditions must hold before we bother rolling — fail fast with a diagnostic.
+        if (! auAutomationActive || auNumPoints != 2
+            || std::abs (auStaticValueAt1p5 - 0.35f) > 0.01f || ! auReadingAutomation)
+        {
+            FORGE_LOG_ERROR ("selftest-automation: preconditions failed (active=" + juce::String (auAutomationActive ? 1 : 0)
+                             + " points=" + juce::String (auNumPoints)
+                             + " valueAt1.5=" + juce::String (auStaticValueAt1p5, 4)
+                             + " reading=" + juce::String (auReadingAutomation ? 1 : 0) + ")");
+            finishAutomationSelftest();
+            return;
+        }
+
+        // 5. Roll. Looping OFF so the playhead can't wrap before the late sample; drain the device
+        //    change cascade and block until the stream is actually rolling (playback-selftest idiom).
+        auto& transport = edit->getTransport();
+        transport.looping = false;
+        transport.ensureContextAllocated();
+        engine.getDeviceManager().dispatchPendingUpdates();
+        transport.setPosition (te::TimePosition());
+        transport.play (false);
+        if (auto* epc = transport.getCurrentPlaybackContext())
+            epc->blockUntilSyncPointChange();
+
+        // 6. Poll at 10 Hz. Capture the FIRST tick unconditionally as the early sample (don't require
+        //    pos < 0.3 s); the timerCallback automation branch bounds the poll (~4 s) so a non-rolling
+        //    device FAILs instead of hanging, and grabs the late sample in the 1.5..2.4 s window.
+        auEarlyCaptured = false;
+        auLateCaptured  = false;
+        auEarlyValue    = -1.0f;
+        auLateValue     = -1.0f;
+        auEarlyPos      = -1.0;
+        automationPollTicks = 0;
+        startTimerHz (10);
+    }
+
+    void finishAutomationSelftest()
+    {
+        if (auto* t = session.getTransport())
+            t->stop (false, false);
+
+        double finalPos = -1.0;
+        if (auto* t = session.getTransport())
+            finalPos = t->getPosition().inSeconds();
+
+        // PASS proves the automation-read PATH end-to-end: an active 2-point volume curve whose static
+        // math is correct, read ON, and getCurrentValue() following the curve high->low across playback.
+        const bool pass = clip != nullptr
+                          && auVolParam != nullptr
+                          && auReadingAutomation
+                          && auAutomationActive
+                          && auNumPoints == 2
+                          && std::abs (auStaticValueAt1p5 - 0.35f) < 0.01f
+                          && auEarlyCaptured && auLateCaptured
+                          && auEarlyValue >= 0.7f
+                          && auLateValue  <= 0.45f;
+
+        String report;
+        report << "mode=automation" << newLine
+               << "importedClip="        << (clip != nullptr ? 1 : 0) << newLine
+               << "readingAutomation="   << (auReadingAutomation ? 1 : 0) << newLine
+               << "automationActive="    << (auAutomationActive ? 1 : 0) << newLine
+               << "numPoints="           << auNumPoints << newLine
+               << "staticValueAt1.5="    << String (auStaticValueAt1p5, 4) << newLine
+               << "earlyCaptured="       << (auEarlyCaptured ? 1 : 0) << newLine
+               << "earlyPosSecs="        << String (auEarlyPos, 3) << newLine
+               << "earlyValue="          << String (auEarlyValue, 4) << newLine
+               << "lateCaptured="        << (auLateCaptured ? 1 : 0) << newLine
+               << "lateValue="           << String (auLateValue, 4) << newLine
+               << "finalPosSecs="        << String (finalPos, 3) << newLine
+               << "result="              << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="             << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write automation selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Automation selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // --selftest-midi (docs/devlog/midi-record-design.md §4): prove MIDI capture straight into a Session
     // ClipSlot with ZERO hardware, by creating a virtual MIDI input, arming slot (0,0), rolling the
     // transport, injecting synthetic notes, then verifying the slot's committed clip captured exactly
@@ -1701,6 +1902,303 @@ private:
 
         FORGE_LOG_INFO ("MIDI selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // --selftest-sync (W03): prove MIDI-clock OUTPUT end-to-end, headless, no hardware analyzer, by
+    // subclassing te::MidiOutputDevice (MidiClockProbeDevice) and capturing the bytes the engine sends
+    // through the real graph (clock-only device inclusion) + generator (24 PPQN) + dispatcher (1ms timer).
+    //
+    // Three load-bearing corrections over the naive recipe (Skeptic verdicts, dossier):
+    //   (1) DEVICE CONFLICT: the engine's own copy of every enabled MIDI out is opened at startup, and the
+    //       GS synth is single-client under WinMM, so a naive second open of the same identifier fails ->
+    //       we closeDevice() and ERASE the engine's same-identifier entry from dm.midiOutputs, then inject
+    //       the probe as sole owner of that port (never via setEnabled, which triggers a rescan).
+    //   (2) DEGRADE DETECTION: base openDevice() returns an empty (success-looking) string when the device
+    //       is disabled -> we check probe->isOpen() (outputDevice != nullptr), never the return string.
+    //   (3) SCAN ORDERING: the initial MIDI scan is a juce::Timer one-shot NOT flushed by
+    //       dispatchPendingUpdates -> we rescanMidiDeviceList() then YIELD until dm.midiOutputs is
+    //       populated BEFORE freezing the interval + injecting (else the wholesale swap wipes the probe).
+
+    // Phase 0: freeze nothing yet — kick a rescan and yield so dm.midiOutputs is populated first.
+    void beginSelfTestSync()
+    {
+        FORGE_LOG_INFO ("selftest-sync: scanning MIDI outputs before probe injection");
+
+        auto& dm = engine.getDeviceManager();
+        sySavedScanInterval = (int) engine.getPropertyStorage()
+                                  .getProperty (te::SettingID::midiScanIntervalSeconds, 4);   // restore on every exit path
+
+        // Fix (3): schedule the one-shot scan and YIELD; the periodic 4s timer would otherwise be the
+        // first thing to populate dm.midiOutputs, far too late for our 300ms cadence.
+        dm.rescanMidiDeviceList();
+
+        syPhase = 1;
+        startTimer (400);   // YIELD: let the 5ms one-shot applyNewMidiDeviceList() populate dm.midiOutputs
+    }
+
+    // Phase 1: MIDI scan has settled. NOW freeze the periodic rescan, resolve a real out, evict the
+    // engine's same-identifier copy, inject the probe, reallocate the playback context, and roll.
+    void syncSelftestInject()
+    {
+        auto& dm = engine.getDeviceManager();
+
+        // Fix (3, cont.): freeze the periodic rescan only AFTER the initial population, so no wholesale
+        // swap wipes the probe. NOTE: this persists to property storage (SettingID::midiScanIntervalSeconds),
+        // so it MUST be restored on every exit path — see finishSelfTestSync().
+        dm.setMidiDeviceScanIntervalSeconds (0);
+
+        const auto outs = juce::MidiOutput::getAvailableDevices();
+        if (outs.isEmpty())
+        {
+            // Honest SKIP-degrade: no MIDI outs exist on this box. Prove only the property round-trip
+            // and a no-crash roll; never claim a clock-out PASS we cannot back with captured bytes.
+            FORGE_LOG_WARN ("selftest-sync: no MIDI outputs present — taking SKIP-degrade path");
+            syDegraded = true;
+
+            // Property round-trip on a bare (un-injected, un-opened) probe: setSendingClock persists +
+            // reflects, with no device rescan. Scoped so its dtor's final saveProps lands BEFORE we
+            // remove the phantom props node it writes under its selftest-only name.
+            {
+                auto bare = std::make_shared<MidiClockProbeDevice> (engine, juce::MidiDeviceInfo ("Forge SelfTest Clock (degraded)", "forge-selftest-clock-degraded"));
+                bare->setSendingClock (true);
+                syPropRoundTrip = bare->isSendingClock();
+            }
+            engine.getPropertyStorage().removePropertyItem (te::SettingID::midiout, "Forge SelfTest Clock (degraded)");
+
+            // No-crash roll with no clock device in the graph.
+            if (auto* t = session.getTransport())
+            {
+                t->play (false);
+                syRolled = t->isPlaying();
+            }
+
+            syPhase = 2;
+            startTimer (500);   // brief roll, then finish (which stops + restores + reports)
+            return;
+        }
+
+        // Prefer the software Microsoft GS synth if present (no hardware needed); else take the first out.
+        int chosen = 0;
+        for (int i = 0; i < outs.size(); ++i)
+            if (outs[i].name.containsIgnoreCase ("Microsoft GS "))
+            {
+                chosen = i;
+                break;
+            }
+        const auto info = outs[chosen];
+        syOutName = info.name;
+        FORGE_LOG_INFO ("selftest-sync: probing MIDI output '" + syOutName + "'");
+
+        // Fix (1): free any existing playback context first (so no instance references dm.midiOutputs
+        // entries while we mutate the vector), then evict the engine's own copy of this identifier so the
+        // probe is the SOLE opener of the WinMM port.
+        if (auto* t = session.getTransport())
+            t->freePlaybackContext();
+
+        // NOTE: the engine assigns its own device IDs (e.g. "out_81b0d7ef"), so getDeviceID() can NOT be
+        // compared against the raw juce identifier — match by NAME (unique per system MIDI out). Keep the
+        // evicted entry alive so teardown can restore the engine's device list exactly as it found it.
+        for (int i = dm.getNumMidiOutDevices(); --i >= 0;)
+            if (auto* out = dm.getMidiOutDevice (i))
+                if (out->getName() == info.name || out->getDeviceID() == info.identifier)
+                {
+                    syEvicted = dm.midiOutputs[(size_t) i];   // hold the engine's entry for re-insertion
+                    out->closeDevice();               // release the port; does NOT trigger a rescan
+                    dm.midiOutputs.erase (dm.midiOutputs.begin() + i);
+                }
+
+        // Snapshot the REAL device's persisted props node BEFORE the probe touches it: MidiOutputDevice
+        // props are keyed by device NAME, so the probe's saveProps calls (setSendingClock, closeDevice,
+        // dtor) would otherwise permanently rewrite the real device's stored enabled/sendMidiClock —
+        // and a killed run would leave clock stuck ON for normal launches. Restored at teardown.
+        syPropsSnapshot = engine.getPropertyStorage().getXmlPropertyItem (te::SettingID::midiout, info.name);
+
+        // Inject the probe. Force enabled=true directly (protected OutputDevice::enabled) — NEVER via
+        // setEnabled(), which would trigger rescanMidiDeviceList() and swap our probe out.
+        syProbe = std::make_shared<MidiClockProbeDevice> (engine, info);
+        syProbe->forceEnabledForSelfTest();           // sets the protected enabled flag — see MidiClockProbe.h
+        syProbe->setSendingClock (true);              // changed() + saveProps(), no rescan
+        syPropRoundTrip = syProbe->isSendingClock();
+
+        // Shrink the kill window: put the persisted node back immediately (the probe's in-memory state
+        // is unaffected — nothing reloads props mid-run), so even a force-killed run leaves the stored
+        // props untouched. Teardown repeats this restore AFTER the probe's last saveProps (its dtor).
+        restoreSyncProbeProps();
+
+        // Stale-props guard: loadProps keys by device NAME, so a saved enabled=false could have slipped in.
+        // Assert both flags explicitly after construction/force.
+        syEnabledOK = syProbe->isEnabled();
+
+        const auto openErr = syProbe->openDevice();   // return string is unreliable when disabled — Fix (2)
+        syProbeOpen = syProbe->isOpen();              // the HONEST gate: the underlying port actually opened
+        if (! syProbeOpen)
+            FORGE_LOG_WARN ("selftest-sync: probe port did not open (" + (openErr.isEmpty() ? juce::String ("no error string") : openErr)
+                            + ") — clock generation is gated off; degrading");
+
+        dm.midiOutputs.push_back (syProbe);           // public vector; scan is frozen so it survives
+
+        if (! syProbeOpen)
+        {
+            // Port didn't open => clock gen is gated off. Degrade honestly rather than assert a hollow
+            // PASS — but still do the no-crash roll (mirrors the zero-outs path), else the degraded
+            // pass criteria (propRoundTrip && rolled) could only ever report FAIL (QC minor).
+            syDegraded = true;
+
+            if (auto* t = session.getTransport())
+            {
+                t->ensureContextAllocated (/*alwaysReallocate=*/true);
+                t->play (false);
+                syRolled = t->isPlaying();
+            }
+
+            syPhase = 2;
+            startTimer (500);
+            return;
+        }
+
+        // Build a FRESH playback context now that the probe is in dm.midiOutputs, so rebuildDeviceList
+        // enumerates it (an instance is created for each enabled out). alwaysReallocate=true forces the
+        // rebuild even if a context lingered.
+        if (auto* edit = session.getEdit())
+        {
+            syExpectedClocks = 0.0;
+            if (auto* t = session.getTransport())
+            {
+                t->ensureContextAllocated (/*alwaysReallocate=*/true);
+                t->play (false);
+                syRolled = t->isPlaying();
+            }
+
+            // Expected clock count = seconds * (bpm/60) * 24. Read bpm LIVE so a non-120 default still passes.
+            const double bpm = edit->tempoSequence.getBpmAt (te::TimePosition());
+            syExpectedClocks = 2.0 * (bpm / 60.0) * 24.0;   // ~2s roll below
+        }
+
+        syPhase = 2;
+        startTimer (2000);   // roll ~2s so the generator emits a solid clock train, then finish
+    }
+
+    // Puts the real MIDI-out device's persisted props back exactly as we found them (or removes the
+    // node if none existed) — the probe shares the device's NAME, so every probe saveProps (from
+    // setSendingClock, closeDevice, and its dtor) rewrites the real device's stored state. Idempotent;
+    // called immediately after the probe's first saveProps AND after its destruction at teardown.
+    void restoreSyncProbeProps()
+    {
+        if (syOutName.isEmpty())
+            return;
+
+        if (syPropsSnapshot != nullptr)
+            engine.getPropertyStorage().setXmlPropertyItem (te::SettingID::midiout, syOutName, *syPropsSnapshot);
+        else
+            engine.getPropertyStorage().removePropertyItem (te::SettingID::midiout, syOutName);
+    }
+
+    // Phase 2: stop with clearDevices=false so the graph processes the play->stop edge that emits
+    // midiStop, then YIELD one timer turn so the MidiNoteDispatcher's 1 ms timer actually flushes it
+    // through sendMessageNow before we snapshot (the first run proved snapshotting immediately after
+    // stop() races that flush: 96/96 clocks captured but stopCount=0).
+    void syncSelftestStop()
+    {
+        if (auto* t = session.getTransport())
+            t->stop (/*discardRecordings=*/false, /*clearDevices=*/false);
+
+        syPhase = 3;
+        startTimer (300);   // drain window for the dispatcher's midiStop
+    }
+
+    // Phase 3: snapshot the captured messages, verify, tear down in the correct order, restore the
+    // scan interval on ALL paths, report, quit.
+    void finishSelfTestSync()
+    {
+        auto& dm = engine.getDeviceManager();
+
+        // Belt-and-suspenders: the transport is normally stopped by phase 2, but failure paths can
+        // reach here directly.
+        if (auto* t = session.getTransport())
+            if (t->isPlaying())
+                t->stop (/*discardRecordings=*/false, /*clearDevices=*/false);
+
+        bool pass = false;
+
+        if (syDegraded)
+        {
+            // Honest degrade PASS: property round-trip held and the transport rolled without crashing.
+            pass = syPropRoundTrip && syRolled;
+        }
+        else if (syProbe != nullptr)
+        {
+            const auto msgs = syProbe->snapshot();
+            for (const auto& m : msgs)
+            {
+                if (m.isSongPositionPointer())            ++sySpp;
+                if (m.isMidiStart() || m.isMidiContinue()) ++syStartCont;
+                if (m.isMidiClock())                       ++syClock;
+                if (m.isMidiStop())                        ++syStop;
+            }
+
+            const bool clockCountOK = syExpectedClocks > 0.0
+                                       && syClock >= (int) (0.5 * syExpectedClocks)
+                                       && syClock <= (int) (1.5 * syExpectedClocks);
+
+            // Full PASS proves end-to-end clock-out: probe opened + enabled, flag round-tripped, transport
+            // rolled, and the ACTUAL bytes on the wire include SPP + start/continue + ~bpm*24 clocks + a stop.
+            pass = syProbeOpen && syEnabledOK && syPropRoundTrip && syRolled
+                   && sySpp >= 1 && syStartCont >= 1 && clockCountOK && syStop >= 1;
+        }
+
+        // TEARDOWN ORDER (dossier step 7): free the Edit's context FIRST (its instances reference the
+        // device), THEN erase the probe from dm.midiOutputs, THEN restore the scan interval. Do all of
+        // this on EVERY path (including failures) so the box is left as we found it.
+        if (auto* t = session.getTransport())
+            t->freePlaybackContext();
+
+        if (syProbe != nullptr)
+        {
+            for (int i = dm.getNumMidiOutDevices(); --i >= 0;)
+                if (dm.getMidiOutDevice (i) == syProbe.get())
+                    dm.midiOutputs.erase (dm.midiOutputs.begin() + i);
+
+            syProbe->closeDevice();
+            syProbe.reset();          // dtor's closeDevice/saveProps is the probe's LAST props write...
+            restoreSyncProbeProps();  // ...so the lossless restore must come after it (QC minor)
+        }
+
+        // Restore the engine's own evicted device entry so the DeviceManager is structurally exactly as
+        // we found it (the port is closed; the engine reopens it on demand).
+        if (syEvicted != nullptr)
+        {
+            dm.midiOutputs.push_back (syEvicted);
+            syEvicted.reset();
+        }
+
+        dm.setMidiDeviceScanIntervalSeconds (sySavedScanInterval);   // restore persisted interval
+
+        String report;
+        report << "mode=sync" << newLine
+               << "midiOutChosen="   << (syOutName.isEmpty() ? String ("(none)") : syOutName) << newLine
+               << "skip-degraded="   << (syDegraded ? 1 : 0) << newLine
+               << "propRoundTrip="   << (syPropRoundTrip ? 1 : 0) << newLine
+               << "probeEnabled="    << (syEnabledOK ? 1 : 0) << newLine
+               << "probeOpen="       << (syProbeOpen ? 1 : 0) << newLine
+               << "rolled="          << (syRolled ? 1 : 0) << newLine
+               << "sppCount="        << sySpp << newLine
+               << "startContCount="  << syStartCont << newLine
+               << "clockCount="      << syClock << newLine
+               << "expectedClocks="  << (int) syExpectedClocks << newLine
+               << "stopCount="       << syStop << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write sync selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("SYNC selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + (syDegraded ? " (degraded)" : "") + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
@@ -1977,6 +2475,102 @@ private:
     }
 
     //==============================================================================
+    // --selftest-livesync (W03 P5): prove the cross-surface live-refresh loop headlessly. Write
+    // engine-side values exactly as another surface would (EngineHelpers volume, AudioTrack::setMute,
+    // AudioClipBase::setGainDB), force one sync tick through the views' test seams (refreshControls /
+    // refreshNow — the deterministic mirrors of their poll timers), then assert the widgets moved.
+    // Every op here is synchronous on the message thread, so a single callAsync yield suffices.
+    void runLiveSyncSelftest()
+    {
+        auto* ed = session.getEdit();
+        if (ed == nullptr) { finishLiveSyncSelftest (false, 0.0, false, 0.0); return; }
+
+        FORGE_LOG_INFO ("selftest-livesync: import a clip, write engine values, force a sync tick");
+
+        // One imported clip gives the mixer a populated track AND the inspector an AudioClipBase.
+        sineFile = createSineWaveFile (44100.0, 2.0, 440.0, 0.2f);
+        clip = session.importAudioFile (sineFile, te::TimePosition());
+        if (clip == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-livesync: failed to import test tone");
+            finishLiveSyncSelftest (false, 0.0, false, 0.0);
+            return;
+        }
+
+        auto tracks = te::getAudioTracks (*ed);
+        auto* track = tracks.isEmpty() ? nullptr : tracks[0];   // importAudioFile lands on track 0
+        if (track == nullptr)
+        {
+            FORGE_LOG_ERROR ("selftest-livesync: no audio track after import");
+            finishLiveSyncSelftest (false, 0.0, false, 0.0);
+            return;
+        }
+
+        // Mixer leg. The first refreshControls settles structure (the import may have changed the
+        // track set since setEdit, which would make the guard rebuild-and-return); the second,
+        // after the engine writes, is a pure value-sync tick — the path under test.
+        mixerView.refreshControls();
+        EngineHelpers::setTrackVolumeDb (*track, -12.0f);
+        track->setMute (true);
+        mixerView.refreshControls();
+
+        const double faderDb  = mixerView.getStripFaderDb (0);
+        const bool   muteSeen = mixerView.getStripMuted (0);
+
+        // Detail leg: bind the clip (the slider reads the pre-write gain), write engine-side, then
+        // one forced poll tick must move the slider.
+        detailView.setClip (clip.get());
+
+        bool   gainSeen = false;
+        double gainDb   = 0.0;
+
+        if (auto* acb = dynamic_cast<te::AudioClipBase*> (clip.get()))
+        {
+            acb->setGainDB (-6.0f);
+            detailView.refreshNow();
+            gainDb   = detailView.getGainSliderDb();
+            gainSeen = true;
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("selftest-livesync: imported clip is not an AudioClipBase");
+        }
+
+        finishLiveSyncSelftest (muteSeen, faderDb, gainSeen, gainDb);
+    }
+
+    void finishLiveSyncSelftest (bool muteSeen, double faderDb, bool gainSeen, double gainDb)
+    {
+        // Tolerances: the mixer fader snaps to 0.1 dB and the engine's dB-to-fader-position curve
+        // is not bit-exact through a round-trip, so the mixer leg allows 0.15; the clip-gain slider
+        // is a direct dB value, so one snap step (0.1) suffices.
+        const bool faderPass = std::abs (faderDb - (-12.0)) <= 0.15;
+        const bool gainPass  = gainSeen && std::abs (gainDb - (-6.0)) <= 0.1;
+        const bool pass      = faderPass && muteSeen && gainPass;
+
+        String report;
+        report << "mode=livesync" << newLine
+               << "numStrips="    << mixerView.getNumStrips() << newLine
+               << "faderDb="      << String (faderDb, 3) << newLine
+               << "faderPass="    << (faderPass ? 1 : 0) << newLine
+               << "muteSeen="     << (muteSeen ? 1 : 0) << newLine
+               << "gainSliderDb=" << String (gainDb, 3) << newLine
+               << "gainPass="     << (gainPass ? 1 : 0) << newLine
+               << "result="       << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="      << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write livesync selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Live-sync selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -2217,6 +2811,51 @@ private:
             return;
         }
 
+        if (mode == SelfTest::sync)
+        {
+            stopTimer();
+            switch (syPhase)
+            {
+                case 1:  syncSelftestInject();  break;   // scan settled -> free ctx, swap in probe, reallocate, roll
+                case 2:  syncSelftestStop();    break;   // rolled -> stop (emits midiStop), yield for the dispatcher
+                default: finishSelfTestSync();  break;   // phase 3 -> stop edge drained, verify, report, quit
+            }
+            return;
+        }
+
+        if (mode == SelfTest::automation)
+        {
+            auto* t = session.getTransport();
+            const double pos = (t != nullptr) ? t->getPosition().inSeconds() : -1.0;
+
+            // Capture the FIRST observed tick unconditionally as the early sample. If that first
+            // position is already past 0.3 s, still record it but the value threshold guards us
+            // (a slow start reads high on a falling ramp, so >= 0.7 still holds early); a truly
+            // non-rolling device is caught by the ~4 s poll cap below (position stays ~0).
+            if (! auEarlyCaptured && auVolParam != nullptr)
+            {
+                auEarlyValue    = auVolParam->getCurrentValue();
+                auEarlyPos      = pos;
+                auEarlyCaptured = true;
+            }
+
+            // Late sample: first tick whose position is in the [1.5, 2.4] s window (curve 0.35 -> 0.2).
+            if (! auLateCaptured && auVolParam != nullptr && pos >= 1.5 && pos <= 2.4)
+            {
+                auLateValue    = auVolParam->getCurrentValue();
+                auLateCaptured = true;
+            }
+
+            // Finish as soon as both samples are in, or after ~4 s (40 ticks) so a non-rolling device
+            // FAILs instead of stalling.
+            if ((auEarlyCaptured && auLateCaptured) || ++automationPollTicks >= 40)
+            {
+                stopTimer();
+                finishAutomationSelftest();
+            }
+            return;
+        }
+
         auto* t = session.getTransport();
         const bool playing = t != nullptr && t->isPlaying();
 
@@ -2330,7 +2969,62 @@ static void runLufsSelfTest()
     const auto r = analyzer.getResult();
 
     constexpr float expected = -3.0036f, tol = 0.5f;
-    const bool pass = std::isfinite (r.integratedLufs) && std::abs (r.integratedLufs - expected) <= tol;
+    const bool bufPass = std::isfinite (r.integratedLufs) && std::abs (r.integratedLufs - expected) <= tol;
+
+    // --- File+thread leg: run the EXACT static file path the export worker executes, off the message
+    // thread, and assert it agrees with the buffer-fed result. Also exercises the abort predicate. ---
+    const auto tmpWav = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                            .getChildFile ("forge_lufs_selftest.wav");
+    tmpWav.deleteFile();
+
+    bool fileWritten = false;
+    {
+        juce::WavAudioFormat wav;
+        if (auto* os = tmpWav.createOutputStream().release())
+        {
+            std::unique_ptr<juce::AudioFormatWriter> writer (
+                wav.createWriterFor (os, sr, 1, 24, {}, 0));
+
+            if (writer != nullptr)
+                fileWritten = writer->writeFromAudioSampleBuffer (buf, 0, N);
+            else
+                delete os;   // createWriterFor didn't take ownership on failure
+        }
+    }
+
+    // Run analyzeFile on a spawned one-shot thread; join with a bounded wait (proves the off-thread path).
+    struct FileLegThread : public juce::Thread
+    {
+        FileLegThread (const juce::File& f) : juce::Thread ("Forge lufs selftest"), file (f) {}
+        void run() override { result = forge::dsp::LoudnessAnalyzer::analyzeFile (file); }
+        juce::File file;
+        forge::dsp::LoudnessAnalyzer::Result result;
+    };
+
+    float fileLufs = forge::dsp::LoudnessAnalyzer::kSilenceLufs;
+    bool  fileJoined = false;
+
+    if (fileWritten)
+    {
+        FileLegThread th (tmpWav);
+        th.startThread();
+        fileJoined = th.stopThread (10000);   // bounded join
+        fileLufs   = th.result.integratedLufs;
+    }
+
+    const bool filePass = fileWritten && fileJoined
+                          && std::isfinite (fileLufs)
+                          && std::abs (fileLufs - r.integratedLufs) <= 0.1f;   // agrees within 0.1 LU
+
+    // --- Abort leg: an always-true predicate must return promptly with the silence sentinel (-inf). ---
+    const auto abortResult = fileWritten
+        ? forge::dsp::LoudnessAnalyzer::analyzeFile (tmpWav, [] { return true; })
+        : forge::dsp::LoudnessAnalyzer::Result{};
+    const bool abortPass = fileWritten && ! std::isfinite (abortResult.integratedLufs);
+
+    tmpWav.deleteFile();   // clean up the temp WAV on exit
+
+    const bool pass = bufPass && filePass && abortPass;
 
     juce::String report;
     report << "mode=lufs" << juce::newLine
@@ -2339,6 +3033,12 @@ static void runLufsSelfTest()
            << "toleranceLu="    << juce::String (tol, 2) << juce::newLine
            << "truePeakDb="     << juce::String (r.truePeakDb, 4) << juce::newLine
            << "momentaryLufs="  << juce::String (r.momentaryLufs, 4) << juce::newLine
+           << "bufResult="      << (bufPass ? "PASS" : "FAIL") << juce::newLine
+           << "fileLufs="       << juce::String (fileLufs, 4) << juce::newLine
+           << "fileJoined="     << (fileJoined ? "1" : "0") << juce::newLine
+           << "fileResult="     << (filePass ? "PASS" : "FAIL") << juce::newLine
+           << "abortLufs="      << juce::String (abortResult.integratedLufs, 4) << juce::newLine
+           << "abortResult="    << (abortPass ? "PASS" : "FAIL") << juce::newLine
            << "result="         << (pass ? "PASS" : "FAIL") << juce::newLine
            << "logFile="        << forge::log::getLogFile().getFullPathName() << juce::newLine;
 
@@ -2371,6 +3071,9 @@ public:
                             : commandLine.contains ("--selftest-midi")           ? "selftest-midi"
                             : commandLine.contains ("--selftest-controlsurface") ? "selftest-controlsurface" // before bare --selftest
                             : commandLine.contains ("--selftest-lufs")           ? "selftest-lufs"           // before bare --selftest
+                            : commandLine.contains ("--selftest-automation")     ? "selftest-automation"     // before bare --selftest
+                            : commandLine.contains ("--selftest-sync")           ? "selftest-sync"           // before bare --selftest
+                            : commandLine.contains ("--selftest-livesync")       ? "selftest-livesync"       // before bare --selftest
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -2394,6 +3097,9 @@ public:
                         : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)
                         : commandLine.contains ("--selftest-midi")           ? SelfTest::midi
                         : commandLine.contains ("--selftest-controlsurface") ? SelfTest::controlsurface // before bare --selftest
+                        : commandLine.contains ("--selftest-automation")     ? SelfTest::automation     // before bare --selftest
+                        : commandLine.contains ("--selftest-sync")           ? SelfTest::sync           // before bare --selftest
+                        : commandLine.contains ("--selftest-livesync")       ? SelfTest::livesync       // before bare --selftest
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));

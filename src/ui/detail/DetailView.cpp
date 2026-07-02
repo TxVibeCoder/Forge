@@ -84,6 +84,8 @@ DetailView::DetailView()
             notifyMutated();
         }
     };
+    gainSlider.onDragStart = [this] { gainDragging = true; };
+    gainSlider.onDragEnd   = [this] { gainDragging = false; };
     addAndMakeVisible (gainSlider);
 
     // --- Mute ------------------------------------------------------------------------------------
@@ -136,10 +138,19 @@ DetailView::DetailView()
         }
     };
 
+    // Drag brackets gate the 10 Hz live-sync poll off a slider the user is holding.
+    fadeInSlider.onDragStart  = [this] { fadeInDragging = true; };
+    fadeInSlider.onDragEnd    = [this] { fadeInDragging = false; };
+    fadeOutSlider.onDragStart = [this] { fadeOutDragging = true; };
+    fadeOutSlider.onDragEnd   = [this] { fadeOutDragging = false; };
+
     setClip (nullptr);   // start in the empty-hint state
 }
 
-DetailView::~DetailView() = default;
+DetailView::~DetailView()
+{
+    stopTimer();   // stop the live-sync poll FIRST so no tick can land while members tear down
+}
 
 //==============================================================================
 te::AudioClipBase* DetailView::getAudioClip() const
@@ -156,6 +167,15 @@ void DetailView::setClip (te::Clip* c)
     refreshFromClip();
     resized();
     repaint();
+
+    // Live-sync poll runs only while a clip is inspected. Reset the timing edge-compare so the
+    // first tick re-derives the label + fade ranges for the new clip.
+    lastStart = lastLen = lastOffset = -1.0;
+
+    if (clip != nullptr)
+        startTimerHz (10);
+    else
+        stopTimer();
 }
 
 void DetailView::rebuildThumbnail()
@@ -203,9 +223,9 @@ void DetailView::refreshFromClip()
     if (clip != nullptr)
     {
         const auto pos = clip->getPosition();
-        timingLabel.setText ("Start " + formatSeconds (pos.getStart().inSeconds())
-                               + "    Length " + formatSeconds (pos.getLength().inSeconds())
-                               + "    Offset " + formatSeconds (pos.getOffset().inSeconds()),
+        timingLabel.setText (formatTiming (pos.getStart().inSeconds(),
+                                           pos.getLength().inSeconds(),
+                                           pos.getOffset().inSeconds()),
                              dontSendNotification);
     }
     else
@@ -240,9 +260,9 @@ void DetailView::notifyMutated()
     if (clip != nullptr)
     {
         const auto pos = clip->getPosition();
-        timingLabel.setText ("Start " + formatSeconds (pos.getStart().inSeconds())
-                               + "    Length " + formatSeconds (pos.getLength().inSeconds())
-                               + "    Offset " + formatSeconds (pos.getOffset().inSeconds()),
+        timingLabel.setText (formatTiming (pos.getStart().inSeconds(),
+                                           pos.getLength().inSeconds(),
+                                           pos.getOffset().inSeconds()),
                              dontSendNotification);
     }
 
@@ -253,6 +273,86 @@ void DetailView::notifyMutated()
 String DetailView::formatSeconds (double seconds)
 {
     return String (seconds, 2) + "s";
+}
+
+String DetailView::formatTiming (double startSecs, double lengthSecs, double offsetSecs)
+{
+    return "Start " + formatSeconds (startSecs)
+         + "    Length " + formatSeconds (lengthSecs)
+         + "    Offset " + formatSeconds (offsetSecs);
+}
+
+//==============================================================================
+// 10 Hz live-sync poll (message thread — juce::Timer). Engine→widget only: every write uses
+// dontSendNotification, so no onValueChange/onClick fires and nothing writes back to the engine.
+// Guards keep it out of the user's way: drag flags + text-box focus for sliders, a held mouse
+// button for the toggle, and Label::isBeingEdited for the name (Label::setText force-hides an
+// active editor even for identical text, which would kill an in-progress rename). Slider::setValue
+// and Button::setToggleState self-no-op on unchanged values, and the timing line is edge-compared
+// on the raw seconds, so a steady-state tick allocates and repaints nothing. Never logs (hot path).
+// Dangle-safe: `clip` is the engine's ref-counted handle (see the header lifetime note), so a
+// deleted-elsewhere clip reads stale-but-safe until the shell re-calls setClip.
+
+void DetailView::timerCallback()
+{
+    if (clip == nullptr)
+        return;
+
+    if (! nameEditor.isBeingEdited())
+    {
+        const auto liveName = clip->getName();
+        if (nameEditor.getText() != liveName)
+            nameEditor.setText (liveName, dontSendNotification);
+    }
+
+    if (auto* acb = getAudioClip())
+    {
+        if (! gainDragging && ! gainSlider.hasKeyboardFocus (true))
+            gainSlider.setValue (acb->getGainDB(), dontSendNotification);
+
+        if (! muteToggle.isMouseButtonDown())
+            muteToggle.setToggleState (acb->isMuted(), dontSendNotification);
+
+        if (! fadeInDragging && ! fadeInSlider.hasKeyboardFocus (true))
+            fadeInSlider.setValue (acb->getFadeIn().inSeconds(), dontSendNotification);
+
+        if (! fadeOutDragging && ! fadeOutSlider.hasKeyboardFocus (true))
+            fadeOutSlider.setValue (acb->getFadeOut().inSeconds(), dontSendNotification);
+    }
+
+    const auto pos = clip->getPosition();
+    const double s = pos.getStart().inSeconds();
+    const double l = pos.getLength().inSeconds();
+    const double o = pos.getOffset().inSeconds();
+
+    if (s != lastStart || l != lastLen || o != lastOffset)
+    {
+        lastStart  = s;
+        lastLen    = l;
+        lastOffset = o;
+
+        timingLabel.setText (formatTiming (s, l, o), dontSendNotification);
+
+        // Fade-slider travel is capped at the clip length (mirrors refreshFromClip). setRange
+        // re-enters setValue + updateText, so it stays inside this edge-triggered branch — never
+        // per-tick. It is notification-free internally, so nothing writes back.
+        if (getAudioClip() != nullptr)
+        {
+            const double fadeMax = (l > 0.0) ? l : kFadeFallbackMax;
+            fadeInSlider.setRange  (0.0, fadeMax, 0.01);
+            fadeOutSlider.setRange (0.0, fadeMax, 0.01);
+        }
+    }
+}
+
+void DetailView::refreshNow()
+{
+    timerCallback();
+}
+
+double DetailView::getGainSliderDb() const
+{
+    return gainSlider.getValue();
 }
 
 //==============================================================================

@@ -165,14 +165,14 @@ void TrackColumnComponent::paint (Graphics& g)
     // Track name (top line of the header text region).
     auto nameRow = headerText.removeFromTop (20);
     g.setColour (Colour (ForgeLookAndFeel::textPrim));
-    g.setFont (Font (14.0f, Font::bold));
+    g.setFont (Font (FontOptions (14.0f, Font::bold)));
     g.drawText (track.getName(), nameRow, Justification::centredLeft, true);
 
     // Audio / MIDI type tag.
     const bool midi = trackHasInstrument();
     auto tagRow = headerText.removeFromTop (16);
     g.setColour (Colour (ForgeLookAndFeel::textSec));
-    g.setFont (Font (11.0f));
+    g.setFont (Font (FontOptions (11.0f)));
     g.drawText (midi ? "MIDI" : "Audio", tagRow, Justification::centredLeft, true);
 
     // Instrument chip (MIDI tracks): the head synth's name in an accent-tinted pill; audio
@@ -195,13 +195,13 @@ void TrackColumnComponent::paint (Graphics& g)
         g.setColour (Colour (ForgeLookAndFeel::accent));
         g.drawRoundedRectangle (chip, 3.0f, 1.0f);
         g.setColour (Colour (ForgeLookAndFeel::textPrim));
-        g.setFont (Font (11.0f));
+        g.setFont (Font (FontOptions (11.0f)));
         g.drawText (instName, chipRow.reduced (5, 0), Justification::centredLeft, true);
     }
     else
     {
         g.setColour (Colour (ForgeLookAndFeel::textSec));
-        g.setFont (Font (11.0f));
+        g.setFont (Font (FontOptions (11.0f)));
         g.drawText (String::charToString ((juce_wchar) 0x2014), chipRow, Justification::centredLeft, true);  // —
     }
 

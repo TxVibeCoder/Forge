@@ -131,7 +131,9 @@ namespace Exporter
 
         /** Additive: fired on the message thread just BEFORE onComplete, only for a successful
             whole-edit (non-stem) export, carrying the rendered file's BS.1770-4 integrated loudness.
-            Never fires for stems (they exclude the master chain) or for a failed/cancelled export.
+            The analysis itself runs on the render worker (off the message thread) and is delivered
+            here already computed, so it never blocks the UI. Never fires for stems (they exclude the
+            master chain) or for a failed/cancelled export (a cancel mid-analysis drops the value).
             Optional — leave unset to ignore. The same value is also available via getLoudness(). */
         std::function<void (LoudnessResult)> onLoudness;
 
@@ -142,7 +144,7 @@ namespace Exporter
     private:
         void timerCallback() override;
         void startPass (int index);
-        void onPassWorkerFinished (bool ok, juce::String error);
+        void onPassWorkerFinished (bool ok, juce::String error, std::optional<LoudnessResult> measured = {});
         void finishAll();
         void teardownEngineState();
 

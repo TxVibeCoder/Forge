@@ -35,6 +35,7 @@
 #include <JuceHeader.h>
 
 #include <array>
+#include <functional>
 #include <limits>
 #include <vector>
 
@@ -93,8 +94,14 @@ public:
     /** Convenience: reads a WAV (or any format JUCE can decode) fully off disk and returns its
         integrated loudness + true peak. Reads in chunks so a long file doesn't need to be resident
         all at once. On any read failure returns a default Result (kSilenceLufs) and logs a warning.
-        Message/worker-thread; performs blocking file IO — never call on the audio/RT thread. */
-    static Result analyzeFile (const juce::File& wav);
+        Message/worker-thread; performs blocking file IO — never call on the audio/RT thread.
+
+        shouldAbort (optional) is polled once per chunk: when it returns true the analysis stops
+        immediately and returns the default (silence-sentinel) Result — never a partial measurement.
+        This lets a background worker be interrupted promptly (e.g. an export cancel / teardown join
+        on a multi-GB file) instead of blocking the join on the whole read. The default (unset)
+        predicate keeps existing callers unchanged. */
+    static Result analyzeFile (const juce::File& wav, const std::function<bool()>& shouldAbort = {});
 
 private:
     //==============================================================================

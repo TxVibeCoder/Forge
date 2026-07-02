@@ -365,7 +365,8 @@ LoudnessAnalyzer::Result LoudnessAnalyzer::getResult() const
 }
 
 //==============================================================================
-LoudnessAnalyzer::Result LoudnessAnalyzer::analyzeFile (const juce::File& wav)
+LoudnessAnalyzer::Result LoudnessAnalyzer::analyzeFile (const juce::File& wav,
+                                                       const std::function<bool()>& shouldAbort)
 {
     Result result;
 
@@ -406,6 +407,11 @@ LoudnessAnalyzer::Result LoudnessAnalyzer::analyzeFile (const juce::File& wav)
 
     while (pos < total)
     {
+        // Cooperative abort: a background worker being cancelled/joined polls here so a long file
+        // doesn't outlive its join. Returns the silence-sentinel default — never a partial measurement.
+        if (shouldAbort && shouldAbort())
+            return Result{};
+
         const int thisChunk = (int) juce::jmin ((int64) chunk, total - pos);
 
         buffer.clear();

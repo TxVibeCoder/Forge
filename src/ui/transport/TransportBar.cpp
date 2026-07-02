@@ -21,12 +21,14 @@ static String formatTimecode (double seconds)
 
 TransportBar::TransportBar()
 {
-    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton })
+    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton, &midiClockButton })
         addAndMakeVisible (b);
 
     recordButton.setColour (TextButton::buttonOnColourId, Colours::red);
     loopButton.setColour (TextButton::buttonOnColourId, Colours::orange);
     metronomeButton.setColour (TextButton::buttonOnColourId, Colours::orange);
+    midiClockButton.setColour (TextButton::buttonOnColourId, Colours::orange);
+    midiClockButton.setTooltip ("Send MIDI clock to all outputs");
 
     playButton.onClick   = [this] { if (edit != nullptr) EngineHelpers::togglePlay (*edit); };
     stopButton.onClick   = [this] { if (transport != nullptr) transport->stop (false, false); };
@@ -41,6 +43,19 @@ TransportBar::TransportBar()
                                                                         : metronomeButton.getToggleState();
         if (edit != nullptr && onMetronomeToggled)
             onMetronomeToggled (! current);
+
+        syncMetronomeControls();
+    };
+
+    // MIDI-clock toggle: ask engine truth (is any output sending clock?), request the inverse, then
+    // reflect. Unlike the click toggle this operates on the engine's MIDI outputs (not the Edit), so
+    // it is NOT gated on a live Edit — clock output is a device-level setting that stands on its own.
+    midiClockButton.onClick = [this]
+    {
+        const bool current = queryMidiClockEnabled ? queryMidiClockEnabled()
+                                                   : midiClockButton.getToggleState();
+        if (onMidiClockToggled)
+            onMidiClockToggled (! current);
 
         syncMetronomeControls();
     };
@@ -93,7 +108,7 @@ void TransportBar::resized()
 {
     auto r = getLocalBounds().reduced (4, 4);
 
-    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton })
+    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton, &midiClockButton })
     {
         b->setBounds (r.removeFromLeft (64));
         r.removeFromLeft (4);
@@ -132,6 +147,12 @@ void TransportBar::syncMetronomeControls()
     const bool clickOn = (edit != nullptr && queryMetronomeEnabled) ? queryMetronomeEnabled()
                                                                     : metronomeButton.getToggleState();
     metronomeButton.setToggleState (clickOn, dontSendNotification);
+
+    // MIDI-clock is a device-level setting (not Edit-scoped), so its query needs no live Edit; fall
+    // back to the toggle's own state only when the seam is unwired.
+    const bool clockOn = queryMidiClockEnabled ? queryMidiClockEnabled()
+                                               : midiClockButton.getToggleState();
+    midiClockButton.setToggleState (clockOn, dontSendNotification);
 
     const int bars = (edit != nullptr && queryCountInBars) ? queryCountInBars() : 0;
     for (int i = 0; i < numCountInOptions; ++i)

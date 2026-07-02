@@ -46,6 +46,14 @@ public:
         selector. Wired by the owner (Metronome::getCountInBars). If unset, defaults to 1 bar. */
     std::function<int()> queryCountInBars;
 
+    /** Fired when the user toggles MIDI-clock output; delivers the DESIRED enabled state. The owner
+        routes this to the MidiClockSync seam (MidiClockSync::setSendClockToAll). */
+    std::function<void(bool)> onMidiClockToggled;
+
+    /** Engine-truth query: is MIDI-clock currently being sent to any output? Wired by the owner
+        (MidiClockSync::isSendingClockAny). If unset, the toggle reflects its own last state. */
+    std::function<bool()> queryMidiClockEnabled;
+
     bool readoutIsNonEmpty() const { return readout.getText().isNotEmpty(); }
 
     void resized() override;
@@ -54,7 +62,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void updateButtons();
-    void syncMetronomeControls();   // reflect engine truth into the click toggle + count-in box
+    void syncMetronomeControls();   // reflect engine truth into the click / clock toggles + count-in box
 
     te::Edit* edit = nullptr;
     te::TransportControl* transport = nullptr;
@@ -63,7 +71,8 @@ private:
                      stopButton      { "Stop" },
                      recordButton    { "Rec" },
                      loopButton      { "Loop" },
-                     metronomeButton { "Click" };
+                     metronomeButton { "Click" },
+                     midiClockButton { "Clock" };
     juce::ComboBox   countInBox;
     juce::Label readout;
 

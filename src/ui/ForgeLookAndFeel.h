@@ -23,7 +23,10 @@ public:
         hairline  = 0xff34383c,   // separators
         accent    = 0xffe0902f,   // warm amber: playhead, arm, selection, focus
         onAccent  = 0xff241600,   // text on the accent fill
-        recordRed = 0xffe24b4a    // reserved: active recording / clipping
+        recordRed = 0xffe24b4a,   // reserved: active recording / clipping
+
+        automationBg    = 0xff202224,   // automation sub-lane body (a step darker than the clip lanes)
+        automationCurve = 0xff3fa7c9    // automation curve + point handles (cool teal, reads against the amber accent)
     };
 
     ForgeLookAndFeel()
