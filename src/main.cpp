@@ -27,6 +27,7 @@
 #include "engine/MidiClockSync.h"
 #include "engine/MidiClockProbe.h"
 #include "engine/dsp/LoudnessAnalyzer.h"
+#include "engine/dsp/InstrumentSamples.h"
 #include "ui/arrange/ArrangeView.h"
 #include "ui/markers/MarkerBar.h"
 #include "ui/mixer/MixerView.h"
@@ -51,7 +52,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -201,6 +202,14 @@ public:
         // false editLoaded is NOT a failure. The real failure is having no edit at all afterward.
         if (session.getEdit() == nullptr)
             FORGE_LOG_ERROR ("Failed to open or create project file: " + projectFile.getFullPathName());
+
+        // W09: first-launch welcome demo. When we CREATED a fresh default project (editLoaded == false) in
+        // the normal app (never a selftest), seed the audible demo — named tracks, per-track instrument
+        // presets, and a 4-on-floor + bass + piano groove — so a brand-new user opens into a playable
+        // session instead of a blank grid. It is IN-MEMORY only (not saved), does NOT auto-play, and File >
+        // New still gives an empty project; once the user saves their own default the demo no longer appears.
+        if (mode == SelfTest::none && ! editLoaded && session.getEdit() != nullptr)
+            populateDemoContent();
 
         // Wire the engine's focused-Edit UIBehaviour to this session so real hardware CCs route to the
         // currently-open Edit's parameter mappings (ForgeUIBehaviour). getEdit() is re-queried on every
@@ -781,6 +790,11 @@ public:
             // Wave 3 (W08): the per-track Session mixer strip's engine->widget sync. Synchronous; one
             // callAsync yield suffices.
             MessageManager::callAsync ([this] { runSessionMixerSelftest(); });
+        }
+        else if (mode == SelfTest::demo)
+        {
+            // Wave 4 (W09): the audible-demo gate — instrument presets applied + notes seeded. Synchronous.
+            MessageManager::callAsync ([this] { runDemoSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -3883,11 +3897,118 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
+    // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
+    // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
+    // Structural + synchronous — it does NOT render audio (the Sampler loads its sample on an AsyncUpdater;
+    // a render leg would have to pump the loop first). Playback engagement is covered by --selftest-session.
+    void runDemoSelftest()
+    {
+        bool kickIsSynth = false, pianoIsSampler = false, pianoFileExists = false, clipHasNotes = false;
+        int  noteCount = 0;
+
+        if (auto* ed = session.getEdit())
+        {
+            ed->ensureNumberOfAudioTracks (3);
+            auto tracks = te::getAudioTracks (*ed);
+
+            if (tracks.size() >= 3)
+            {
+                auto kp = PluginHost::applyInstrumentPreset (*tracks[0], PluginHost::InstrumentPreset::Kick);
+                kickIsSynth = kp != nullptr && kp->isSynth()
+                              && dynamic_cast<te::SamplerPlugin*> (kp.get()) == nullptr;   // a 4OSC, not the sampler
+
+                auto pp = PluginHost::applyInstrumentPreset (*tracks[2], PluginHost::InstrumentPreset::Piano);
+                pianoIsSampler = dynamic_cast<te::SamplerPlugin*> (pp.get()) != nullptr;
+
+                pianoFileExists = InstrumentSamples::ensurePianoOneShot().existsAsFile();
+
+                session.ensureScenes (16);
+                if (auto mc = session.createMidiClipInSlot (0, 0, "DemoKick"))
+                {
+                    seedDemoNotes (*mc, 0);
+                    noteCount    = mc->getSequence().getNumNotes();
+                    clipHasNotes = noteCount > 0;
+                }
+            }
+        }
+
+        const bool pass = kickIsSynth && pianoIsSampler && pianoFileExists && clipHasNotes;
+
+        String report;
+        report << "mode=demo" << newLine
+               << "kickIsSynth="     << (kickIsSynth ? 1 : 0) << newLine
+               << "pianoIsSampler="  << (pianoIsSampler ? 1 : 0) << newLine
+               << "pianoFileExists=" << (pianoFileExists ? 1 : 0) << newLine
+               << "noteCount="       << noteCount << newLine
+               << "clipHasNotes="    << (clipHasNotes ? 1 : 0) << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write demo selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Demo selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
-    void populateDemoSession()
+    // W09: seed a per-track-instrument note pattern into a demo clip so a launched clip is AUDIBLE, not
+    // silent. Track 0 = 4-on-the-floor kick (MIDI 36), track 1 = C-minor root/fifth walking bass, track 2 =
+    // Cm-Ab-Bb-Cm chord stabs; other tracks are left empty. Beats are content-relative (beat 0 = clip start),
+    // routed through the Edit's real UndoManager like every other note-write path.
+    void seedDemoNotes (te::MidiClip& mc, int trackIndex)
+    {
+        auto& seq  = mc.getSequence();
+        auto* undo = &mc.edit.getUndoManager();
+        const auto add = [&] (int pitch, double beat, double len, int vel)
+        {
+            seq.addNote (pitch, te::BeatPosition::fromBeats (beat),
+                         te::BeatDuration::fromBeats (len), vel, 0, undo);
+        };
+
+        if (trackIndex == 0)            // Drums: four-on-the-floor kick, 16 beats
+        {
+            for (int b = 0; b < 16; ++b)
+                add (36, (double) b, 0.25, 110);
+        }
+        else if (trackIndex == 1)       // Bass: C-minor root/fifth walking figure, 8-beat phrase x2
+        {
+            struct N { int pitch; double beat, len; int vel; };
+            static const N phrase[] = {
+                { 36, 0.0, 1.5, 105 }, { 43, 1.5, 0.5, 95 }, { 36, 2.0, 1.5, 105 }, { 39, 3.5, 0.5, 95 },
+                { 34, 4.0, 1.5, 100 }, { 41, 5.5, 0.5,  90 }, { 34, 6.0, 1.5, 100 }, { 39, 7.5, 0.5, 90 }
+            };
+            for (int rep = 0; rep < 2; ++rep)
+                for (auto& n : phrase)
+                    add (n.pitch, n.beat + rep * 8.0, n.len, n.vel);
+        }
+        else if (trackIndex == 2)       // Keys: Cm - Ab - Bb - Cm chord stabs (3-note voicings), one per bar
+        {
+            struct Chord { double beat; int a, b, c; };
+            static const Chord chords[] = {
+                { 0.0,  60, 63, 67 },   // Cm  (C  Eb G)
+                { 4.0,  56, 60, 63 },   // Ab  (Ab C  Eb)
+                { 8.0,  58, 62, 65 },   // Bb  (Bb D  F)
+                { 12.0, 60, 63, 67 }    // Cm
+            };
+            for (auto& ch : chords)
+                for (int p : { ch.a, ch.b, ch.c })
+                    add (p, ch.beat, 4.0, 85);
+        }
+    }
+
+    // W09: builds the demo CONTENT (named/coloured tracks, per-track instrument PRESETS, note-seeded MIDI
+    // clips) into the current edit. Shared by --screenshot (which then adds an automation curve, launches,
+    // and snapshots) and the first-launch welcome demo (see initialise). Does NOT launch or persist.
+    void populateDemoContent()
     {
         auto* edit = session.getEdit();
         if (edit == nullptr)
@@ -3906,25 +4027,52 @@ private:
             tracks[i]->setColour (Colour (trackCols[i]));
         }
 
-        // Scatter born-audible MIDI clips across slots so the grid reads as a real session.
+        // W09: give the three hero tracks distinct instruments BEFORE creating clips, so
+        // createMidiClipInSlot's ensureDefaultInstrument no-ops (a synth already exists) instead of stacking
+        // a stock 4OSC. Drums -> punchy 4OSC kick, Bass -> 4OSC bass, Keys -> Sampler + the self-rendered CC0
+        // piano one-shot. Lead/Vox/FX keep the default 4OSC.
+        if (tracks.size() > 0) PluginHost::applyInstrumentPreset (*tracks[0], PluginHost::InstrumentPreset::Kick);
+        if (tracks.size() > 1) PluginHost::applyInstrumentPreset (*tracks[1], PluginHost::InstrumentPreset::Bass);
+        if (tracks.size() > 2) PluginHost::applyInstrumentPreset (*tracks[2], PluginHost::InstrumentPreset::Piano);
+
+        // Clips across slots so the grid reads as a real session. SCENE 0 carries the coherent
+        // kick+bass+piano groove (Beat A / Sub / Chords) so launchScene(0) is an audible demo. The three
+        // hero tracks (0,1,2) get seeded note patterns; the rest stay empty for now.
         struct Cell { int track, scene; const char* name; };
         const Cell cells[] = {
             { 0, 0, "Beat A" }, { 0, 1, "Beat B" }, { 0, 3, "Fill" },
             { 1, 0, "Sub" },    { 1, 2, "Walk" },
-            { 2, 1, "Pad" },    { 2, 3, "Stab" },   { 2, 4, "Chord" },
+            { 2, 0, "Chords" }, { 2, 1, "Pad" },    { 2, 3, "Stab" },   { 2, 4, "Melody" },
             { 3, 2, "Hook" },   { 3, 5, "Solo" },
             { 4, 0, "Verse" },  { 4, 3, "Chorus" },
             { 5, 4, "Riser" }
         };
 
         for (auto& c : cells)
-            if (session.createMidiClipInSlot (c.track, c.scene, c.name) == nullptr)
-                FORGE_LOG_WARN ("Screenshot harness: failed to create demo MIDI clip at ("
+        {
+            auto mc = session.createMidiClipInSlot (c.track, c.scene, c.name);
+            if (mc == nullptr)
+            {
+                FORGE_LOG_WARN ("Demo: failed to create MIDI clip at ("
                                 + juce::String (c.track) + "," + juce::String (c.scene) + ")");
+                continue;
+            }
+            seedDemoNotes (*mc, c.track);   // seeds tracks 0/1/2; a no-op for the rest
+        }
+    }
+
+    void populateDemoSession()
+    {
+        populateDemoContent();
+
+        auto* edit = session.getEdit();
+        if (edit == nullptr)
+            return;
+
+        auto tracks = te::getAudioTracks (*edit);
 
         // W04a: a visible volume curve on track 0 so the arrange_automation state shows a real
-        // shape (rise-dip-rise) rather than an empty lane. Seam-committed, points persist for the
-        // duration of this throwaway demo edit only.
+        // shape (rise-dip-rise) rather than an empty lane.
         if (! tracks.isEmpty())
             if (auto volParam = AutomationHelpers::getTrackVolumeParam (*tracks[0]))
             {
@@ -3934,8 +4082,8 @@ private:
                 AutomationHelpers::addPoint (*volParam, 8.0, 0.70f);
             }
 
-        // Launch scene 3 so the snapshot shows playing pads + an active scene row.
-        session.launchScene (3);
+        // W09: launch scene 0 — the coherent kick+bass+piano groove — so the snapshot shows playing pads.
+        session.launchScene (0);
     }
 
     void beginScreenshot()
@@ -4765,6 +4913,7 @@ public:
                             : commandLine.contains ("--selftest-addtrack")       ? "selftest-addtrack"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-scene")          ? "selftest-scene"          // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
+                            : commandLine.contains ("--selftest-demo")           ? "selftest-demo"           // before bare --selftest (W09)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -4819,6 +4968,7 @@ public:
                         : commandLine.contains ("--selftest-addtrack")       ? SelfTest::addtrack       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-scene")          ? SelfTest::scene          // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
+                        : commandLine.contains ("--selftest-demo")           ? SelfTest::demo           // before bare --selftest (W09)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

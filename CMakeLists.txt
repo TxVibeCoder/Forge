@@ -41,6 +41,7 @@ target_sources(Forge PRIVATE
     src/engine/ForgeUIBehaviour.cpp
     src/engine/LaunchpadDriver.cpp
     src/engine/dsp/LoudnessAnalyzer.cpp
+    src/engine/dsp/InstrumentSamples.cpp
     src/ui/transport/TransportBar.cpp
     src/ui/transport/LcdDisplay.cpp
     src/ui/transport/TempoPopup.cpp

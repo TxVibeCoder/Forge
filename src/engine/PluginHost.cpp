@@ -1,4 +1,5 @@
 #include "engine/PluginHost.h"
+#include "engine/dsp/InstrumentSamples.h"
 #include "ui/plugins/PluginWindow.h"
 #include "core/Log.h"
 
@@ -76,12 +77,15 @@ namespace PluginHost
     }
 
     // The always-available built-in INSTRUMENTS. Unlike effects these report category
-    // "Instrument" and go at the HEAD of a track's chain as its sound source. Currently just
-    // the 4OSC synth, which is what a fresh MIDI track gets so its clips are audible.
+    // "Instrument" and go at the HEAD of a track's chain as its sound source. Both are registered
+    // engine built-ins inserted through the exact same createNewPlugin path.
+    //   - 4OSC   : the default synth a fresh MIDI track gets so its clips are audible.
+    //   - Sampler: plays a one-shot chromatically; used for the demo piano (a self-rendered CC0 sample).
     static Array<Creatable> getBuiltInInstruments()
     {
         Array<Creatable> list;
-        list.add (makeBuiltIn<te::FourOscPlugin> (TRANS ("Instrument")));   // "4OSC"
+        list.add (makeBuiltIn<te::FourOscPlugin>  (TRANS ("Instrument")));   // "4OSC"
+        list.add (makeBuiltIn<te::SamplerPlugin>  (TRANS ("Instrument")));   // "Sampler"
         return list;
     }
 
@@ -242,6 +246,187 @@ namespace PluginHost
             FORGE_LOG_ERROR ("Failed to ensure default instrument on track — MIDI clips may be inaudible");
 
         return true;
+    }
+
+    //==============================================================================
+    // ---- applyInstrumentPreset + helpers ------------------------------------------------------
+    //
+    // The demo builder assigns a distinct voice per track. Kick/Bass are pure 4OSC parameter sets
+    // (deterministic, headlessly provable by rendering + non-silence check); Piano is the engine
+    // Sampler loaded with Forge's self-rendered CC0 one-shot, pitched from one sample.
+
+    namespace
+    {
+        // Removes every existing head synth / MIDI-input instrument from the track so a fresh preset
+        // never stacks on top of a prior one (e.g. the default 4OSC ensureDefaultInstrument inserted).
+        void removeExistingInstruments (te::AudioTrack& track)
+        {
+            // Collect first — deleting mutates the pluginList we'd otherwise be iterating.
+            juce::Array<te::Plugin*> toRemove;
+            for (auto* p : track.pluginList)
+                if (p != nullptr && (p->isSynth() || p->takesMidiInput()))
+                    toRemove.add (p);
+
+            for (auto* p : toRemove)
+                if (p != nullptr)
+                    removePlugin (*p);
+        }
+
+        // Sets a 4OSC AutomatableParameter (level, tune, ADSR, filter freq/res) by its RAW value.
+        // The param is attached to its CachedValue, so setParameter is the notification-safe path.
+        void setParam (te::AutomatableParameter::Ptr param, float value)
+        {
+            if (param != nullptr)
+                param->setParameter (value, juce::dontSendNotification);
+        }
+
+        // Programs a 4OSC as a punchy KICK: a single sine oscillator, no sustain, a short amp decay,
+        // and a fast filter-envelope sweep for the classic downward "thump". Pure synthesis.
+        void programKick (te::FourOscPlugin& synth)
+        {
+            // Osc 1 = sine at full level; osc 2-4 silent.
+            if (synth.oscParams.size() >= 1)
+            {
+                auto* o = synth.oscParams[0];
+                o->waveShapeValue = (int) te::Oscillator::sine;   // CachedValue<int> (not automatable)
+                setParam (o->level, 0.0f);                        // 0 dB (range -100..0)
+                setParam (o->tune,  0.0f);
+            }
+            for (int i = 1; i < synth.oscParams.size(); ++i)
+                setParam (synth.oscParams[i]->level, -100.0f);    // silence osc 2-4
+
+            // Amp ADSR (seconds; sustain in %): instant attack, fast decay, no sustain -> percussive.
+            setParam (synth.ampAttack,  0.001f);
+            setParam (synth.ampDecay,   0.28f);
+            setParam (synth.ampSustain, 0.0f);
+            setParam (synth.ampRelease, 0.12f);
+
+            // Low-pass filter with a fast decaying envelope for the pitch-drop "thump" character.
+            synth.filterTypeValue = 1;                            // 1 = low-pass
+            setParam (synth.filterFreq,      66.0f);              // note-scale (~370 Hz baseline)
+            setParam (synth.filterResonance, 12.0f);              // %
+            setParam (synth.filterAmount,    0.7f);               // env drives cutoff up on attack
+            setParam (synth.filterAttack,    0.001f);
+            setParam (synth.filterDecay,     0.16f);
+            setParam (synth.filterSustain,   0.0f);
+            setParam (synth.filterRelease,   0.10f);
+
+            setParam (synth.masterLevel, 0.0f);
+        }
+
+        // Programs a 4OSC as a round synth BASS: a saw oscillator through a low-pass filter with a
+        // moderate decay and some sustain. 4OSC's home turf.
+        void programBass (te::FourOscPlugin& synth)
+        {
+            if (synth.oscParams.size() >= 1)
+            {
+                auto* o = synth.oscParams[0];
+                o->waveShapeValue = (int) te::Oscillator::saw;    // rich harmonics for a filter to shape
+                setParam (o->level, 0.0f);
+                setParam (o->tune,  0.0f);
+            }
+            // Osc 2 = square one octave down for weight; osc 3-4 silent.
+            if (synth.oscParams.size() >= 2)
+            {
+                auto* o = synth.oscParams[1];
+                o->waveShapeValue = (int) te::Oscillator::square;
+                setParam (o->level, -8.0f);
+                setParam (o->tune,  -12.0f);                       // -1 octave (range +-36 st)
+            }
+            for (int i = 2; i < synth.oscParams.size(); ++i)
+                setParam (synth.oscParams[i]->level, -100.0f);
+
+            // Amp ADSR: quick attack, medium decay, sustained body, short release.
+            setParam (synth.ampAttack,  0.005f);
+            setParam (synth.ampDecay,   0.30f);
+            setParam (synth.ampSustain, 60.0f);                   // %
+            setParam (synth.ampRelease, 0.15f);
+
+            // Low-pass to keep it round and dark, with a little envelope movement.
+            synth.filterTypeValue = 1;                            // 1 = low-pass
+            setParam (synth.filterFreq,      58.0f);              // note-scale (~230 Hz) -> dark
+            setParam (synth.filterResonance, 18.0f);              // %
+            setParam (synth.filterAmount,    0.35f);
+            setParam (synth.filterAttack,    0.01f);
+            setParam (synth.filterDecay,     0.35f);
+            setParam (synth.filterSustain,   40.0f);              // %
+            setParam (synth.filterRelease,   0.15f);
+
+            setParam (synth.masterLevel, 0.0f);
+        }
+    } // namespace
+
+    te::Plugin::Ptr applyInstrumentPreset (te::AudioTrack& track, InstrumentPreset preset)
+    {
+        // Clear any existing head synth so presets never stack.
+        removeExistingInstruments (track);
+
+        if (preset == InstrumentPreset::Piano)
+        {
+            // Render (or reuse) the self-rendered CC0 piano one-shot.
+            const juce::File sample = InstrumentSamples::ensurePianoOneShot();
+            if (! sample.existsAsFile())
+            {
+                FORGE_LOG_ERROR ("Piano preset: no piano one-shot available — instrument not inserted");
+                return {};
+            }
+
+            // Insert the engine Sampler at the head via the same built-in path 4OSC uses.
+            auto plugin = addInstrumentToTrack (track, te::SamplerPlugin::getPluginName());
+            if (plugin == nullptr)
+            {
+                FORGE_LOG_ERROR ("Piano preset: failed to insert Sampler instrument");
+                return {};
+            }
+
+            if (auto* sampler = dynamic_cast<te::SamplerPlugin*> (plugin.get()))
+            {
+                // addSound resolves an absolute path via the Edit's filePathResolver (returns it as-is).
+                // startTime 0, length 0 -> whole file. gainDb 0. Returns "" on success, else an error.
+                const juce::String err = sampler->addSound (sample.getFullPathName(), "Piano",
+                                                            0.0, 0.0, 0.0f);
+                if (err.isNotEmpty())
+                {
+                    FORGE_LOG_ERROR ("Piano preset: Sampler addSound failed — " + err);
+                    return plugin;   // the plugin is inserted; it just has no sound
+                }
+
+                // Map the single sound at the sample's root note across the full keyboard so it
+                // pitches chromatically (Sampler resamples per note-on: ratio = f(note)/f(keyNote)).
+                sampler->setSoundParams (0, InstrumentSamples::kRootNote, 0, 127);
+
+                // CAVEAT: the audio loads on an AsyncUpdater — a headless render must pump the message
+                // loop after this before rendering, or getNumSamples()==0 and the note is skipped.
+            }
+            else
+            {
+                FORGE_LOG_ERROR ("Piano preset: inserted instrument was not a SamplerPlugin");
+            }
+
+            return plugin;
+        }
+
+        // Kick / Bass: insert a 4OSC then program it.
+        auto plugin = addInstrumentToTrack (track, te::FourOscPlugin::getPluginName());
+        if (plugin == nullptr)
+        {
+            FORGE_LOG_ERROR ("Instrument preset: failed to insert 4OSC instrument");
+            return {};
+        }
+
+        if (auto* synth = dynamic_cast<te::FourOscPlugin*> (plugin.get()))
+        {
+            if (preset == InstrumentPreset::Kick)
+                programKick (*synth);
+            else
+                programBass (*synth);
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("Instrument preset: inserted instrument was not a FourOscPlugin");
+        }
+
+        return plugin;
     }
 
     //==============================================================================

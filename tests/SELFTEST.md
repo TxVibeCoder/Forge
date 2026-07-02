@@ -439,9 +439,31 @@ poll timer is visibility-gated).
 The base `session` screenshot state now includes the mixer band (it's part of SessionView's tree), so no new
 `--screenshot` state was added — the 10-state matrix stands.
 
+## `Forge --selftest-demo` (audible demo — instruments + seeded notes)
+
+The acceptance gate for **W09 — the audible demo** (design:
+[../docs/devlog/wave-09-instruments.md](../docs/devlog/wave-09-instruments.md)). Structural + synchronous:
+`PluginHost::applyInstrumentPreset(track0, Kick)` inserts a 4OSC (not the Sampler); `applyInstrumentPreset(track2,
+Piano)` inserts the engine **Sampler**; `InstrumentSamples::ensurePianoOneShot()` generates the self-rendered
+CC0 piano one-shot on disk; and a seeded clip actually holds notes. It does NOT render audio (the Sampler loads
+its sample on an AsyncUpdater; playback engagement is covered by `--selftest-session`).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `kickIsSynth` | the Kick preset inserted a 4OSC synth (not a Sampler) | 1 |
+| `pianoIsSampler` | the Piano preset inserted a `te::SamplerPlugin` | 1 |
+| `pianoFileExists` | the self-rendered CC0 piano one-shot exists in `%APPDATA%\Forge\library` | 1 |
+| `noteCount` / `clipHasNotes` | a seeded demo clip holds notes | `noteCount>0`, `clipHasNotes=1` |
+
+> Verified 2026-07-02: **PASS** (all legs 1, `noteCount=16`), bringing the floor to **23 gates**. Known
+> follow-up (QC NIT, not gated): the gate proves the piano one-shot exists on disk but not that the Sampler
+> *ingested* it (an async load) — a render/ingestion leg would prove the final audible link.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
-Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a
+Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC
+kick, a 4OSC bass, and a Sampler piano — plus a 4-on-floor + bass + chord pattern), launches scene 0 (the
+coherent kick+bass+piano groove), and renders each view to a
 PNG in `%TEMP%` via `createComponentSnapshot`, so the UI can be inspected without a live display. Writes:
 
 | file | what it proves |
