@@ -247,6 +247,41 @@ their poll timers).
 - inspector leg: after `setGainDB(−6)` and one `refreshNow()`, the gain slider reads **−6 dB ± 0.1** —
   no re-select, no rebuild.
 
+## `Forge --selftest-lcd` (transport LCD model + pad pulse curve)
+
+The acceptance gate for **W04a — the LCD + sequence lighting** (design:
+[../docs/devlog/wave-04a-ux.md](../docs/devlog/wave-04a-ux.md)). A **pure model gate** (no engine /
+edit / device — runs and quits before the window, like `--selftest-lufs`): asserts the
+`forge::lcd::computeLcdState` acceptance table and the `padPulseAlpha` lighting curve.
+
+### PASS criteria (all must hold)
+- idle face: position "1|1", tempo "120.0", "C · 4/4", no count-in, phase 0; playing at 6.5 beats
+  reads "2|3" with phase 0.5;
+- count-in digits derive from the **click grid** (whole timeline beats): the aligned N=4 table
+  (lead-in 0 → 1 → 3 → 4 → punched) AND a **non-aligned punch at beat 2.3** (digit flips ON click
+  beats −1/0/1/2 — the QC-caught desync case);
+- skeptic guard 1 (a mid-playback record never lights the count-in face) and guard 2 (epsilon at
+  exact click boundaries) hold;
+- the pulse curve: playing 1.0→0.55 across the beat, queued 0.35..0.75 over two beats, recording
+  unmodulated 1.0, non-animated states 0, out-of-range phases fold.
+
+## `Forge --selftest-menu` (menu-bar model)
+
+The acceptance gate for **W04a — the menu bar**. Pure model gate: dispatches through a BARE model
+(every callback unset — must no-op, never crash), then asserts the tree shape (5 menus, pinned item
+counts), non-zero item ids, known shortcut labels (Save = Ctrl+S, Open = Ctrl+O — display-only
+strings that must not drift from `keyPressed`), callback dispatch (flag capture), and live tick
+marks from the query functions (unset query = unticked).
+
+## `Forge --selftest-tray` (channel-tray live sync)
+
+The acceptance gate for **W04a — the channel tray**. Mirrors `--selftest-livesync`: import a tone,
+bind track 0, write volume −9 dB + mute engine-side, force one `refreshNow()` tick.
+
+### PASS criteria (all must hold)
+- the tray reports bound; the fader reads −9 dB ± 0.15 and mute reads true after one sync tick;
+- `setTrack (nullptr)` lands in the empty state ("Select a track").
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

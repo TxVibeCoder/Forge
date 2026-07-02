@@ -1,18 +1,17 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-01 (this session: **W03 — automation lanes · MIDI-clock out ·
-async LUFS · live cross-surface refresh · INTERFACE.md rewrite** — four engine/UI features + a docs rewrite,
-built by a tiered multi-agent wave on baseline `cede941` and proven by THREE new headless gates on an
-**eleven-gate floor**; adversarial QC confirmed 9 findings (1 blocker) — all fixed — and the new sync gate
-exposed + fixed a **latent product UAF** in the mixer's master meter (a raw pointer into the playback
-context's level measurer). Clean MSVC Debug build (0 warnings); **all ELEVEN selftests PASS** — `--selftest`,
-`--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
-`--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
-`--selftest-livesync`; full record → [devlog/wave-03-features.md](devlog/wave-03-features.md). Prior session:
-**W02 — MIDI-learn HW routing · Forge-native control surface · offline LUFS** (`bb9ef5e`, pushed; →
-[devlog/wave-02-features.md](devlog/wave-02-features.md)). Before that: **Wave 01 — six parallel feature
-seams** (`e3b8c7c`, pushed; → [devlog/wave-01-features.md](devlog/wave-01-features.md)); **W7 — MIDI record
-into Session clip slots** (`160f6cc`); **Session-grid vertical scroll + the logging subsystem** (`8d15234`).)*
+*Living status document. Last updated 2026-07-01 (this session: **W04a — the UX wave, part 1: transport LCD ·
+channel tray · menu bar · sequence lighting** — the first slice of the INTERFACE.md §4 UX charter under
+Fable's design authority, on baseline `9a28845`, proven by THREE new pure/headless gates on a
+**fourteen-gate floor**; a 22-agent adversarial QC confirmed 10 distinct defects (1 blocker — the LCD's
+reserved width starving the transport buttons; fixed by moving the file-command buttons into the new menu bar
+and inverting the centre layout priority) — all fixed. Clean MSVC Debug build (0 warnings); **all FOURTEEN
+selftests PASS**; `--screenshot` renders an 8-state matrix. Full record →
+[devlog/wave-04a-ux.md](devlog/wave-04a-ux.md). Prior sessions this line of work: **W03 — automation lanes ·
+MIDI-clock out · async LUFS · live refresh** (`ffa494d`, pushed; →
+[devlog/wave-03-features.md](devlog/wave-03-features.md)); **W02** (`bb9ef5e`; →
+[devlog/wave-02-features.md](devlog/wave-02-features.md)); **Wave 01** (`e3b8c7c`); **W7** (`160f6cc`);
+**scroll + logging** (`8d15234`).)*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
@@ -378,6 +377,36 @@ recipe pre-build) → 6 file-disjoint implementation agents on **tiered models**
   lane on external curve edits. Plus 5 minors (degrade-path roll, props restore, drag clamp, hit-test z-order,
   INTERFACE.md tense).
 
+### W04a — the UX wave, part 1: LCD · channel tray · menu bar · sequence lighting — SHIPPED  (this session; baseline `9a28845`)
+The first slice of the W04 UX charter (INTERFACE.md §4), under Fable's design authority. Process: 3 spikes
+(+ an adversarial skeptic on the count-in mechanics) → frozen design contracts (accent colour IDs pre-laid by
+the orchestrator) → 4 file-disjoint Fable agents → shell integration → 14-gate floor → 22-agent adversarial QC
+(10 confirmed incl. 1 blocker, 2 refuted — all fixed). Full record: [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md).
+- **The transport LCD** (`ui/transport/LcdModel.h` + `LcdDisplay.{h,cpp}`): a GarageBand-style inset screen,
+  centre of the control bar — bars|beats, tempo, key · time-sig — whose face becomes a large beat-locked
+  **count-in digit with a record-red pulse** during record pre-roll. Pure model; digits derive from the
+  engine's CLICK GRID (whole timeline beats) so they land on the audible clicks even recording from a
+  mid-beat stop (the QC major). Supersedes the TransportBar's old readout; the HH:MM:SS timecode is a
+  **deliberate drop** (returns as a width-gated LCD zone in W04b). Gate: **`--selftest-lcd`**.
+- **The channel tray** (`ui/tray/ChannelTray.{h,cpp}`): the GarageBand/Logic inspector — a left-sidebar
+  **Files | Channel** tab band; selecting a track (or one of its clips — selection follows to the owner)
+  shows its strip: pan, A/B sends, insert rows (click opens editors), fader, M/S. Track identity re-validated
+  before every dereference; poll gated on visibility; auto-reveal never overrides an explicitly pinned Files
+  tab. The standalone Mix view stays (all-tracks overview vs one-track focus). Gate: **`--selftest-tray`**.
+- **The menu bar** (`ui/menu/ForgeMenuModel.{h,cpp}` + `MainWindow::setMenuBar`): File/Edit/View/Transport/
+  Help from one command table, shortcut labels beside items, live tick marks, every callback null-guarded.
+  **The control bar's file-command buttons moved here** (the charter's division of labor — and the QC blocker
+  fix: the freed ~500 px lets the transport and the LCD both fit from the default width). Bonus: the
+  transport **Rec button was wired to nothing since Phase 1** — now fixed. Gate: **`--selftest-menu`**.
+- **Sequence lighting + the accent vocabulary**: playing pads pulse **playGreen** (beat-locked, from the same
+  bars|beats chain as the LCD, inside the existing 25 Hz poll), queued pads breathe **playGreenDim**, and
+  **amber now means selection only** across the grid and scene column. Pure `padPulseAlpha` curve asserted by
+  the LCD gate.
+- **Shell**: browser/drawer sizes persist (engine PropertiesFile); the screenshot matrix grew to 8 states
+  (`arrange_automation` via a new `ArrangeView::setAutomationLaneExpanded` seam, `arrange_tray`,
+  `lcd_countin` via the LCD's demo seam). The menu bar renders as window chrome above the shell content, so
+  it is NOT in the component snapshots — a window-level capture is a W04b harness item.
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -434,8 +463,12 @@ src/
     ├── ForgeLookAndFeel.h         dark amber theme (colour IDs)
     ├── ControlBar                 merged top strip + view-switch + region toggles + Plugins/Export menu
     ├── transport/TransportBar     play/stop/rec/loop + timecode/bars|beats
-    ├── arrange/ArrangeView        ruler + snap-division selector, lanes (M/S/R/A + colour), clips (waveform, drag, snap), selection, playhead
+    ├── arrange/ArrangeView        ruler + snap-division selector, lanes (M/S/R/A + colour), clips (waveform, drag, snap), selection (clip follows to track), playhead
     ├── arrange/AutomationLane     collapsible per-track volume/pan automation sub-lane (point add/drag/delete, curve-change listener; W03)
+    ├── transport/LcdDisplay       the control-bar transport LCD: bars|beats / tempo / key·sig + the beat-locked count-in digit face (W04a)
+    ├── transport/LcdModel.h       pure display model behind the LCD — headlessly gated (W04a)
+    ├── tray/ChannelTray           left-sidebar selected-track channel strip: pan, A/B sends, inserts, fader, M/S (W04a)
+    ├── menu/ForgeMenuModel        the top menu-bar model (File/Edit/View/Transport/Help, shortcut labels, live ticks; W04a)
     ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots (bypass + reorder), master strip + post-fader meter
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
@@ -520,7 +553,14 @@ tests/  SELFTEST.md
   empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
   (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
   remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
-- [x] **W03 — automation lanes + MIDI-clock out + async LUFS + live refresh — DONE** (this session).
+- [x] **W04a — the UX wave, part 1 — DONE** (this session). Transport LCD (`--selftest-lcd`), channel tray
+  (`--selftest-tray`), menu bar (`--selftest-menu`, incl. the dead-Rec-button fix + the control-bar
+  de-clutter), Session sequence lighting + the semantic accent switch (amber = selection only), persisted
+  section sizes, the 8-state screenshot matrix. **Remaining (W04b):** popouts/tear-offs, animated slide-outs,
+  the timecode LCD zone, a window-level screenshot for the menu bar, the tray meter, Session-grid tray
+  follow, scene layout polish, the accent sweep across remaining views.
+  Details: [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md).
+- [x] **W03 — automation lanes + MIDI-clock out + async LUFS + live refresh — DONE** (prior session).
   Volume/pan automation lanes in Arrange (`--selftest-automation`); MIDI-clock out with a wire-byte capture
   gate (`--selftest-sync`); LUFS analysis on the render worker with an abort guard (extended
   `--selftest-lufs`); live cross-surface refresh (`--selftest-livesync`); INTERFACE.md rewritten
