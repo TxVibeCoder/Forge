@@ -180,19 +180,31 @@ void LcdDisplay::paint (Graphics& g)
         return;
     }
 
-    // Idle/playing face, three zones. Narrow widths drop the key zone first (at the width
-    // where the tempo strip would otherwise ellipsize beside it), then the tempo zone at the
-    // published floor; the position readout always survives. Thresholds are the published
-    // header constants so code and contract cannot drift (QC-corrected).
+    // Idle/playing face, four zones. Narrow widths drop the timecode zone first (absolute
+    // time is the most expendable readout), then the key zone (at the width where the tempo
+    // strip would otherwise ellipsize beside it), then the tempo zone at the published floor;
+    // the position readout always survives. Thresholds are the published header constants so
+    // code and contract cannot drift (QC-corrected).
     auto inner = getLocalBounds().reduced (10, 2);
-    const bool showKey   = getWidth() >= keyZoneMinWidth;
-    const bool showTempo = getWidth() >= minimumWidth;
+    const bool showTimecode = getWidth() >= timecodeMinWidth;
+    const bool showKey      = getWidth() >= keyZoneMinWidth;
+    const bool showTempo    = getWidth() >= minimumWidth;
 
     // LEFT — bars|beats, the large transport-clock readout.
     g.setColour (Colour (ForgeLookAndFeel::timeTempo));
     g.setFont (Font (FontOptions (Font::getDefaultMonospacedFontName(), 16.0f, Font::plain)));
     g.drawText (current.positionText, inner.removeFromLeft (jmin (64, inner.getWidth())),
                 Justification::centredLeft);
+
+    // LEFT-CENTRE — absolute time, immediately right of the position (W04b). textSec, not
+    // timeTempo: absolute time is secondary to musical time in the design hierarchy.
+    if (showTimecode)
+    {
+        g.setColour (Colour (ForgeLookAndFeel::textSec));
+        g.setFont (Font (FontOptions (Font::getDefaultMonospacedFontName(), 12.0f, Font::plain)));
+        g.drawText (current.timecodeText, inner.removeFromLeft (jmin (80, inner.getWidth())),
+                    Justification::centredLeft);
+    }
 
     // RIGHT — key + time signature.
     if (showKey)

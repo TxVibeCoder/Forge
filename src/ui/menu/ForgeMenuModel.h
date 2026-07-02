@@ -47,6 +47,7 @@ public:
 
         cmdViewSession, cmdViewArrange, cmdViewMix,
         cmdToggleBrowser, cmdToggleDrawer,
+        cmdPopOutMixer, cmdPopOutPianoRoll,   // W04b tear-off panels
 
         cmdTogglePlay, cmdToggleRecord, cmdToggleLoop,
         cmdToggleMetronome, cmdToggleMidiClock,
@@ -72,6 +73,7 @@ public:
         // View
         std::function<void (int)> onViewMode;      // 0 = Session, 1 = Arrange, 2 = Mixer (ControlBar's convention)
         std::function<void()> onToggleBrowser, onToggleDrawer;
+        std::function<void()> onPopOutMixer, onPopOutPianoRoll;   // W04b tear-offs (re-invoke = front the window)
 
         // Transport
         std::function<void()> onTogglePlay, onToggleRecord, onToggleLoop,
@@ -84,6 +86,7 @@ public:
         // Truth queries for tick marks, read live on every menu open.
         std::function<bool()> queryMetronomeEnabled, queryMidiClockEnabled,
                               queryBrowserVisible, queryDrawerVisible;
+        std::function<bool()> queryMixerPoppedOut, queryPianoRollPoppedOut;   // W04b: tick = torn off
         std::function<int()>  queryViewMode;       // same 0/1/2 convention as onViewMode
         std::function<int()>  queryCountInBars;    // bars, 0 = off (radio-ticks the Count-In submenu)
     };

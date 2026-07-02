@@ -31,6 +31,7 @@
 #include "ui/markers/MarkerBar.h"
 #include "ui/mixer/MixerView.h"
 #include "ui/plugins/PluginWindow.h"
+#include "ui/popout/PopoutWindow.h"
 #include "ui/browser/BrowserView.h"
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
@@ -47,7 +48,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -330,7 +331,7 @@ public:
             }
 
             if (c != nullptr && ! drawerVisible)
-                drawerVisible = true;
+                revealDrawer();
 
             resized();
         };
@@ -375,8 +376,8 @@ public:
                 arrangeView.rebuild();
 
                 pianoRoll.setMidiClip (mc.get());
-                bottomMode    = BottomMode::PianoRoll;
-                drawerVisible = true;
+                bottomMode = BottomMode::PianoRoll;
+                revealDrawer();
                 resized();
             }
             else
@@ -399,6 +400,32 @@ public:
         // here we only route selection/creation to the shared piano-roll drawer and the record arm path.
         sessionView.onEditMutated = [this] { if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
 
+        // Session focus follows to the channel tray (W04b): SessionView announces focus-TRACK
+        // changes (arrow keys / pad clicks) as an INDEX — it caches no track pointers (R1) — so
+        // resolve it fresh here and bind the tray, mirroring arrangeView.onTrackSelected's guards:
+        // the sidebar flips to the Channel tab only when it's open and the user hasn't explicitly
+        // pinned Files (QC: never steal an explicit pane choice).
+        sessionView.onTrackFocusChanged = [this] (int trackIndex)
+        {
+            te::AudioTrack* at = nullptr;
+
+            if (auto* e = session.getEdit())
+            {
+                const auto tracks = te::getAudioTracks (*e);
+                if (isPositiveAndBelow (trackIndex, tracks.size()))
+                    at = tracks[trackIndex];
+            }
+
+            channelTray.setTrack (at);
+
+            if (at != nullptr && browserVisible && ! userPinnedBrowser
+                && sidebarMode != SidebarMode::Channel)
+            {
+                sidebarMode = SidebarMode::Channel;
+                resized();
+            }
+        };
+
         sessionView.onSlotSelected = [this] (te::Clip* c)
         {
             if (auto* mc = dynamic_cast<te::MidiClip*> (c))
@@ -413,7 +440,7 @@ public:
             }
 
             if (c != nullptr && ! drawerVisible)
-                drawerVisible = true;
+                revealDrawer();
 
             resized();
         };
@@ -424,8 +451,8 @@ public:
             if (clip != nullptr)
             {
                 pianoRoll.setMidiClip (clip.get());
-                bottomMode    = BottomMode::PianoRoll;
-                drawerVisible = true;
+                bottomMode = BottomMode::PianoRoll;
+                revealDrawer();
                 resized();
             }
         };
@@ -596,7 +623,8 @@ public:
         if (mode == SelfTest::screenshot)
             setSize (1480, 940);   // tall enough to render all 16 scene rows for the snapshot
         else
-            setSize (1040, 620);
+            setSize (1200, 620);   // wide enough for all four LCD zones at first launch (W04b QC:
+                                   // fixed chrome + timecodeMinWidth puts the floor at ~1174)
 
         if (mode == SelfTest::record)
         {
@@ -670,6 +698,14 @@ public:
             // followed; then a null re-bind must land in the empty state.
             MessageManager::callAsync ([this] { runTraySelftest(); });
         }
+        else if (mode == SelfTest::popout)
+        {
+            // Headless tear-off gate (W04b): reparent the mixer + piano-roll into PopoutWindows
+            // and back, asserting parentage each way. Restore defers each window's destruction
+            // via callAsync, so the verify is a SECOND message-loop turn (same yield discipline
+            // as --selftest-midilearn).
+            MessageManager::callAsync ([this] { beginPopoutSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -700,6 +736,11 @@ public:
         // the Engine outlives us, so a late CC callback or LED poll must never touch a dying ProjectSession.
         static_cast<ForgeUIBehaviour&> (engine.getUIBehaviour()).setSession (nullptr);
         controlSurface.reset();
+
+        // W04b: close tear-off windows while the views they host are still alive (the dtor BODY
+        // runs before member destruction; the after-the-views declaration order is the backstop).
+        pianoRollPopout.reset();
+        mixerPopout.reset();
 
         PluginWindow::closeAll();   // close any floating plugin editors before the Edit tears down
 
@@ -734,10 +775,14 @@ public:
         sidebarChannelTab.setVisible (browserVisible);
         browserPanel.setVisible (showBrowser);
         channelTray.setVisible (showChannel);
-        browserResizer.setVisible (browserVisible);
+        browserResizer.setVisible (browserVisible && sidebarSlide < 0);   // inert while sliding (QC)
         if (browserVisible)
         {
-            const int w = jlimit (browserMinWidth, browserMaxWidth, browserWidth);
+            // While a slide is in flight the band renders at the animated width (it passes below
+            // the min toward 0 — the inner layout tolerates degenerate bounds); settled layout
+            // uses the persisted clamped width as before.
+            const int w = (sidebarSlide >= 0) ? sidebarSlide
+                                              : jlimit (browserMinWidth, browserMaxWidth, browserWidth);
             auto band = work.removeFromLeft (w);
 
             auto tabs = band.removeFromTop (sidebarTabH);
@@ -759,14 +804,22 @@ public:
         // bottomMode (the arrange selection routes to one or the other). A resizer hugs its top edge;
         // the inactive editor is hidden. The piano-roll scrolls its 128 pitch rows internally via its
         // own Viewport, so the drawer keeps the same 90..420px clamp regardless of mode.
-        const bool showDetail    = drawerVisible && bottomMode == BottomMode::Detail;
-        const bool showPianoRoll = drawerVisible && bottomMode == BottomMode::PianoRoll;
+        //
+        // W04b: a torn-off view lives in its own PopoutWindow — bounds are parent-relative and its
+        // visibility belongs to that window, so the shell skips BOTH setVisible and setBounds for it
+        // (a setVisible(false) alone would blank the popout). While the roll is out, the drawer falls
+        // back to the DetailView; bottomMode stays PianoRoll so the roll returns there on restore.
+        const bool rollTornOff   = pianoRollPopout != nullptr;
+        const bool showDetail    = drawerVisible && (bottomMode == BottomMode::Detail || rollTornOff);
+        const bool showPianoRoll = drawerVisible && bottomMode == BottomMode::PianoRoll && ! rollTornOff;
         detailView.setVisible (showDetail);
-        pianoRoll.setVisible  (showPianoRoll);
-        drawerResizer.setVisible (drawerVisible);
+        if (! rollTornOff)
+            pianoRoll.setVisible (showPianoRoll);
+        drawerResizer.setVisible (drawerVisible && drawerSlide < 0);   // inert while sliding (QC)
         if (drawerVisible)
         {
-            const int h = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
+            const int h = (drawerSlide >= 0) ? drawerSlide
+                                             : jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
             const auto drawerArea = centre.removeFromBottom (h);
             if (showPianoRoll) pianoRoll.setBounds (drawerArea);
             else               detailView.setBounds (drawerArea);
@@ -775,9 +828,11 @@ public:
 
         sessionView.setVisible (viewMode == ViewMode::Session);
         arrangeView.setVisible (viewMode == ViewMode::Arrange);
-        mixerView.setVisible (viewMode == ViewMode::Mixer);
+        if (mixerPopout == nullptr)
+            mixerView.setVisible (viewMode == ViewMode::Mixer);
         sessionView.setBounds (centre);
-        mixerView.setBounds (centre);
+        if (mixerPopout == nullptr)
+            mixerView.setBounds (centre);
 
         // Markers strip (P5) rides above the arrange view, sharing its TimelineView. Carve it off the top
         // of the arrange area ONLY in Arrange mode; Session/Mixer get the full centre. Full-width bar with
@@ -895,6 +950,14 @@ private:
     double syExpectedClocks = 0.0;                      // seconds * (bpm/60) * 24
     int  sySavedScanInterval = 4;                       // restore on ALL exit paths (persists to storage)
 
+    // --selftest-popout state (W04b): parentage/visibility flags captured across the two turns.
+    bool poDockedBefore      = false;   // both views were shell children before the tear-off
+    bool poMixerWindowSeen   = false, poRollWindowSeen    = false;   // popouts constructed + visible
+    bool poMixerOut          = false, poRollOut           = false;   // parent == the popout window
+    bool poMixerBack         = false, poRollBack          = false;   // turn 2: parent == the shell, window gone
+    bool poNoGhostOverlay    = false;   // turn 2, BEFORE any rescue relayout: restored views hidden, no stolen focus
+    bool poMixerVisibleAfter = false, poRollVisibleAfter  = false;   // turn 2: visible after driving view state
+
     ControlBar controlBar;
     ForgeMenuModel menuModel;   // top menu-bar model (W04a): wired in setupMenuModel(), installed by MainWindow::setMenuBar
     TimelineView timelineView;
@@ -906,6 +969,12 @@ private:
     DetailView  detailView;     // bottom drawer: audio-clip inspector
     ChannelTray channelTray { session };   // left sidebar Channel tab: selected-track strip (W04a)
     PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
+
+    // W04b tear-off windows. Declared AFTER mixerView/pianoRoll (reverse destruction kills the
+    // windows before their content even if the dtor-body resets are ever removed) and reset in
+    // ~MainComponent's body — the same declaration-order discipline the controlSurface member documents.
+    std::unique_ptr<PopoutWindow> mixerPopout, pianoRollPopout;
+
     Label statusLabel;
     juce::uint32 statusHoldUntilMs = 0;   // transient status messages survive the 5Hz refresh until this time
 
@@ -949,6 +1018,20 @@ private:
     // over an EXPLICIT Files choice — a user browsing samples must not lose the pane mid-browse.
     bool userPinnedBrowser = false;
 
+    // W04b animated slide-outs. A DEDICATED timer — MainComponent's inherited Timer is load-bearing
+    // selftest machinery (dossier risk). The animation lerps the width/height SCALARS and re-runs
+    // resized() per step (the exact path the drag-resizers already exercise), so the whole layout
+    // chain moves together; juce::ComponentAnimator would fight resized() for the child bounds.
+    // The screenshot harness sets browserVisible/drawerVisible directly and never animates.
+    struct SlideTimer : juce::Timer
+    {
+        std::function<void()> onTick;
+        void timerCallback() override { if (onTick) onTick(); }
+    };
+    SlideTimer slideTimer;
+    int sidebarSlide = -1, sidebarSlideTarget = 0;   // in-flight width  (-1 = settled)
+    int drawerSlide  = -1, drawerSlideTarget  = 0;   // in-flight height (-1 = settled)
+
     ResizerBar browserResizer { true,  browserMinWidth, browserMaxWidth };   // vertical handle (width)
     ResizerBar drawerResizer  { false, drawerMinHeight, drawerMaxHeight };   // horizontal handle (height)
 
@@ -964,8 +1047,8 @@ private:
         controlBar.onExportStems   = [this] { exportStemsDialog(); };
         controlBar.onScanPlugins   = [this] { PluginScanner::showScanDialog (engine); };
         controlBar.onAudioSettings = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
-        controlBar.onToggleBrowser = [this] { browserVisible = ! browserVisible; resized(); };
-        controlBar.onToggleDrawer  = [this] { drawerVisible  = ! drawerVisible;  resized(); };
+        controlBar.onToggleBrowser = [this] { toggleSidebarAnimated(); };
+        controlBar.onToggleDrawer  = [this] { toggleDrawerAnimated(); };
         controlBar.onViewMode      = [this] (int m) { setViewMode (m == 0 ? ViewMode::Session
                                                                   : m == 1 ? ViewMode::Arrange
                                                                            : ViewMode::Mixer); };
@@ -1019,6 +1102,10 @@ private:
         cb.onViewMode      = controlBar.onViewMode;
         cb.onToggleBrowser = controlBar.onToggleBrowser;
         cb.onToggleDrawer  = controlBar.onToggleDrawer;
+        cb.onPopOutMixer     = [this] { tearOffMixer(); };       // W04b: re-invoke fronts the window
+        cb.onPopOutPianoRoll = [this] { tearOffPianoRoll(); };
+        cb.queryMixerPoppedOut     = [this] { return mixerPopout != nullptr; };       // tick = torn off (QC)
+        cb.queryPianoRollPoppedOut = [this] { return pianoRollPopout != nullptr; };
         cb.queryViewMode       = [this] { return viewMode == ViewMode::Session ? 0
                                                : viewMode == ViewMode::Arrange ? 1 : 2; };
         cb.queryBrowserVisible = [this] { return browserVisible; };
@@ -1088,6 +1175,14 @@ private:
 
     void setViewMode (ViewMode m)
     {
+        // W04b (QC): selecting Mix while the mixer is torn off would render a blank centre with
+        // no affordance — front the popout instead, leaving the current centre view in place.
+        if (m == ViewMode::Mixer && mixerPopout != nullptr)
+        {
+            mixerPopout->toFront (true);
+            return;
+        }
+
         viewMode = m;
         controlBar.setViewMode (m == ViewMode::Session ? 0 : m == ViewMode::Arrange ? 1 : 2);
         resized();
@@ -1095,7 +1190,212 @@ private:
         // Give the Session grid keyboard focus when it becomes active so its arrow/Enter launch keys fire
         // (the switch only toggles visibility; SessionView::visibilityChanged also covers this) — QC fix.
         if (m == ViewMode::Session)
+        {
             sessionView.grabKeyboardFocus();
+
+            // Seed the channel tray for the grid's CURRENT focus track: the tray-follow seam only
+            // fires on focus CHANGE, so without this the default track 0 never binds (QC) and the
+            // tray shows the last Arrange selection until the user moves focus.
+            if (auto* e = session.getEdit())
+            {
+                const auto tracks = te::getAudioTracks (*e);
+                const int  idx    = sessionView.getFocusTrackIndex();
+                channelTray.setTrack (isPositiveAndBelow (idx, tracks.size()) ? tracks[idx] : nullptr);
+            }
+        }
+    }
+
+    //==============================================================================
+    // W04b tear-off panels: the mixer / piano-roll SHELL MEMBERS reparent into a floating
+    // PopoutWindow and back. The window never owns a view (setContentNonOwned); restore
+    // reparents home synchronously but DEFERS the window's destruction via callAsync, because
+    // it may be running inside the window's own closeButtonPressed (PluginWindow discipline).
+    // A project swap deliberately leaves tear-offs alone: the views rebind in place and the
+    // window survives showing the rebound (or designed-empty) state.
+    void tearOffMixer()
+    {
+        if (mixerPopout != nullptr) { mixerPopout->toFront (true); return; }   // already out: surface it
+
+        mixerPopout = std::make_unique<PopoutWindow> ("Forge — Mixer", mixerView,
+                                                      [this] { restoreMixer(); });
+        mixerPopout->onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
+        resized();   // re-lay-out the shell without the torn-off view (the guards skip it)
+    }
+
+    void restoreMixer()
+    {
+        if (mixerPopout == nullptr)
+            return;
+
+        // Reparent home, and hide until the post-reset relayout decides — the view arrives from
+        // the window VISIBLE at stale popout bounds, topmost, and the synchronous resized() below
+        // still sees a non-null popout so its guards skip this view (the W04b QC blocker: the
+        // restored view overlaid the whole shell and ate every click).
+        addChildComponent (mixerView);
+        mixerView.setVisible (false);
+        resized();
+
+        // Deferred destruction: restore may be running inside the window's own close callback,
+        // where a synchronous reset would delete the window mid-method. The deferred lambda must
+        // ALSO re-run the layout — only after the pointer clears do the resized() guards re-own
+        // this view's visibility/bounds. SafePointer guards a shell death before the lambda runs.
+        Component::SafePointer<MainComponent> safeThis (this);
+        MessageManager::callAsync ([safeThis]
+        {
+            if (auto* self = safeThis.getComponent())
+            {
+                self->mixerPopout.reset();
+                self->resized();
+            }
+        });
+    }
+
+    void tearOffPianoRoll()
+    {
+        if (pianoRollPopout != nullptr) { pianoRollPopout->toFront (true); return; }
+
+        pianoRollPopout = std::make_unique<PopoutWindow> ("Forge — Piano Roll", pianoRoll,
+                                                          [this] { restorePianoRoll(); });
+        pianoRollPopout->onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
+        resized();   // the drawer falls back to the DetailView while the roll is out
+    }
+
+    void restorePianoRoll()
+    {
+        if (pianoRollPopout == nullptr)
+            return;
+
+        addChildComponent (pianoRoll);
+        pianoRoll.setVisible (false);   // hidden until the post-reset relayout decides (QC blocker)
+        resized();
+
+        // The relayout AND the focus grab both belong to the deferred turn: only after the popout
+        // pointer clears do the resized() guards re-own the roll, and only then does isShowing()
+        // reflect the true drawer/viewMode state instead of the stale visible flag carried over
+        // from the window (the pre-fix code grabbed focus even restoring into a CLOSED drawer).
+        Component::SafePointer<MainComponent> safeThis (this);
+        MessageManager::callAsync ([safeThis]
+        {
+            if (auto* self = safeThis.getComponent())
+            {
+                self->pianoRollPopout.reset();
+                self->resized();
+
+                if (self->pianoRoll.isShowing())
+                    self->pianoRoll.grabKeyboardFocus();
+            }
+        });
+    }
+
+    // W04b: the B/E region toggles slide instead of snapping. Opening shows the region immediately
+    // and grows it from its current in-flight size (0 when settled closed); closing shrinks to 0
+    // and only then flips the visible flag. A mid-flight re-toggle retargets from the CURRENT
+    // in-flight value (dossier risk: restarting from the persisted size would jump). Persisted
+    // sizes are untouched — only the resizer drags write them.
+    void toggleSidebarAnimated()
+    {
+        const int shown = jlimit (browserMinWidth, browserMaxWidth, browserWidth);
+
+        // "Open" = visible and not actively closing. A settled-visible region (slide == -1) can
+        // only be fully open, WHATEVER the last target was — a direct `visible = true` write
+        // (e.g. an auto-reveal) leaves the target stale at 0, and testing the target alone made
+        // the first toggle bounce the region open again instead of closing it (QC major).
+        if (browserVisible && ! (sidebarSlide >= 0 && sidebarSlideTarget == 0))
+        {
+            sidebarSlideTarget = 0;
+            if (sidebarSlide < 0) sidebarSlide = shown;
+        }
+        else
+        {
+            browserVisible = true;
+            sidebarSlideTarget = shown;
+            if (sidebarSlide < 0) sidebarSlide = 0;
+        }
+
+        startSlide();
+    }
+
+    void toggleDrawerAnimated()
+    {
+        const int shown = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
+
+        if (drawerVisible && ! (drawerSlide >= 0 && drawerSlideTarget == 0))
+        {
+            drawerSlideTarget = 0;
+            if (drawerSlide < 0) drawerSlide = shown;
+        }
+        else
+        {
+            drawerVisible = true;
+            drawerSlideTarget = shown;
+            if (drawerSlide < 0) drawerSlide = 0;
+        }
+
+        startSlide();
+    }
+
+    /** The one path for programmatic drawer opens (clip selection routing an editor into it).
+        Retargets an in-flight close to open-from-current-height — a direct `drawerVisible = true`
+        write raced the settle step, which flipped the flag back off and the requested editor
+        never appeared (QC); it also keeps the slide target in sync so the next E closes. */
+    void revealDrawer()
+    {
+        drawerVisible = true;
+        drawerSlideTarget = jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
+
+        if (drawerSlide >= 0)   // a close is in flight: retarget to open from the current height
+            startSlide();
+    }
+
+    void startSlide()
+    {
+        slideTimer.onTick = [this] { slideStep(); };
+        if (! slideTimer.isTimerRunning())
+            slideTimer.startTimerHz (60);
+        slideStep();   // first step immediately so the toggle responds this frame
+    }
+
+    void slideStep()
+    {
+        // Ease-out lerp with a snap window: ~10 frames (~160 ms) for a full slide.
+        auto step = [] (int current, int target)
+        {
+            const int next = current + roundToInt ((float) (target - current) * 0.35f);
+            return std::abs (target - next) <= 2 ? target : next;
+        };
+
+        bool active = false;
+
+        if (sidebarSlide >= 0)
+        {
+            sidebarSlide = step (sidebarSlide, sidebarSlideTarget);
+            if (sidebarSlide == sidebarSlideTarget)
+            {
+                if (sidebarSlideTarget == 0)
+                    browserVisible = false;
+                sidebarSlide = -1;   // settled
+            }
+            else
+                active = true;
+        }
+
+        if (drawerSlide >= 0)
+        {
+            drawerSlide = step (drawerSlide, drawerSlideTarget);
+            if (drawerSlide == drawerSlideTarget)
+            {
+                if (drawerSlideTarget == 0)
+                    drawerVisible = false;
+                drawerSlide = -1;
+            }
+            else
+                active = true;
+        }
+
+        if (! active)
+            slideTimer.stopTimer();
+
+        resized();
     }
 
     void setupResizers()
@@ -1172,8 +1472,8 @@ private:
             return true;
         }
 
-        if (letter == 'B') { browserVisible = ! browserVisible; resized(); return true; }
-        if (letter == 'E') { drawerVisible  = ! drawerVisible;  resized(); return true; }
+        if (letter == 'B') { toggleSidebarAnimated(); return true; }
+        if (letter == 'E') { toggleDrawerAnimated();  return true; }
         if (letter == 'R') { toggleRecordTake();                           return true; }
 
         return false;   // unhandled: propagate to other handlers
@@ -2795,6 +3095,7 @@ private:
         // Bind, then write engine-side and force one sync tick — the path under test.
         channelTray.setTrack (track);
         const bool boundSeen = channelTray.isShowingTrack();
+        const bool meterSourceSeen = channelTray.getMeterHasSource();   // W04b: meter attached to track 0's measurer
 
         EngineHelpers::setTrackVolumeDb (*track, -9.0f);
         track->setMute (true);
@@ -2807,15 +3108,16 @@ private:
         channelTray.setTrack (nullptr);
         const bool clearedSeen = ! channelTray.isShowingTrack();
 
-        finishTraySelftest (boundSeen, faderDb, muteSeen, clearedSeen);
+        finishTraySelftest (boundSeen, faderDb, muteSeen, clearedSeen, meterSourceSeen);
     }
 
-    void finishTraySelftest (bool boundSeen, double faderDb, bool muteSeen, bool clearedSeen)
+    void finishTraySelftest (bool boundSeen, double faderDb, bool muteSeen, bool clearedSeen,
+                             bool meterSourceSeen = false)
     {
         // Same tolerance as the livesync mixer leg: the fader snaps to 0.1 dB and the engine's
         // dB-to-fader-position curve is not bit-exact through a round-trip, so allow 0.15.
         const bool faderPass = std::abs (faderDb - (-9.0)) <= 0.15;
-        const bool pass      = boundSeen && faderPass && muteSeen && clearedSeen;
+        const bool pass      = boundSeen && faderPass && muteSeen && clearedSeen && meterSourceSeen;
 
         String report;
         report << "mode=tray" << newLine
@@ -2824,6 +3126,7 @@ private:
                << "faderPass="   << (faderPass ? 1 : 0) << newLine
                << "muteSeen="    << (muteSeen ? 1 : 0) << newLine
                << "clearedSeen=" << (clearedSeen ? 1 : 0) << newLine
+               << "meterSourceSeen=" << (meterSourceSeen ? 1 : 0) << newLine
                << "result="      << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="     << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -2833,6 +3136,94 @@ private:
             FORGE_LOG_ERROR ("Failed to write tray selftest report to: " + reportFile.getFullPathName());
 
         FORGE_LOG_INFO ("Tray selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // --selftest-popout (W04b): prove the tear-off round-trip headlessly. Turn 1: both views are
+    // docked shell children -> tearOff reparents each into a visible PopoutWindow (the content is
+    // a DIRECT child of the ResizableWindow) and one forced mixer sync tick proves the engine
+    // binding survives the reparent -> drive the REAL close path (closeButtonPressed -> onClosed
+    // -> restore). Turn 2 (after the deferred window resets ran): both windows are gone, parentage
+    // is back on the shell, and — after driving viewMode/drawer state, since the Session+Detail
+    // default hides both restored views — each view reads visible again (dossier verdict).
+    void beginPopoutSelftest()
+    {
+        FORGE_LOG_INFO ("selftest-popout: tear off mixer + piano-roll, assert reparent, close, restore");
+
+        poDockedBefore = mixerView.getParentComponent() == this
+                         && pianoRoll.getParentComponent() == this;
+
+        tearOffMixer();
+        tearOffPianoRoll();
+
+        poMixerWindowSeen = mixerPopout != nullptr && mixerPopout->isVisible();
+        poRollWindowSeen  = pianoRollPopout != nullptr && pianoRollPopout->isVisible();
+        poMixerOut        = mixerPopout != nullptr && mixerView.getParentComponent() == mixerPopout.get();
+        poRollOut         = pianoRollPopout != nullptr && pianoRoll.getParentComponent() == pianoRollPopout.get();
+
+        mixerView.refreshControls();   // one forced sync tick while popped out: the binding is still live
+
+        // The real close path, not restore directly: closeButtonPressed -> onClosed -> restore
+        // (reparents home now, defers each window's reset to the NEXT message-loop turn).
+        if (mixerPopout != nullptr)     mixerPopout->closeButtonPressed();
+        if (pianoRollPopout != nullptr) pianoRollPopout->closeButtonPressed();
+
+        startTimer (300);   // YIELD: let the deferred window resets run, then verify
+    }
+
+    void finishPopoutSelftest()
+    {
+        poMixerBack = mixerPopout == nullptr && mixerView.getParentComponent() == this;
+        poRollBack  = pianoRollPopout == nullptr && pianoRoll.getParentComponent() == this;
+
+        // QC-hardening (the blocker this gate originally missed): BEFORE any rescue relayout,
+        // under the Session+Detail default BOTH restored views must already be hidden (the
+        // deferred lambda's post-reset resized() owns that) and the roll must not hold focus —
+        // a stale-visible restored view overlays the whole shell and eats input.
+        poNoGhostOverlay = ! mixerView.isVisible() && ! pianoRoll.isVisible()
+                           && ! pianoRoll.hasKeyboardFocus (true);
+
+        // Visibility only reads true under the right shell state — the Session+Detail default
+        // hides both restored views — so drive the state first, then assert.
+        setViewMode (ViewMode::Mixer);
+        poMixerVisibleAfter = mixerView.isVisible();
+
+        drawerVisible = true;
+        bottomMode    = BottomMode::PianoRoll;
+        resized();
+        poRollVisibleAfter = pianoRoll.isVisible();
+
+        const bool pass = poDockedBefore
+                          && poMixerWindowSeen && poRollWindowSeen
+                          && poMixerOut && poRollOut
+                          && poMixerBack && poRollBack
+                          && poNoGhostOverlay
+                          && poMixerVisibleAfter && poRollVisibleAfter;
+
+        String report;
+        report << "mode=popout" << newLine
+               << "noGhostOverlay="     << (poNoGhostOverlay ? 1 : 0) << newLine
+               << "dockedBefore="       << (poDockedBefore ? 1 : 0) << newLine
+               << "mixerWindowSeen="    << (poMixerWindowSeen ? 1 : 0) << newLine
+               << "rollWindowSeen="     << (poRollWindowSeen ? 1 : 0) << newLine
+               << "mixerReparentedOut=" << (poMixerOut ? 1 : 0) << newLine
+               << "rollReparentedOut="  << (poRollOut ? 1 : 0) << newLine
+               << "mixerRestored="      << (poMixerBack ? 1 : 0) << newLine
+               << "rollRestored="       << (poRollBack ? 1 : 0) << newLine
+               << "mixerVisibleAfter="  << (poMixerVisibleAfter ? 1 : 0) << newLine
+               << "rollVisibleAfter="   << (poRollVisibleAfter ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write popout selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Popout selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
@@ -2955,9 +3346,30 @@ private:
         // W04a: the LCD's count-in face via its demo seam (digit 3 of 4, pulse near the click) —
         // a REAL count-in needs a capture device, so this state is injected, per the dossier.
         setViewMode (ViewMode::Session);
-        controlBar.getLcdDisplay().setDemoState (forge::lcd::LcdState { {}, {}, {}, true, 3, 4, 0.1 });
+        controlBar.getLcdDisplay().setDemoState (forge::lcd::LcdState { {}, {}, {}, {}, true, 3, 4, 0.1 });
         captureView ("lcd_countin");
         controlBar.getLcdDisplay().setEdit (session.getEdit());   // resume live polling
+
+        // W04b: ONE window-level capture — the menu bar is window chrome ABOVE the shell content,
+        // so component snapshots exclude it; snapping the top-level window includes bar + shell.
+        // (The OS-native title bar is peer chrome outside the component tree — expected absent.)
+        // Must run BEFORE the short-window setSize mutation below.
+        if (auto* top = getTopLevelComponent())
+        {
+            auto image = top->createComponentSnapshot (top->getLocalBounds());
+            auto file  = File::getSpecialLocation (File::tempDirectory)
+                             .getChildFile ("forge_shot_shell_window.png");
+            file.deleteFile();
+            if (auto out = std::unique_ptr<FileOutputStream> (file.createOutputStream()))
+            {
+                PNGImageFormat png;
+                png.writeImageToStream (image, *out);
+            }
+            else
+            {
+                FORGE_LOG_ERROR ("Failed to write window-level PNG snapshot: " + file.getFullPathName());
+            }
+        }
 
         setViewMode (ViewMode::Mixer);     captureView ("mix");
 
@@ -3110,6 +3522,13 @@ private:
         {
             stopTimer();
             finishSelfTestMidiInput();   // single yield after the seam bind → verify the focused Edit + mapping
+            return;
+        }
+
+        if (mode == SelfTest::popout)
+        {
+            stopTimer();
+            finishPopoutSelftest();   // single yield: the deferred window resets have run
             return;
         }
 
@@ -3410,6 +3829,22 @@ static void runLcdSelfTest()
         expect ("playPhase",    s.pulsePhase == 0.5);
     }
 
+    // -- Timecode zone (W04b): absolute time from positionSeconds — "M:SS.mmm" under an hour,
+    //    "H:MM:SS.mmm" from one hour up. A negative position (count-in pre-roll) clamps to
+    //    "0:00.000" — the model must never emit a minus sign.
+    {
+        auto timecodeAt = [&base] (double posSeconds)
+        {
+            auto in = base;
+            in.positionSeconds = posSeconds;
+            return computeLcdState (in).timecodeText;
+        };
+        expect ("timecodeZero",     timecodeAt (0.0)    == "0:00.000");
+        expect ("timecodeMinutes",  timecodeAt (83.204) == "1:23.204");
+        expect ("timecodeHours",    timecodeAt (3723.5) == "1:02:03.500");
+        expect ("timecodeNegative", timecodeAt (-2.25)  == "0:00.000");
+    }
+
     // -- Count-in acceptance table (click-grid form): the digit derives from WHOLE TIMELINE
     //    BEATS (where the engine's clicks land), never from distances to the punch. Aligned
     //    case first: N=4, punch at beat 0 (0 s), record latched from stopped; the engine
@@ -3535,7 +3970,7 @@ static void runMenuSelfTest()
                            && names[(int) ForgeMenuModel::menuFile]      == "File"
                            && names[(int) ForgeMenuModel::menuTransport] == "Transport";
 
-    const int expectedCounts[] = { 9, 1, 5, 6, 1 };   // File, Edit, View, Transport, Help
+    const int expectedCounts[] = { 9, 1, 7, 6, 1 };   // File, Edit, View (+2 W04b pop-outs), Transport, Help
     bool countsPass = names.size() == (int) (sizeof (expectedCounts) / sizeof (expectedCounts[0]));
     for (int m = 0; countsPass && m < names.size(); ++m)
         countsPass = model.getMenuForIndex (m, names[m]).getNumItems() == expectedCounts[m];
@@ -3656,6 +4091,7 @@ public:
                             : commandLine.contains ("--selftest-automation")     ? "selftest-automation"     // before bare --selftest
                             : commandLine.contains ("--selftest-sync")           ? "selftest-sync"           // before bare --selftest
                             : commandLine.contains ("--selftest-livesync")       ? "selftest-livesync"       // before bare --selftest
+                            : commandLine.contains ("--selftest-popout")         ? "selftest-popout"         // before bare --selftest
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -3702,6 +4138,7 @@ public:
                         : commandLine.contains ("--selftest-sync")           ? SelfTest::sync           // before bare --selftest
                         : commandLine.contains ("--selftest-livesync")       ? SelfTest::livesync       // before bare --selftest
                         : commandLine.contains ("--selftest-tray")           ? SelfTest::tray           // before bare --selftest
+                        : commandLine.contains ("--selftest-popout")         ? SelfTest::popout         // before bare --selftest
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));

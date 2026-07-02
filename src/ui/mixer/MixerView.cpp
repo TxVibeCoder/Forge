@@ -1,5 +1,6 @@
 #include "ui/mixer/MixerView.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "ui/common/PeakMeter.h"             // shared level bar (W04b extraction)
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "ui/plugins/PluginWindow.h"
@@ -43,138 +44,11 @@ namespace
         f.setColour (Slider::textBoxTextColourId,    Colour (ForgeLookAndFeel::textSec));
         f.setColour (Slider::textBoxOutlineColourId, Colour (ForgeLookAndFeel::hairline));
     }
-
-    // Meter ballistics / scale.
-    constexpr float  kMeterMinDb  = -60.0f;   // bottom of the meter
-    constexpr float  kMeterMaxDb  =   6.0f;   // top of the meter (matches fader headroom)
-    constexpr float  kMeterDecayDbPerSec = 18.0f;   // visual fall-off when the signal drops
-
-    /** Maps a dB level into a 0..1 fill fraction for the meter (clamped). */
-    inline float dbToMeterFraction (float db)
-    {
-        return jlimit (0.0f, 1.0f, (db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb));
-    }
 }
 
-//==============================================================================
-/*  PeakMeter — a thin vertical level bar driven by a LevelMeasurer (via a Client we register
-    on the source measurer). pushLevelDb() is called from the MixerView timer; the bar holds a
-    smoothed "current" value that decays toward the live reading so movement looks like a real
-    meter rather than a strobe. If no measurer is attached the meter simply draws empty (the
-    data hookup is documented as deferred for that source) — it NEVER fabricates a level.
-
-    Reads the louder of the (up to two) measured channels for a single mono-ish bar; this keeps
-    the strip narrow while still showing clipping on either side.                              */
-class PeakMeter : public Component
-{
-public:
-    PeakMeter() = default;
-
-    ~PeakMeter() override
-    {
-        detach();
-    }
-
-    /** Registers as a Client on `m`'s measurer so getAndClearAudioLevel() returns live peaks.
-
-        LIFETIME: the source is held as a juce::WeakReference (LevelMeasurer is declared weak-
-        referenceable in the engine), because a measurer's OWNER can die under us on the message
-        thread — the master measurer lives on the playback context (freed by freePlaybackContext /
-        device restarts), and a track measurer's LevelMeterPlugin can be reclaimed by the engine's
-        plugin cull after a track delete. The weak ref nulls itself exactly when the owner dies, so
-        detach() skips removeClient precisely when calling it would walk freed memory (the W03
-        sync-gate teardown spun forever on exactly that). A dead measurer's client list died with
-        it, so skipping the unregister is the correct teardown, not a leak. */
-    void attach (te::LevelMeasurer* m)
-    {
-        // Note: a dead-and-recycled source at the same address compares as changed here, because
-        // the weak ref reads back null once the old owner died — which forces the re-register the
-        // fresh measurer needs.
-        if (measurer.get() == m)
-            return;
-
-        detach();
-        measurer = m;
-
-        if (m != nullptr)
-            m->addClient (client);
-    }
-
-    void detach()
-    {
-        if (auto* m = measurer.get())
-            m->removeClient (client);   // owner still alive: unregister properly
-
-        measurer = nullptr;
-        client.reset();
-        currentDb = kMeterMinDb;
-        repaint();
-    }
-
-    bool hasSource() const noexcept { return measurer.get() != nullptr; }
-
-    /** Pull the latest peak off the measurer and apply decay. Called on the MixerView timer.
-        `secondsSinceLast` is the timer interval, used for the fall-off rate. */
-    void poll (float secondsSinceLast)
-    {
-        if (measurer.get() == nullptr)
-            return;
-
-        // Peak across the active channels (mono bar shows the hotter side).
-        float liveDb = kMeterMinDb;
-        const int chans = jmax (1, client.getNumChannelsUsed());
-
-        for (int ch = 0; ch < jmin (chans, 2); ++ch)
-        {
-            const auto pair = client.getAndClearAudioLevel (ch);
-            liveDb = jmax (liveDb, pair.dB);
-        }
-
-        // Instant attack, timed decay: a quiet/zero reading must not snap the bar to silence.
-        if (liveDb >= currentDb)
-            currentDb = liveDb;
-        else
-            currentDb = jmax (liveDb, currentDb - kMeterDecayDbPerSec * secondsSinceLast);
-
-        repaint();
-    }
-
-    void paint (Graphics& g) override
-    {
-        auto r = getLocalBounds().toFloat();
-
-        g.setColour (Colour (ForgeLookAndFeel::raisedBg));
-        g.fillRect (r);
-
-        const float frac = dbToMeterFraction (currentDb);
-        if (frac > 0.0f)
-        {
-            auto fill = r.removeFromBottom (r.getHeight() * frac);
-
-            // Amber under 0 dBFS-ish, red once we're into the top headroom band (clipping warning).
-            const bool hot = currentDb > 0.0f;
-            g.setColour (hot ? Colour (ForgeLookAndFeel::recordRed)
-                             : Colour (ForgeLookAndFeel::accent));
-            g.fillRect (fill);
-        }
-
-        // 0 dB tick line so the user can read the headroom point.
-        const float zeroFrac = dbToMeterFraction (0.0f);
-        const float zeroY = (float) getHeight() * (1.0f - zeroFrac);
-        g.setColour (Colour (ForgeLookAndFeel::hairline));
-        g.fillRect (0.0f, zeroY, (float) getWidth(), 1.0f);
-
-        g.setColour (Colour (ForgeLookAndFeel::hairline));
-        g.drawRect (getLocalBounds().toFloat(), 1.0f);
-    }
-
-private:
-    juce::WeakReference<te::LevelMeasurer> measurer;   // nulls itself when the owner dies (see attach)
-    te::LevelMeasurer::Client client;
-    float currentDb = kMeterMinDb;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PeakMeter)
-};
+// PeakMeter — the shared thin vertical level bar — now lives in ui/common/PeakMeter.h (W04b),
+// consumed here and by the Arrange channel tray. Its ballistics constants + dbToMeterFraction
+// helper moved with it; the fader/pan/send constants above stay local to the mixer.
 
 //==============================================================================
 /*  InsertPanel — the list of a track's insert plugins plus a "+" add button. Each existing

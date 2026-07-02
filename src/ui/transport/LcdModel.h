@@ -3,7 +3,8 @@
 
     computeLcdState() maps plain transport/tempo facts (read from the engine by LcdDisplay,
     or synthesised by the --selftest-lcd gate) to exactly what the LCD face renders: the
-    three zone strings, the count-in digit state, and the beat-pulse phase.
+    four zone strings (position, timecode, tempo, key), the count-in digit state, and the
+    beat-pulse phase.
 
     Deliberately engine-free: plain ints/doubles/juce::String in, so the selftest gate
     asserts the whole acceptance table headlessly (no device, no Edit) before the window
@@ -31,7 +32,7 @@
 
 #include <JuceHeader.h>
 
-#include <cmath>   // std::ceil (count-in digit)
+#include <cmath>   // std::ceil (count-in digit), std::llround (timecode)
 
 namespace forge::lcd
 {
@@ -68,7 +69,8 @@ struct LcdState
     juce::String positionText;   // "3|2" (bars|beats, 1-based) — NEVER shown while countInActive
     juce::String tempoText;      // "120.0"
     juce::String keySigText;     // "C · 4/4" (key omitted when unknown)
-    bool countInActive = false;  // render the count-in face instead of the three zones
+    juce::String timecodeText;   // "1:23.204" / "1:02:03.500" (W04b) — clamped at 0:00.000, never negative
+    bool countInActive = false;  // render the count-in face instead of the four zones
     int countInDigit = 0;        // 1..countInTotal; 0 = the "ready" lead-in half-beat
     int countInTotal = 0;        // the latched beat total (context for rendering + the selftest)
     double pulsePhase = 0.0;     // [0, 1) fractional beat; 0 = on the click/beat
@@ -79,6 +81,7 @@ inline bool operator== (const LcdState& a, const LcdState& b)
     return a.positionText == b.positionText
         && a.tempoText == b.tempoText
         && a.keySigText == b.keySigText
+        && a.timecodeText == b.timecodeText
         && a.countInActive == b.countInActive
         && a.countInDigit == b.countInDigit
         && a.countInTotal == b.countInTotal
@@ -106,6 +109,23 @@ inline LcdState computeLcdState (const LcdInput& in)
                                             : in.keyString + " · " + in.timeSigString;
     s.pulsePhase   = in.fractionalBeat;
     s.countInTotal = in.countInTotal;
+
+    // Timecode (W04b): absolute transport time — "M:SS.mmm" under an hour, "H:MM:SS.mmm" from
+    // one hour up. Clamped at zero: a count-in pre-roll runs the position negative, and while
+    // the count-in face replaces the zones for exactly that window, the model must still never
+    // emit a minus sign.
+    {
+        const auto totalMs = (juce::int64) std::llround (juce::jmax (0.0, in.positionSeconds) * 1000.0);
+        const auto millis  = (int) (totalMs % 1000);
+        const auto seconds = (int) ((totalMs / 1000) % 60);
+        const auto minutes = (int) ((totalMs / 60000) % 60);
+        const auto hours   = (int) (totalMs / 3600000);
+
+        s.timecodeText = (hours > 0 ? juce::String (hours) + ":" + juce::String (minutes).paddedLeft ('0', 2)
+                                    : juce::String (minutes))
+                       + ":" + juce::String (seconds).paddedLeft ('0', 2)
+                       + "." + juce::String (millis).paddedLeft ('0', 3);
+    }
 
     // Count-in ACTIVE test (dossier recipe + skeptic guard 1): only a record latched from a
     // stopped transport pre-rolls; while it does, the position runs pre-punch. A mid-playback

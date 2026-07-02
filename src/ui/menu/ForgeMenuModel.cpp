@@ -61,6 +61,8 @@ namespace
         { .id = M::cmdViewMix,        .menu = M::menuView,      .name = "Mix",              .shortcut = "F11",          .intAction = &CB::onViewMode, .intArg = 2, .radioTick = &CB::queryViewMode },
         { .id = M::cmdToggleBrowser,  .menu = M::menuView,      .name = "Browser Sidebar",  .shortcut = "B",            .separatorBefore = true, .action = &CB::onToggleBrowser, .tick = &CB::queryBrowserVisible },
         { .id = M::cmdToggleDrawer,   .menu = M::menuView,      .name = "Editor Drawer",    .shortcut = "E",            .action = &CB::onToggleDrawer,  .tick = &CB::queryDrawerVisible },
+        { .id = M::cmdPopOutMixer,    .menu = M::menuView,      .name = "Pop Out Mixer",                                .separatorBefore = true, .action = &CB::onPopOutMixer,     .tick = &CB::queryMixerPoppedOut },
+        { .id = M::cmdPopOutPianoRoll, .menu = M::menuView,     .name = "Pop Out Piano Roll",                           .action = &CB::onPopOutPianoRoll, .tick = &CB::queryPianoRollPoppedOut },
 
         // Transport (Count-In options mirror TransportBar's selector: 0/1/2 bars — the engine's
         // native count-in tops out at two bars, so never offer more than it honours)

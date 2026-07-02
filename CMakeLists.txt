@@ -57,6 +57,7 @@ target_sources(Forge PRIVATE
     src/ui/session/TrackColumnComponent.cpp
     src/ui/session/SessionView.cpp
     src/ui/plugins/PluginWindow.cpp
+    src/ui/popout/PopoutWindow.cpp
     src/ui/export/ExportProgress.cpp
     src/ui/browser/BrowserView.cpp
     src/ui/detail/DetailView.cpp

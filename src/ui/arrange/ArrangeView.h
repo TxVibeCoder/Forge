@@ -262,7 +262,8 @@ private:
 };
 
 //==============================================================================
-/** Moving playhead overlay; polls the transport on a ~30Hz timer and supports scrub. */
+/** Moving playhead overlay; polls the transport on a ~30Hz timer and supports scrub. Drawn in
+    timeTempo (the transport-clock colour family, W04b) — amber accent stays selection-only. */
 class PlayheadComponent : public juce::Component,
                           private juce::Timer
 {

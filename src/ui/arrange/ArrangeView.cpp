@@ -740,8 +740,17 @@ PlayheadComponent::PlayheadComponent (TimelineView& v, te::TransportControl& t)
 
 void PlayheadComponent::paint (Graphics& g)
 {
+    // timeTempo, not accent (W04b semantic vocabulary): the playhead is a CLOCK element, so it
+    // wears the transport-clock family the LCD uses; amber stays selection/focus-only.
+    // A 1 px dark edge either side separates the 2 px line from lane content it crosses —
+    // without it the playhead is near-indistinguishable from the automationCurve teal when it
+    // sweeps an expanded automation lane (QC; the same outline trick the lane's point handles
+    // use). The line itself is brightened so it reads as THE bright clock line of the family.
     const int x = view.timeToX (transport.getPosition(), getWidth());
-    g.setColour (Colour (ForgeLookAndFeel::accent));
+    g.setColour (Colour (ForgeLookAndFeel::shellBg).withAlpha (0.8f));
+    g.fillRect (x - 1, 0, 1, getHeight());
+    g.fillRect (x + 2, 0, 1, getHeight());
+    g.setColour (Colour (ForgeLookAndFeel::timeTempo).brighter (0.35f));
     g.fillRect (x, 0, 2, getHeight());
 }
 

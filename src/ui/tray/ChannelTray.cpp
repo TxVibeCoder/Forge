@@ -33,6 +33,7 @@ namespace
     constexpr int insertRowH = 16;
     constexpr int controlsH  = 26;    // the M/S row at the bottom
     constexpr int faderMinH  = 110;   // insert rows never squeeze the fader below this
+    constexpr int meterW     = 10;    // peak-meter bar beside the fader (W04b)
 
     juce::String busLetter (int b) { return String::charToString ((juce_wchar) ('A' + b)); }
 }
@@ -125,6 +126,9 @@ ChannelTray::ChannelTray (ProjectSession& s)
     fader.onDragStart = [this] { faderDragging = true; };
     fader.onDragEnd   = [this] { faderDragging = false; };
     addAndMakeVisible (fader);
+
+    // --- Peak meter (beside the fader; source rebound in rebuildFromTrack) ----------------------
+    addAndMakeVisible (meter);
 
     // --- M / S toggles --------------------------------------------------------------------------
     auto configureToggle = [this] (TextButton& b)
@@ -240,11 +244,13 @@ void ChannelTray::rebuildFromTrack()
     }
     addInsertButton.setVisible (showing);
     fader.setVisible (showing);
+    meter.setVisible (showing);   // hidden in the empty state so no stray bar paints over the hint
     muteButton.setVisible (showing);
     soloButton.setVisible (showing);
 
     if (! showing)
     {
+        meter.detach();   // release the old track's measurer with the rest of the empty-state clear
         insertRows.clear();
         lastChainSig.clear();
         trackColour = Colour (ForgeLookAndFeel::panelBg);
@@ -252,6 +258,14 @@ void ChannelTray::rebuildFromTrack()
         repaint();
         return;
     }
+
+    // Bind the meter to this track's LevelMeterPlugin measurer. The measurer is Edit-owned (it
+    // outlives every poll) and PeakMeter holds it as a WeakReference, so attach-on-rebind is the
+    // whole lifetime story — no per-poll re-resolve like the mixer master needs (see the header).
+    if (auto* lm = t->getLevelMeterPlugin())
+        meter.attach (&lm->measurer);
+    else
+        meter.detach();
 
     // Seed the paint cache + structure state, then let the shared sync path fill every value.
     trackColour  = t->getColour();
@@ -370,6 +384,11 @@ void ChannelTray::timerCallback()
     }
 
     syncControls (*t, liveIndex);
+
+    // Meter: pull a peak + apply decay at the tick rate. This poll is already visibility-gated
+    // (the timer stops when the tray is hidden), so no extra guard is needed. dt is the 10 Hz
+    // interval. On the self-clear path above the meter detaches with the rest (rebuildFromTrack).
+    meter.poll (1.0f / 10.0f);
 }
 
 void ChannelTray::syncControls (te::AudioTrack& t, int liveIndex)
@@ -430,6 +449,11 @@ bool ChannelTray::isShowingTrack() const
     return track != nullptr;
 }
 
+bool ChannelTray::getMeterHasSource() const
+{
+    return meter.hasSource();
+}
+
 //==============================================================================
 void ChannelTray::resized()
 {
@@ -483,7 +507,11 @@ void ChannelTray::resized()
     controls.removeFromLeft (6);
     soloButton.setBounds (controls.removeFromLeft (bw));
 
-    fader.setBounds (r.reduced (8, 4));
+    // Meter on the left, fader filling the rest — mirrors the mixer strip's [meter | fader] split.
+    auto faderRegion = r.reduced (8, 4);
+    meter.setBounds (faderRegion.removeFromLeft (meterW));
+    faderRegion.removeFromLeft (3);
+    fader.setBounds (faderRegion);
 }
 
 void ChannelTray::paint (Graphics& g)

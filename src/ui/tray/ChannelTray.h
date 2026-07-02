@@ -29,7 +29,16 @@
     size change (a cheap int), never per tick — and each row holds the engine's reference-counted
     plugin handle, so a row click can never walk freed memory even inside the same tick.
 
-    No meter in v1 (the measurer-lifetime surface is deliberately out of this wave).
+    Peak meter (W04b): a thin level bar beside the fader, sharing ui/common/PeakMeter.h with the
+    mixer strips. The source is the bound track's LevelMeterPlugin measurer — Edit-owned, so a
+    simple attach-on-rebind / detach-on-empty suffices (rebound in rebuildFromTrack, polled in the
+    10 Hz tick). The tray deliberately did NOT need the MasterStrip's re-bind-every-poll context-
+    token dance: that treatment exists because the master's measurer lives on the playback context
+    (created/freed as the transport allocates its graph), whereas a track measurer is owned by the
+    Edit and outlives every poll here — and the tray never outlives an edit swap bind, because the
+    shell clears it (setTrack(nullptr)) in swapProject before the outgoing Edit's tracks die. The
+    PeakMeter's WeakReference source is the backstop that keeps even a mid-tick track/plugin cull
+    safe by construction (the W03 UAF fix), so no per-poll re-resolve of the measurer is required.
 
     Message-thread only.
 */
@@ -37,6 +46,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "ui/common/PeakMeter.h"
 
 namespace te = tracktion;
 
@@ -80,6 +90,11 @@ public:
 
     /** True while a track is bound (i.e. not in the empty state) — selftest seam. */
     bool isShowingTrack() const;
+
+    /** True when the peak meter has a live measurer source attached (W04b) — selftest seam. A
+        meter with no audio rolling reads the floor, so the tray gate asserts attachment here
+        rather than a level. */
+    bool getMeterHasSource() const;
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -154,6 +169,7 @@ private:
     juce::OwnedArray<juce::TextButton> insertRows;   // one per user insert; rebuilt on chain change
     juce::TextButton addInsertButton { "+" };
     juce::Slider fader;
+    PeakMeter meter;                             // thin level bar beside the fader (W04b)
     juce::TextButton muteButton { "M" }, soloButton { "S" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelTray)

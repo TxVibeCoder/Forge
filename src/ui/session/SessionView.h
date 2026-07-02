@@ -76,6 +76,10 @@ public:
     /** Track-column count (excludes the scene column), for diagnostics / self-tests. */
     int getNumColumns() const                { return columns.size(); }
 
+    /** Current keyboard/mouse focus TRACK index (the read side of onTrackFocusChanged). An INDEX,
+        never a pointer (R1) — the shell resolves it fresh via te::getAudioTracks. */
+    int getFocusTrackIndex() const           { return focusTrack; }
+
     /** Exposes the scrolling viewport so the headless screenshot harness can drive setViewPosition
         to prove vertical scroll. Message-thread only; UI-geometry accessor (does NOT let callers
         cache slots — R1 is preserved). */
@@ -90,6 +94,13 @@ public:
 
     /** Invoked after any structural Edit mutation (create/import into a slot), so the shell saves. */
     std::function<void()> onEditMutated;
+
+    /** W04b tray-follow seam: fired when the focus TRACK changes (arrow keys / pad clicks route
+        through setFocus), carrying the new track INDEX — never a pointer (R1); the shell resolves
+        it fresh and binds the channel tray. Fired on actual track change only: never per poll
+        tick, and never from rebuild()'s focus clamp or the R4 teardown (both of which assign
+        focusTrack directly, bypassing setFocus). */
+    std::function<void (int trackIndex)> onTrackFocusChanged;
 
     /** Invoked when an empty MIDI-track slot is clicked and a new born-audible MIDI clip is
         created, so the shell can open it in the piano-roll drawer. */

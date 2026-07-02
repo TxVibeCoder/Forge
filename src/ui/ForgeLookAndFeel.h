@@ -21,7 +21,7 @@ public:
         textPrim  = 0xffd6d9dc,   // primary text
         textSec   = 0xff8a9095,   // secondary text / labels
         hairline  = 0xff34383c,   // separators
-        accent    = 0xffe0902f,   // warm amber: playhead, arm, selection, focus
+        accent    = 0xffe0902f,   // warm amber: selection / focus / interactive (playhead -> timeTempo, W04b)
         onAccent  = 0xff241600,   // text on the accent fill
         recordRed = 0xffe24b4a,   // reserved: active recording / clipping
 

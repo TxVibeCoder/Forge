@@ -497,6 +497,14 @@ void SessionView::setFocus (int trackIdx, int sceneIdx)
 
     repaintPad (oldTrack, oldScene);     // clears the old pad's highlight
     repaintPad (focusTrack, focusScene); // sets the new pad's highlight
+
+    // Tray-follow seam (W04b): announce the focus TRACK change (scene moves within the same
+    // column are tray-irrelevant) as an INDEX the shell resolves fresh (R1). Interaction paths
+    // only — rebuild()'s clamp and the R4 teardown assign focusTrack directly, never through
+    // here, so this can't fire mid-rebuild or during teardown. Fired last, after the highlight
+    // repaints, so the view state is settled when the shell reacts.
+    if (newTrack != oldTrack && onTrackFocusChanged != nullptr)
+        onTrackFocusChanged (newTrack);
 }
 
 void SessionView::repaintPad (int trackIdx, int sceneIdx)

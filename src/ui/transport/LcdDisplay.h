@@ -2,13 +2,15 @@
     LcdDisplay — the GarageBand-style transport LCD in the control bar (W04a).
 
     An inset "screen on the device": lcdBg face, 1 px lcdFrame bezel, 3 px corner radius.
-    Idle/playing face, three zones: LEFT bars|beats (16 px, timeTempo, monospaced), CENTRE
-    tempo ("120.0" + a small BPM tag), RIGHT key + time-sig ("C · 4/4"). During record
-    pre-roll the count-in face REPLACES the whole layout: one large centred digit with a
-    recordRed underline whose alpha pulses with the beat (peak on the click, decaying across
-    the beat) — the raw bars|beats are NEVER shown while counting in (they run negative
-    during the engine pre-roll). Narrow widths drop the key zone first, then the tempo zone;
-    the position readout always survives.
+    Idle/playing face, four zones: LEFT bars|beats (16 px, timeTempo, monospaced), then the
+    absolute-time timecode right of it (12 px, textSec, monospaced — secondary to musical
+    time in the design hierarchy; W04b), CENTRE tempo ("120.0" + a small BPM tag), RIGHT
+    key + time-sig ("C · 4/4"). During record pre-roll the count-in face REPLACES the whole
+    layout: one large centred digit with a recordRed underline whose alpha pulses with the
+    beat (peak on the click, decaying across the beat) — the raw bars|beats are NEVER shown
+    while counting in (they run negative during the engine pre-roll). Narrow widths drop the
+    timecode zone first, then the key zone, then the tempo zone; the position readout always
+    survives.
 
     Data flow: a 25 Hz message-thread timer (same cadence as TransportBar) re-resolves the
     edit/transport per tick, reads position / tempo map / pitch sequence, feeds the pure
@@ -62,14 +64,19 @@ public:
         a construction-time default must not satisfy it, QC). */
     bool readoutIsNonEmpty() const  { return fedByLivePoll && current.positionText.isNotEmpty(); }
 
-    /** Layout hints for the ControlBar, derived from the zone widths (10 px insets + 64 px
-        position + 56 px key + 70 px tempo + 24 px BPM tag): below keyZoneMinWidth the key
-        zone drops (the tempo strip keeps its full width), below minimumWidth the tempo zone
-        drops too — the bars|beats position always survives (W04a contract, QC-corrected
-        thresholds). */
-    static constexpr int preferredWidth  = 230;
-    static constexpr int keyZoneMinWidth = 210;
-    static constexpr int minimumWidth    = 150;
+    /** Layout hints for the ControlBar, derived from the zone widths (10 px insets each side
+        + 64 px position + 80 px timecode + 70 px tempo strip, the 24 px BPM tag inside it,
+        + 56 px key: 20 + 64 + 80 + 70 + 56 = 290): below timecodeMinWidth the timecode zone
+        drops first (absolute time is the most expendable readout — W04b), below
+        keyZoneMinWidth (20 + 64 + 70 + 56 = 210) the key zone drops (the tempo strip keeps
+        its full width), below minimumWidth the tempo zone drops too — the bars|beats
+        position always survives (W04a contract, QC-corrected thresholds). preferredWidth
+        fits all four zones plus the same 20 px slack the three-zone value (230 = 210 + 20)
+        carried. */
+    static constexpr int preferredWidth   = 310;   // timecodeMinWidth + 20 px slack
+    static constexpr int timecodeMinWidth = 290;   // 20 + 64 + 80 + 70 + 56 (all four zones exact)
+    static constexpr int keyZoneMinWidth  = 210;   // 20 + 64 + 70 + 56 (timecode already shed)
+    static constexpr int minimumWidth     = 150;
 
     void paint (juce::Graphics&) override;
 
