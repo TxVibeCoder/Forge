@@ -52,6 +52,7 @@ namespace
         { .id = M::cmdExportStems,    .menu = M::menuFile,      .name = "Export Stems...",                              .action = &CB::onExportStems },
         { .id = M::cmdAudioSettings,  .menu = M::menuFile,      .name = "Audio Settings...",                            .separatorBefore = true, .action = &CB::onAudioSettings },
         { .id = M::cmdPluginManager,  .menu = M::menuFile,      .name = "Plugin Manager...",                            .action = &CB::onPluginManager },
+        { .id = M::cmdExit,           .menu = M::menuFile,      .name = "Exit",             .shortcut = "Ctrl+Q",       .separatorBefore = true, .action = &CB::onExit },
 
         // Edit (W05: global Undo/Redo over the Edit's UndoManager; note-level copy/paste stays view-local)
         { .id = M::cmdUndo,           .menu = M::menuEdit,      .name = "Undo",             .shortcut = "Ctrl+Z",       .action = &CB::onUndo, .enabledWhen = &CB::queryCanUndo },

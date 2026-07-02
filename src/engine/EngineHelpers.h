@@ -357,4 +357,21 @@ namespace EngineHelpers
         if (auto* vp = track.getVolumePlugin())
             vp->setPan (juce::jlimit (-1.0f, 1.0f, pan));
     }
+
+    //==============================================================================
+    // Tempo
+    //
+    // The tempo at a timeline position lives on a te::TempoSetting reachable via
+    //     TempoSetting& TempoSequence::getTempoAt (TimePosition) const;   // tracktion_TempoSequence.h:94
+    //     void          TempoSetting::setBpm (double);                     // tracktion_TempoSetting.h:76
+    // Read it back with TempoSequence::getBpmAt (TimePosition) (curve-aware). Clamped to
+    // [20, 300] to match the tempo popup's editable range (and TapTempo's own clamp).
+    //
+    // Message-thread only.
+
+    /** Sets the BPM of the tempo section covering `pos`, clamped to [20, 300]. */
+    inline void setTempoAt (te::Edit& edit, te::TimePosition pos, double bpm)
+    {
+        edit.tempoSequence.getTempoAt (pos).setBpm (juce::jlimit (20.0, 300.0, bpm));
+    }
 }

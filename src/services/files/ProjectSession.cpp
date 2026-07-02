@@ -603,6 +603,19 @@ void ProjectSession::launchScene (int sceneIndex)
     launchSceneClips (*edit, sceneIndex);
 }
 
+void ProjectSession::setGlobalLaunchQuantisation (te::LaunchQType t)
+{
+    if (edit == nullptr)
+        return;
+
+    edit->getLaunchQuantisation().type = t;
+}
+
+te::LaunchQType ProjectSession::getGlobalLaunchQuantisation() const
+{
+    return edit != nullptr ? edit->getLaunchQuantisation().type.get() : te::LaunchQType::bar;
+}
+
 //==============================================================================
 // Session MIDI-record seam (W7). Message-thread only.
 //

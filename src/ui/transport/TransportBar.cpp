@@ -66,6 +66,23 @@ TransportBar::TransportBar()
     };
     addAndMakeVisible (countInBox);
 
+    // Launch-quantisation (free-trigger) selector: item id (index+1) maps back to a 0-based
+    // te::LaunchQType enum index. Populated in te::getLaunchQTypeChoices() order (enum order).
+    launchQuantBox.setTooltip ("Launch quantize");
+    {
+        const auto choices = te::getLaunchQTypeChoices();
+        for (int i = 0; i < choices.size(); ++i)
+            launchQuantBox.addItem (choices[i], i + 1);
+    }
+    setLaunchQuantisation ((int) te::LaunchQType::bar);   // default until the shell seeds engine truth
+    launchQuantBox.onChange = [this]
+    {
+        const int id = launchQuantBox.getSelectedId();
+        if (edit != nullptr && id >= 1 && onLaunchQuantisationChanged)
+            onLaunchQuantisationChanged (id - 1);
+    };
+    addAndMakeVisible (launchQuantBox);
+
     syncMetronomeControls();   // defaults until the shell wires the query seams + calls setEdit
 }
 
@@ -99,12 +116,39 @@ void TransportBar::resized()
         r.removeFromLeft (4);
     }
 
-    countInBox.setBounds (r.removeFromLeft (jmin (120, r.getWidth())));
+    // The count-in + launch-quant combos SHARE the trailing space. QC caught that launch-quant, being
+    // last in a naive removeFromLeft chain, was starved to 0 px (unclickable) across the ~760–848 px
+    // window band while count-in ate everything first. Split proportionally instead: both reach their
+    // preferred width once there's room, and below that they shrink TOGETHER so neither ever vanishes.
+    const int gap = 4, countInPref = 120, launchPref = 110;
+    const int avail = jmax (0, r.getWidth());
+    int countInW, launchW;
+    if (avail >= countInPref + gap + launchPref)
+    {
+        countInW = countInPref;
+        launchW  = launchPref;
+    }
+    else
+    {
+        const int forCombos = jmax (0, avail - gap);
+        countInW = forCombos * countInPref / (countInPref + launchPref);
+        launchW  = forCombos - countInW;
+    }
+
+    countInBox.setBounds (r.removeFromLeft (countInW));
+    r.removeFromLeft (gap);
+    launchQuantBox.setBounds (r.removeFromLeft (jmin (launchW, r.getWidth())));
 }
 
 void TransportBar::changeListenerCallback (ChangeBroadcaster*)
 {
     updateButtons();
+}
+
+void TransportBar::setLaunchQuantisation (int enumIndex)
+{
+    // id (index+1) maps back to a 0-based te::LaunchQType enum index — see the ctor population.
+    launchQuantBox.setSelectedId (enumIndex + 1, dontSendNotification);
 }
 
 void TransportBar::updateButtons()
@@ -143,4 +187,10 @@ void TransportBar::syncMetronomeControls()
             countInBox.setSelectedId (i + 1, dontSendNotification);
             break;
         }
+
+    // Launch quantisation is Edit-global engine state; fall back to the control's own selection
+    // (rather than forcing a default) when there is no live Edit or the seam is unwired, so we
+    // never overwrite a user's still-pending choice with a guess.
+    if (edit != nullptr && queryLaunchQuantisation)
+        setLaunchQuantisation (queryLaunchQuantisation());
 }

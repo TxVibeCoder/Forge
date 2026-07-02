@@ -1,12 +1,15 @@
 #include "ui/transport/LcdDisplay.h"
+#include "ui/transport/TempoPopup.h"
 #include "ui/ForgeLookAndFeel.h"
 
 using namespace juce;
 
 LcdDisplay::LcdDisplay()
 {
-    // Display only — clicks fall through to the (crowded) control bar underneath.
-    setInterceptsMouseClicks (false, false);
+    // Only the tempo zone is clickable (hitTest gates it to tempoZoneBounds); every other part
+    // of the face stays click-through to the crowded control bar underneath. wantsKeyboardFocus
+    // stays false — the popup owns its own focus.
+    setInterceptsMouseClicks (true, false);
 
     current = forge::lcd::computeLcdState ({});   // static default face ("1|1", "120.0")
 
@@ -53,6 +56,26 @@ void LcdDisplay::setDemoState (const forge::lcd::LcdState& s)
     demoMode = true;
     current  = s;
     repaint();
+}
+
+bool LcdDisplay::hitTest (int x, int y)
+{
+    // Clickable ONLY over the tempo readout, and only once the shell has wired the tempo seams —
+    // otherwise the whole LCD stays click-through exactly as before (the tempo zone is also empty
+    // at narrow widths, which sheds clickability with the readout).
+    return queryBpm != nullptr && onBpmChanged != nullptr && tempoZoneBounds.contains (x, y);
+}
+
+void LcdDisplay::mouseUp (const MouseEvent& e)
+{
+    if (queryBpm == nullptr || onBpmChanged == nullptr || ! tempoZoneBounds.contains (e.getPosition()))
+        return;
+
+    // First CallOutBox in the codebase: the popup owns the tap estimator and pushes edits back
+    // through our seams; the box anchors to the tempo zone and manages its own lifetime.
+    CallOutBox::launchAsynchronously (std::make_unique<TempoPopup> (queryBpm, onBpmChanged),
+                                      localAreaToGlobal (tempoZoneBounds),
+                                      nullptr);
 }
 
 void LcdDisplay::timerCallback()
@@ -153,6 +176,10 @@ void LcdDisplay::paint (Graphics& g)
 
     if (current.countInActive)
     {
+        // The count-in face has no tempo readout — clear the clickable zone so a mid-record
+        // click can't launch the popup over the count-in digit.
+        tempoZoneBounds = {};
+
         // Count-in face: one large centred digit over a recordRed underline whose alpha peaks
         // on the click (pulsePhase 0) and decays across the beat. The raw bars|beats never
         // render here — during the pre-roll they run negative.
@@ -215,10 +242,16 @@ void LcdDisplay::paint (Graphics& g)
                     Justification::centredRight);
     }
 
-    // CENTRE — tempo, with a small BPM tag.
+    // CENTRE — tempo, with a small BPM tag. The whole strip (readout + tag) is the clickable
+    // tempo zone: latch it into tempoZoneBounds for hitTest / mouseUp. When the tempo zone is
+    // shed (too narrow, or the count-in face above), the bounds are cleared so the whole LCD
+    // becomes click-through again.
     if (showTempo)
     {
-        auto tempoArea = inner.withSizeKeepingCentre (jmin (70, inner.getWidth()), inner.getHeight());
+        const auto tempoStrip = inner.withSizeKeepingCentre (jmin (70, inner.getWidth()), inner.getHeight());
+        tempoZoneBounds = tempoStrip;
+
+        auto tempoArea = tempoStrip;
         const auto bpmTag = tempoArea.removeFromRight (24);
 
         g.setColour (Colour (ForgeLookAndFeel::timeTempo));
@@ -228,5 +261,9 @@ void LcdDisplay::paint (Graphics& g)
         g.setColour (Colour (ForgeLookAndFeel::textSec));
         g.setFont (Font (FontOptions (9.0f)));
         g.drawText ("BPM", bpmTag.translated (3, 2), Justification::centredLeft);
+    }
+    else
+    {
+        tempoZoneBounds = {};   // no tempo readout painted -> nothing clickable
     }
 }

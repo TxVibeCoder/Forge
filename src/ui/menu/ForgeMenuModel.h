@@ -54,7 +54,9 @@ public:
         cmdToggleMetronome, cmdToggleMidiClock,
         cmdCountInOff, cmdCountIn1Bar, cmdCountIn2Bars,   // Transport > Count-In radio group
 
-        cmdAbout
+        cmdAbout,
+
+        cmdExit
     };
 
     //==============================================================================
@@ -67,6 +69,7 @@ public:
         std::function<void()> onNewProject, onOpenProject, onSave, onSaveAs,
                               onImportAudio, onExportMixdown, onExportStems,
                               onAudioSettings, onPluginManager;
+        std::function<void()> onExit;
 
         // Edit
         std::function<void()> onUndo, onRedo;                       // W05

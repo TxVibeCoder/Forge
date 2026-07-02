@@ -80,6 +80,21 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    /** The tempo zone is the only clickable part of the LCD — hitTest returns true ONLY inside
+        the last-painted tempoZoneBounds, so every other part of the face stays click-through to
+        the crowded control bar underneath exactly as before (W?? 1.4). */
+    bool hitTest (int x, int y) override;
+
+    /** Clicking the tempo zone launches the tempo popup (a CallOutBox) anchored to that zone. */
+    void mouseUp (const juce::MouseEvent&) override;
+
+    //==============================================================================
+    // Tempo-edit seams, wired by the shell (see main.cpp). Both must be set for the tempo zone
+    // to become clickable at runtime; hitTest also requires them so the click-through behaviour
+    // is unchanged until they are wired.
+    std::function<double()>       queryBpm;       // current BPM, seeds the popup
+    std::function<void (double)>  onBpmChanged;   // apply an edited BPM to the engine
+
 private:
     void timerCallback() override;
 
@@ -98,6 +113,11 @@ private:
     bool prevPlaying = false, prevRecording = false;
     int  latchedCountInTotal = 0;      // edit.getNumCountInBeats() at the record trigger, else 0
     bool latchedFromStopped  = false;  // that trigger came from a stopped transport
+
+    // The last-painted tempo readout rectangle (local coords). Set every paint() so hitTest /
+    // mouseUp know where the (only) clickable zone is; empty when the tempo zone is shed at a
+    // narrow width, which correctly makes the whole LCD click-through again.
+    juce::Rectangle<int> tempoZoneBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LcdDisplay)
 };

@@ -1,8 +1,8 @@
 /*
     ControlBar — the single persistent top strip (Ableton-style): left = the Browser region
-    toggle; center = the embedded TransportBar plus the transport LCD (W04a — it supersedes
-    the bar's old timecode readout); right = the Session|Arrange|Mix view switch + the
-    Detail-drawer toggle.
+    toggle (a themed folder-icon toggle) alongside the Session|Arrange|Mix view switch + the
+    Detail-drawer toggle; center/right = the embedded TransportBar plus the transport LCD
+    (W04a — it supersedes the bar's old timecode readout).
 
     The file-command buttons (New/Open/Save/… /Plugins/Audio) moved to the W04a menu bar —
     the charter's division of labor: the menu is the discoverable command index, the bar
@@ -30,6 +30,7 @@ public:
 
     void setEdit (te::Edit*);
     void setViewMode (int mode);          // 0 = Session, 1 = Arrange, 2 = Mixer
+    void setBrowserOpen (bool isOpen);    // shell calls this when browser visibility changes
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -49,7 +50,32 @@ public:
 private:
     void updateViewButtons();
 
-    juce::TextButton browserBtn { "Browser" };
+    // Forge's first juce::Path vector icon: an icon-only folder toggle in place of the old
+    // "Browser" text button. Outline in textSec; tinted with the amber accent when the browser
+    // region is open. Draws itself in paintButton so the open/closed state repaints cleanly.
+    class FolderIconButton : public juce::Button
+    {
+    public:
+        FolderIconButton() : juce::Button ("Browser") {}
+
+        void setOpen (bool shouldBeOpen)
+        {
+            if (open == shouldBeOpen)
+                return;
+            open = shouldBeOpen;
+            repaint();
+        }
+
+        void paintButton (juce::Graphics&, bool shouldDrawButtonAsHighlighted,
+                          bool shouldDrawButtonAsDown) override;
+
+    private:
+        bool open = false;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FolderIconButton)
+    };
+
+    FolderIconButton browserBtn;
     TransportBar transportBar;
     LcdDisplay lcd;
     juce::TextButton sessionBtn { "Session" }, arrangeBtn { "Arrange" }, mixBtn { "Mix" };

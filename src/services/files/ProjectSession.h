@@ -109,6 +109,16 @@ public:
         scene is audible. App logic (no engine "launch scene" call) — mirrors the demo. */
     void launchScene (int sceneIndex);
 
+    /** Sets the Edit-global launch quantisation (free-trigger selector, W7 P#1.3). A single
+        Edit-level setting (te::Edit::getLaunchQuantisation().type) — governs every slot/scene
+        launch that doesn't override it per-clip. LaunchQType::none == free trigger (no snap).
+        No-op if there is no open edit. */
+    void setGlobalLaunchQuantisation (te::LaunchQType t);
+
+    /** Current Edit-global launch quantisation, or te::LaunchQType::bar (the engine default) if
+        there is no open edit. Const, non-mutating. */
+    te::LaunchQType getGlobalLaunchQuantisation() const;
+
     //==============================================================================
     // Session MIDI-record seam (W7). Message-thread only.
     //

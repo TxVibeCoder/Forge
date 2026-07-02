@@ -39,6 +39,8 @@
 #include "ui/session/SlotVisualState.h"
 #include "ui/export/ExportProgress.h"
 #include "ui/ControlBar.h"
+#include "ui/SplashWindow.h"
+#include "ui/transport/TapTempo.h"
 #include "ui/transport/LcdModel.h"
 #include "ui/tray/ChannelTray.h"
 #include "ui/menu/ForgeMenuModel.h"
@@ -48,7 +50,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -721,6 +723,12 @@ public:
             // thread, so a single callAsync yield suffices.
             MessageManager::callAsync ([this] { runUndoSelftest(); });
         }
+        else if (mode == SelfTest::taptempo)
+        {
+            // Tap-tempo model + tempo-write seam gate (hands-on 1.4). Pure math + one engine write on
+            // the live edit; synchronous, so one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runTapTempoSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -1105,6 +1113,23 @@ private:
         // (QC caught the seam left unwired at integration — the toggle was inert.)
         tb.onMidiClockToggled    = [this] (bool on) { MidiClockSync::setSendClockToAll (engine, on); };
         tb.queryMidiClockEnabled = [this]           { return MidiClockSync::isSendingClockAny (engine); };
+
+        // Free-trigger launch quantization (hands-on 1.3): expose the Edit-level global
+        // (Edit::getLaunchQuantisation().type) as a TransportBar selector. LaunchQType::none = free
+        // trigger (no bar-snap) for effects/jamming; default is 1 bar. Wired before controlBar.setEdit,
+        // so the TransportBar's first sync seeds the combo from the query.
+        tb.onLaunchQuantisationChanged = [this] (int idx) { session.setGlobalLaunchQuantisation (static_cast<te::LaunchQType> (idx)); };
+        tb.queryLaunchQuantisation     = [this]           { return (int) session.getGlobalLaunchQuantisation(); };
+
+        // Clickable tempo (hands-on 1.4): the LCD's tempo zone opens a CallOutBox popup (up/down, typed
+        // entry, tap tempo). queryBpm reads the live curve-aware BPM per-invocation (tracks project
+        // swaps); onBpmChanged writes via the clamped [20,300] EngineHelpers::setTempoAt seam. The LCD
+        // self-polls at 25 Hz, so no explicit refresh call is needed.
+        auto& lcd = controlBar.getLcdDisplay();
+        lcd.queryBpm = [this] { auto* e = session.getEdit();
+                                return e != nullptr ? e->tempoSequence.getBpmAt (e->getTransport().getPosition()) : 120.0; };
+        lcd.onBpmChanged = [this] (double bpm) { if (auto* e = session.getEdit())
+                                                     EngineHelpers::setTempoAt (*e, e->getTransport().getPosition(), bpm); };
     }
 
     // Menu-bar model (W04a): the same commands the buttons/keys already run, exposed as a
@@ -1129,6 +1154,7 @@ private:
         cb.onExportStems   = controlBar.onExportStems;
         cb.onAudioSettings = controlBar.onAudioSettings;
         cb.onPluginManager = controlBar.onScanPlugins;
+        cb.onExit          = [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); };   // hands-on 1.5
 
         // Edit
         cb.onUndo        = [this] { doUndo(); };
@@ -1374,6 +1400,7 @@ private:
             if (sidebarSlide < 0) sidebarSlide = 0;
         }
 
+        controlBar.setBrowserOpen (browserVisible);   // hands-on 1.2: sync the folder-icon tint (open edge)
         startSlide();
     }
 
@@ -1502,6 +1529,7 @@ private:
             {
                 if (sidebarSlideTarget == 0)
                     browserVisible = false;
+                controlBar.setBrowserOpen (browserVisible);   // hands-on 1.2: un-tint the folder icon on close-settle
                 sidebarSlide = -1;   // settled
             }
             else
@@ -2157,10 +2185,20 @@ private:
         if (auto* t = session.getTransport())
             t->stop (false, false);
 
+        // Launch-quant seam round-trip (hands-on 1.3): prove the free-trigger global set/get. Run after
+        // the launch above (which used the default 1-bar quant), so it can't affect this run; leaves the
+        // default 'bar' restored.
+        session.setGlobalLaunchQuantisation (te::LaunchQType::none);
+        const bool launchQNone = session.getGlobalLaunchQuantisation() == te::LaunchQType::none;
+        session.setGlobalLaunchQuantisation (te::LaunchQType::bar);
+        const bool launchQBar  = session.getGlobalLaunchQuantisation() == te::LaunchQType::bar;
+        const bool launchQRoundTrip = launchQNone && launchQBar;
+
         // PASS proves the launch PATH end-to-end: a born-audible clip created in a slot, launched,
         // with the transport rolling AND the clip's launch handle actually in the playing state.
         const bool pass = ssClipCreated && slotHasClip && hasLaunchHandle
                           && transportPlaying && clipPlaying
+                          && launchQRoundTrip
                           && session.getNumScenes() >= 16;
 
         String report;
@@ -2172,6 +2210,7 @@ private:
                << "hasLaunchHandle="  << (hasLaunchHandle ? 1 : 0) << newLine
                << "transportPlaying=" << (transportPlaying ? 1 : 0) << newLine
                << "clipPlaying="      << (clipPlaying ? 1 : 0) << newLine
+               << "launchQRoundTrip=" << (launchQRoundTrip ? 1 : 0) << newLine
                << "result="           << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -2181,6 +2220,57 @@ private:
             FORGE_LOG_ERROR ("Failed to write session selftest report to: " + reportFile.getFullPathName());
 
         FORGE_LOG_INFO ("Session selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // --selftest-taptempo (hands-on 1.4): the tap-tempo pure model + the EngineHelpers::setTempoAt
+    // engine-write seam, both headless. Leg 1 asserts the TapTempo math with synthetic timestamps
+    // (no engine); leg 2 writes a tempo through the clamped [20,300] seam and reads it back.
+    void runTapTempoSelftest()
+    {
+        forge::transport::TapTempo t;
+        t.tap (0.0);
+        const bool oneTapNull = ! t.currentBpm().has_value();     // <2 taps -> no estimate
+        t.tap (500.0); t.tap (1000.0); t.tap (1500.0);
+        const bool bpm120 = t.currentBpm().has_value() && std::abs (*t.currentBpm() - 120.0) < 1e-6;
+        t.tap (4000.0);                                           // gap 2500 ms > 2000 ms -> fresh sequence
+        const bool gapReset = ! t.currentBpm().has_value();
+
+        forge::transport::TapTempo fast;
+        fast.tap (0.0); fast.tap (10.0);                          // 6000 BPM raw -> clamps to 300
+        const bool clampHigh = fast.currentBpm().has_value() && std::abs (*fast.currentBpm() - 300.0) < 1e-6;
+
+        bool engineWrite = false, engineClamp = false;
+        if (auto* ed = session.getEdit())
+        {
+            EngineHelpers::setTempoAt (*ed, te::TimePosition(), 140.0);
+            engineWrite = std::abs (ed->tempoSequence.getBpmAt (te::TimePosition()) - 140.0) < 1e-3;
+            EngineHelpers::setTempoAt (*ed, te::TimePosition(), 5.0);   // below the 20 BPM floor -> clamps
+            engineClamp = std::abs (ed->tempoSequence.getBpmAt (te::TimePosition()) - 20.0) < 1e-3;
+        }
+
+        const bool pass = oneTapNull && bpm120 && gapReset && clampHigh && engineWrite && engineClamp;
+
+        String report;
+        report << "mode=taptempo" << newLine
+               << "oneTapNull="  << (oneTapNull ? 1 : 0) << newLine
+               << "bpm120="      << (bpm120 ? 1 : 0) << newLine
+               << "gapReset="    << (gapReset ? 1 : 0) << newLine
+               << "clampHigh="   << (clampHigh ? 1 : 0) << newLine
+               << "engineWrite=" << (engineWrite ? 1 : 0) << newLine
+               << "engineClamp=" << (engineClamp ? 1 : 0) << newLine
+               << "result="      << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="     << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write tap-tempo selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Tap-tempo selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
@@ -3572,9 +3662,11 @@ private:
                 channelTray.setTrack (tracks[0]);
         }
         browserVisible = true;
-        sidebarMode    = SidebarMode::Channel;
+        controlBar.setBrowserOpen (true);   // hands-on 1.2: this direct-set harness path bypasses the
+        sidebarMode    = SidebarMode::Channel;   // animated toggle, so sync the folder-icon tint by hand (QC)
         captureView ("arrange_tray");
         browserVisible = false;
+        controlBar.setBrowserOpen (false);
         sidebarMode    = SidebarMode::Browser;
         channelTray.setTrack (nullptr);
 
@@ -4205,7 +4297,7 @@ static void runMenuSelfTest()
                            && names[(int) ForgeMenuModel::menuFile]      == "File"
                            && names[(int) ForgeMenuModel::menuTransport] == "Transport";
 
-    const int expectedCounts[] = { 9, 3, 7, 6, 1 };   // File, Edit (+2 W05 undo/redo), View, Transport, Help
+    const int expectedCounts[] = { 10, 3, 7, 6, 1 };  // File (+1 Exit, hands-on 1.5), Edit (+2 W05 undo/redo), View, Transport, Help
     bool countsPass = names.size() == (int) (sizeof (expectedCounts) / sizeof (expectedCounts[0]));
     for (int m = 0; countsPass && m < names.size(); ++m)
         countsPass = model.getMenuForIndex (m, names[m]).getNumItems() == expectedCounts[m];
@@ -4328,6 +4420,7 @@ public:
                             : commandLine.contains ("--selftest-livesync")       ? "selftest-livesync"       // before bare --selftest
                             : commandLine.contains ("--selftest-popout")         ? "selftest-popout"         // before bare --selftest
                             : commandLine.contains ("--selftest-undo")           ? "selftest-undo"           // before bare --selftest
+                            : commandLine.contains ("--selftest-taptempo")       ? "selftest-taptempo"       // before bare --selftest
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -4376,9 +4469,23 @@ public:
                         : commandLine.contains ("--selftest-tray")           ? SelfTest::tray           // before bare --selftest
                         : commandLine.contains ("--selftest-popout")         ? SelfTest::popout         // before bare --selftest
                         : commandLine.contains ("--selftest-undo")           ? SelfTest::undo           // before bare --selftest
+                        : commandLine.contains ("--selftest-taptempo")       ? SelfTest::taptempo       // before bare --selftest
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
+
+        // Cosmetic launch splash (hands-on 1.7) — SKIPPED for every --selftest-*/--screenshot run so the
+        // headless floor never spawns a window. It cannot mask the ~8s te::Engine construction (a
+        // ForgeApplication member built before initialise() ran); see SplashWindow.h's header note.
+        if (mode == SelfTest::none)
+        {
+            splashWindow = std::make_unique<forge::SplashWindow>();
+            splashWindow->centreAndShow();
+        }
+
         mainWindow.reset (new MainWindow ("Forge", new MainComponent (engine, mode), *this));
+
+        // MainWindow's ctor calls setVisible(true) synchronously — it is showing now, so drop the splash.
+        splashWindow = nullptr;
 
         // Post-open device snapshot (Option A). The engine member opened its OUTPUT device during
         // ForgeApplication construction — BEFORE install() ran — so an open *failure* can't be captured,
@@ -4442,6 +4549,7 @@ private:
     ForgeLookAndFeel lookAndFeel;
     te::Engine engine { "Forge", std::make_unique<ForgeUIBehaviour>(), std::make_unique<ForgeEngineBehaviour>() };
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<forge::SplashWindow> splashWindow;   // hands-on 1.7 (cosmetic; skipped in headless)
 };
 
 //==============================================================================
