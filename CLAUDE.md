@@ -62,13 +62,14 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — SEVENTEEN gates as of W06): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-ONE gates as of W07): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
-  `--selftest-undo`, `--selftest-taptempo`;
-  `--screenshot` renders the 9-state matrix (incl. the window-level `shell_window`) to
-  `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
+  `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
+  `--selftest-dragdrop`;
+  `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
+  `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
 - **In a multi-CLI wave, CLIs DO NOT build.** One build dir + a device lock means concurrent builds collide.
   Each CLI edits + self-reviews for compile-safety; the **orchestrator** owns `main.cpp` / `CMakeLists.txt` / the

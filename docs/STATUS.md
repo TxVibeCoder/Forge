@@ -1,16 +1,17 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W06 — the hands-on wave, part 1: control
-bar & HUD** on baseline `7f03974` — the first build wave off the maintainer's first hands-on session. 15
-notes → 7 source-verified investigation agents → an adversarially-verified 5-wave plan → **Wave 1**: view
-buttons moved top-left, the Browser button became a `juce::Path` folder icon, a free-trigger launch-quant
-selector (`LaunchQType::none`) over the Edit-level global, a clickable tempo popup with tap-tempo, File ▸
-Exit, and a cosmetic launch splash. Built by **5 file-disjoint agents** → orchestrator consolidation →
-clean build (0 warnings) → the **SEVENTEEN-gate floor** (new `--selftest-taptempo`; `--selftest-session`
-gained a `launchQRoundTrip` leg) → a 4-dimension adversarial QC (per-finding skeptics) confirming **2
-defects (1 major — the launch-quant combo collapsing to 0 px in a narrow-window band)**, both fixed.
-**all SEVENTEEN selftests PASS**; `--screenshot` renders the 9-state matrix. Full record →
-[devlog/wave-06-handson.md](devlog/wave-06-handson.md). Earlier same continuous effort: **W05**
+*Living status document. Last updated 2026-07-02 (this session: **W07 — the hands-on wave, part 2:
+Session-grid interactions** on baseline `aa45ad7` — the second build wave off the maintainer's first hands-on
+session. Delivered **delete clip · +Track · +Scene (dynamic scene count) · real file drag-drop** (Session pads
++ Arrange lanes) over three new `ProjectSession` seams (`clearSlot`, `appendAudioTrack`, a track-aware
+`importAudioFile`). Built by one serial session-grid spine agent + one parallel Arrange agent → orchestrator
+seams/gates/build → clean build (0 warnings) → the **TWENTY-ONE-gate floor** (four new: `--selftest-slotdelete`
+/ `-addtrack` / `-scene` / `-dragdrop`) → a **5-dimension adversarial QC** (per-finding skeptics) confirming
+**2 real defects — a MAJOR pre-existing scene/pad `rowBand` drift and a HIGH detached-drawer-clip on delete**,
+both fixed. **all TWENTY-ONE selftests PASS**; `--screenshot` renders a **10-state matrix** (new
+`session_scenes`). Committed locally, awaiting the maintainer's push. Full record →
+[devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md). Prior wave: **W06** — control bar & HUD
+(`e670ab5`, → [devlog/wave-06-handson.md](devlog/wave-06-handson.md)). Earlier same continuous effort: **W05**
 (`5e5dcf2`; → [devlog/wave-05-undo.md](devlog/wave-05-undo.md)); **W04b** (`cc27300`; →
 [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md)); **W04a** (`41e3139`; →
 [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md)); **W03** (`ffa494d`; →
@@ -462,6 +463,45 @@ adversarial QC (**LIMIT-INTERRUPTED** — see below). Full record: [devlog/wave-
   ctor; the scene-row hover fill dropped out over the ▶ launch button). The **undo-correctness** and
   **shell-integration** dimensions NEVER RAN and are owed as the next session's first action — the
   orchestrator's inline self-review found nothing, but that is not adversarial verification.
+
+### W06 — the hands-on wave, part 1: control bar & HUD — SHIPPED  (`e670ab5`; PUSHED)
+The first build wave off the maintainer's first hands-on session (15 notes → an adversarially-verified 5-wave
+plan). View buttons → top-left; the Browser button → a `juce::Path` folder icon (first vector icon in the
+repo); a free-trigger launch-quant selector (`LaunchQType::none`); a clickable tempo popup + tap-tempo (gate
+`--selftest-taptempo`); File ▸ Exit; a cosmetic launch splash. 5 file-disjoint agents → QC (2 defects fixed,
+1 major — a launch-quant combo collapsing to 0 px in a narrow window band). Record:
+[devlog/wave-06-handson.md](devlog/wave-06-handson.md).
+
+### W07 — the hands-on wave, part 2: Session-grid interactions — SHIPPED (local; awaiting push)  (baseline `aa45ad7`)
+Wave 2 of the hands-on plan. Built the W06 way: 5 source-verify investigators → 3 orchestrator `ProjectSession`
+seams → one serial `src/ui/session/*` spine agent (the four grid features) + one parallel `ArrangeView` agent
+(the disjoint lane drop) → orchestrator gates + wiring + single build → 5-dimension adversarial QC → fixes.
+Full record: [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md).
+- **Delete clip** — filled-only pad right-click "Delete clip" + Delete/Backspace → `clearSlot` (stops the
+  launch, `removeFromParent` through the Edit UndoManager → **undoable via the W05 stack**) → `onEditMutated`
+  + rebuild. No dialog. Gate `--selftest-slotdelete`.
+- **+ Track** — a trailing neutral "+" column stub (`AddTrackColumnComponent`) in the grid → `appendAudioTrack`
+  (end-append keeps absolute indices stable; fires `onTracksChanged`; no 4OSC — the synth arrives lazily on the
+  first MIDI clip). Gate `--selftest-addtrack`.
+- **+ Scene** — the former `SessionLayout::numScenes` (`constexpr=16`) became a runtime
+  `gridScenes = jmax(16, getNumScenes())` threaded through every fixed site (pad ctor, the 25 Hz poll's flat
+  stride `t*gridScenes+s`, diff buffers, content height, focus clamps); a "+ Scene" footer button →
+  `ensureScenes(+1) → save() → rebuild()`. Persists; deliberately **not** undoable (`ensureScenes` is off the
+  stack). Gate `--selftest-scene`; the `session_scenes` screenshot proves the >16-row render + row alignment.
+- **Real file drag-drop** — `ClipSlotComponent` + `TrackLaneComponent` implement `juce::FileDragAndDropTarget`
+  (audio-only via `te::soundFileExtensions`); Session pads route to `importAudioIntoSlot`, Arrange lanes to the
+  new track-aware `importAudioFile(file, time, trackIndex)`. Neutral `textPrim` drop feedback on both surfaces.
+  Gate `--selftest-dragdrop` (both import legs + the replace-on-drop undo contract).
+- **QC (5 dimensions × per-finding skeptics):** 2 real defects fixed — a **MAJOR** pre-existing scene/pad
+  `rowBand` drift (the pinned scene column was sized to a different height than the track columns; ~19 px at 20
+  scenes; masked at the 1480×940 screenshot size) and a **HIGH** detached-drawer-clip on delete (found by TWO
+  finders; fixed with a shared `MainComponent::reconcileDrawerClip`). Minors: drop-colour harmonised across
+  surfaces; the drag-drop gate gained a replace-undo leg. A low-confidence delete-while-recording guard was
+  **considered and deliberately skipped** (unproven corruption; blocking a legitimate op is not conservative);
+  the aux-return-ordering cosmetic is a Wave-3 note. Refuted with evidence: the +Track re-entrant self-destruct,
+  `getNumColumns` off-by-one, hover-stick, R1/R4 teardown, new-callback null-safety.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-ONE selftests PASS**; the 10-state screenshot
+  matrix renders. **Committed locally; not yet pushed** (awaiting the maintainer's go-ahead + sanitize).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
