@@ -485,7 +485,9 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (this session; QC partially owed)**.
+- [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md) — **candidate-feature backlog** mined from the Waveform User Guide (Tracktion's own DAW on the same engine); UX/nav/workflow-first, page-referenced, ranked by fit. Feeds DIRECTION/STATUS planning. (The guide PDF is copyrighted → `.gitignore`d, never committed.)
+- [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD (this session)**.
+- [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (QC partially owed)**.
 - [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md) / [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md) — the W04 UX waves (same session).
 - [devlog/wave-03-features.md](devlog/wave-03-features.md) — W03: automation · MIDI-clock out · async LUFS · live refresh (same session).
 - [devlog/wave-02-features.md](devlog/wave-02-features.md) — W02: MIDI-learn HW routing · control surface · offline LUFS (prior session).
