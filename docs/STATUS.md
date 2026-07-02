@@ -9,8 +9,8 @@ regression**) + the **ChannelTray made Arrange-only** + a backward-compatible ho
 `PeakMeter`. Built by one session-grid spine agent + orchestrator → clean build (0 warnings) → the
 **TWENTY-TWO-gate floor** (new `--selftest-sessionmixer`) → a **4-dimension adversarial QC** confirming **NO
 blockers/majors**; the surviving findings were **documented, not fixed (per maintainer direction)**. **all
-TWENTY-TWO selftests PASS**; the base `session` screenshot shows the mixer band. Committed locally (3 stacked
-unpushed commits), awaiting the maintainer's push. Full record →
+TWENTY-TWO selftests PASS**; the base `session` screenshot shows the mixer band. Committed + **PUSHED to
+`origin/main`** (W07 + W08, sanitize-clean). Full record →
 [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md). Prior wave: **W07** — Session-grid
 interactions (`fc0fdbe`, → [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md)); **W06** — control
 bar & HUD (`e670ab5`, → [devlog/wave-06-handson.md](devlog/wave-06-handson.md)). Earlier same continuous effort: **W05**
@@ -474,7 +474,7 @@ repo); a free-trigger launch-quant selector (`LaunchQType::none`); a clickable t
 1 major — a launch-quant combo collapsing to 0 px in a narrow window band). Record:
 [devlog/wave-06-handson.md](devlog/wave-06-handson.md).
 
-### W07 — the hands-on wave, part 2: Session-grid interactions — SHIPPED (local; awaiting push)  (baseline `aa45ad7`)
+### W07 — the hands-on wave, part 2: Session-grid interactions — SHIPPED (PUSHED)  (baseline `aa45ad7`)
 Wave 2 of the hands-on plan. Built the W06 way: 5 source-verify investigators → 3 orchestrator `ProjectSession`
 seams → one serial `src/ui/session/*` spine agent (the four grid features) + one parallel `ArrangeView` agent
 (the disjoint lane drop) → orchestrator gates + wiring + single build → 5-dimension adversarial QC → fixes.
@@ -503,9 +503,9 @@ Full record: [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md).
   the aux-return-ordering cosmetic is a Wave-3 note. Refuted with evidence: the +Track re-entrant self-destruct,
   `getNumColumns` off-by-one, hover-stick, R1/R4 teardown, new-callback null-safety.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-ONE selftests PASS**; the 10-state screenshot
-  matrix renders. **Committed locally; not yet pushed** (awaiting the maintainer's go-ahead + sanitize).
+  matrix renders. **Committed + PUSHED to `origin/main`** (`fc0fdbe` code + `3652168` docs, with W08).
 
-### W08 — the hands-on wave, part 3: per-track Session mixer strips — SHIPPED (local; awaiting push)  (baseline `3652168`)
+### W08 — the hands-on wave, part 3: per-track Session mixer strips — SHIPPED (PUSHED)  (baseline `3652168`)
 Wave 3 of the hands-on plan. Built the W06/W07 way: 5 source-verify investigators → one `src/ui/session/*` spine
 agent → orchestrator (gate + tray + PeakMeter mode + build) → 4-dimension adversarial QC. Full record:
 [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md).
@@ -528,8 +528,8 @@ agent → orchestrator (gate + tray + PeakMeter mode + build) → 4-dimension ad
   substring bug** was caught pre-ship: `--selftest-sessionmixer` ⊃ `--selftest-session` shadowed it in the
   ternary ladder (false `mode=session` PASS) — fixed by ordering longest-first; lesson: verify the `mode=` line.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-TWO selftests PASS** (`--selftest-sessionmixer`:
-  `bound/faderOk/panOk/muteOk/soloOk` all 1); the base `session` screenshot shows the band. **Committed locally
-  (3 stacked unpushed commits); not pushed** (awaiting the maintainer's go-ahead).
+  `bound/faderOk/panOk/muteOk/soloOk` all 1); the base `session` screenshot shows the band. **Committed +
+  PUSHED to `origin/main`** (`0ad7abc` code + `1e1a798` docs, with W07, sanitize-clean).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

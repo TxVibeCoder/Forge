@@ -7,8 +7,8 @@
 > build) → 4-dimension adversarial QC.
 
 Build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-TWO selftests PASS** (the W07 twenty-one +
-`--selftest-sessionmixer`) · `--screenshot`'s base `session` state now shows the mixer band. **Committed
-locally on the W07 tip — not pushed** (stacked behind the unpushed W07).
+`--selftest-sessionmixer`) · `--screenshot`'s base `session` state now shows the mixer band. **Committed +
+PUSHED to `origin/main`** (with W07).
 
 ---
 

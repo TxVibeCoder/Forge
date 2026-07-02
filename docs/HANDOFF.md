@@ -8,9 +8,9 @@
 > re-run this wave).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **THREE local commits are stacked and UNPUSHED** on the `aa45ad7` baseline (`origin/main` tip):
-W07 (`fc0fdbe` code + `3652168` docs) and **W08 (`0ad7abc` code + a docs commit)** — all awaiting the
-maintainer's push go-ahead. Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-TWO selftests PASS**
+**`main`**. **W07 (`fc0fdbe` code + `3652168` docs) and W08 (`0ad7abc` code + `1e1a798` docs) are PUSHED to
+`origin/main`** (sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings)
+· **all TWENTY-TWO selftests PASS**
 — the W07 twenty-one plus **`--selftest-sessionmixer`**; `--screenshot`'s 10-state matrix's base `session`
 state now shows the mixer band.
 Shipped (the hands-on plan's Wave 3): a **fixed mixer band under the Session clip grid** — a compact per-track
@@ -265,8 +265,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W07 (`fc0fdbe` + docs) is **committed LOCALLY on the `aa45ad7` baseline — NOT yet pushed** (awaiting
-> the maintainer's push go-ahead + a sanitize pass). Hardware smoke tests and manual GUI passes are
+> W07 + W08 are **committed + PUSHED to `origin/main`** (sanitize-clean). Hardware smoke tests and manual GUI passes are
 > **permanently parked** (standing constraints at the top); the path forward is the headless-provable
 > roadmap. **The active track is the hands-on wave plan** ([[forge-handson-wave-plan]]) — Waves 1 (W06) + 2
 > (W07) + 3 (W08) shipped; Waves 4–5 remain.
@@ -502,12 +501,10 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed LOCALLY, NOT yet pushed — THREE commits stacked.** W07 (`fc0fdbe` code +
-  `3652168` docs) and W08 (`0ad7abc` code + a docs commit) sit on the `aa45ad7` baseline in the local `main`,
-  **awaiting the maintainer's push go-ahead** (they said "launch next wave," not "push", so W08 stacked on the
-  unpushed W07); the sanitize scan ran clean (only placeholder `C:\Users\…` / `<user>` forms in doc text — no
-  real machine paths / identity leaks). `origin/main` tip is still **`aa45ad7`** (W06 `e670ab5` + the Waveform
-  backlog + a HANDOFF-refresh docs commit). Prior pushed history:
+- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe` code + `3652168` docs) and W08
+  (`0ad7abc` code + `1e1a798` docs) are on **`origin/main`** — the sanitize scan ran clean before the push
+  (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Local
+  `main` == `origin/main`. Prior pushed history: W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
   `.gitignore`d — copyrighted, never committed).
