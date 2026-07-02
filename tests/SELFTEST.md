@@ -414,6 +414,31 @@ independently unit-testable `TimelineView::xToTime`.
 
 > Verified 2026-07-02: **all four W07 gates PASS**, bringing the floor to **21 gates**.
 
+## `Forge --selftest-sessionmixer` (per-track Session mixer strip sync)
+
+The acceptance gate for **W08 — the per-track Session mixer strip** (design:
+[../docs/devlog/wave-08-session-mixer.md](../docs/devlog/wave-08-session-mixer.md)). Mirrors
+`--selftest-livesync` / `--selftest-tray`: write vol/pan/mute/solo engine-side on track 0, bind a
+`SessionMixerStrip` to it, force ONE `refreshControls()` tick, and read the strip's controls back through its
+accessors. The strip works headless/non-visible (`refreshControls()` has no visibility dependency; only the
+poll timer is visibility-gated).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `bound` | the strip resolved a live track | 1 |
+| `faderOk` | the fader reads back `setTrackVolumeDb(-9)` within 0.15 dB | 1 |
+| `panOk` | the pan reads back `setTrackPan(-0.5)` within 0.02 | 1 |
+| `muteOk` | the strip reflects `track.setMute(true)` | 1 |
+| `soloOk` | the strip reflects `track.setSolo(true)` | 1 |
+
+> Verified 2026-07-02: **PASS** (`mode=sessionmixer`, all legs 1), bringing the floor to **22 gates**.
+> **Ladder-ordering note:** `--selftest-sessionmixer` CONTAINS `--selftest-session`, so it MUST be matched
+> before it in the `commandLine.contains(...)` ladders — else it silently runs the session gate and reports a
+> false `result=PASS` under `mode=session`. Always verify the `mode=` line, not just `result=`.
+
+The base `session` screenshot state now includes the mixer band (it's part of SessionView's tree), so no new
+`--screenshot` state was added — the 10-state matrix stands.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

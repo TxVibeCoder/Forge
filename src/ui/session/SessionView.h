@@ -33,6 +33,7 @@
 
 #include "ui/session/TrackColumnComponent.h"
 #include "ui/session/SceneColumnComponent.h"
+#include "ui/session/SessionMixerStrip.h"
 #include "ui/session/SlotVisualState.h"
 #include "ui/session/SessionLayout.h"
 #include "services/files/ProjectSession.h"
@@ -162,6 +163,7 @@ private:
     void setFocus (int trackIdx, int sceneIdx);
     void repaintPad (int trackIdx, int sceneIdx);
     void syncSceneColumnToScroll();  // translate the pinned scene column by -viewport.getViewPositionY()
+    void syncMixerBandToScroll();    // translate the bottom mixer holder by -viewport.getViewPositionX()
 
     // Resolves the AudioTrack at trackIdx fresh via te::getAudioTracks (R1; never cached). Null
     // for an out-of-range index / no edit. Message-thread only.
@@ -215,6 +217,16 @@ private:
     juce::OwnedArray<TrackColumnComponent> columns;
     std::unique_ptr<AddTrackColumnComponent> addTrackColumn;   // W07 trailing "+" stub
     std::unique_ptr<SceneColumnComponent> scenes;
+
+    // W08 mixer band: a FIXED strip pinned to the bottom of the (non-scene) area, OUTSIDE the
+    // viewport (so vertical pad-scroll never moves it — the twin of the pinned scene column, rotated
+    // 90 deg). `mixerBand` is a direct child of SessionView clipped to the band's bounds; its child
+    // `mixerHolder` is contentW wide (the SAME width as columnHolder, so strips share the column
+    // x-pitch) and is translated by -viewport.getViewPositionX() (syncMixerBandToScroll) so strip N
+    // stays glued under column N while scrolling horizontally. One SessionMixerStrip per track column.
+    juce::Component mixerBand;
+    juce::Component mixerHolder;
+    juce::OwnedArray<SessionMixerStrip> mixerStrips;
 
     // Keyboard focus / selection cursor tracked as INDICES only — never a cached ClipSlot* / Clip*
     // (R1). The pad's `selected` flag (set via setSlotSelected) renders the highlight.

@@ -85,6 +85,13 @@ public:
 
     bool hasSource() const noexcept { return measurer.get() != nullptr; }
 
+    /** Orient the level fill HORIZONTALLY (fills left->right) instead of the default VERTICAL (fills
+        bottom->up). For a wide, short meter row (e.g. the W08 Session mixer strip) the horizontal fill
+        reads as a real level bar; a vertical fill in a 9px-tall row is an unreadable sliver. Backward-
+        compatible: default is vertical, so every existing caller (mixer strips / master / returns / tray)
+        is unchanged. */
+    void setHorizontal (bool h) { horizontal = h; repaint(); }
+
     /** Pull the latest peak off the measurer and apply decay. Called on the owner's timer.
         `secondsSinceLast` is the timer interval, used for the fall-off rate. */
     void poll (float secondsSinceLast)
@@ -119,22 +126,38 @@ public:
         g.fillRect (r);
 
         const float frac = forge::meter::dbToMeterFraction (currentDb);
-        if (frac > 0.0f)
+        // Amber under 0 dBFS-ish, red once we're into the top headroom band (clipping warning).
+        const bool  hot         = currentDb > 0.0f;
+        const auto  levelColour = hot ? juce::Colour (ForgeLookAndFeel::recordRed)
+                                      : juce::Colour (ForgeLookAndFeel::accent);
+        const float zeroFrac    = forge::meter::dbToMeterFraction (0.0f);
+
+        if (horizontal)
         {
-            auto fill = r.removeFromBottom (r.getHeight() * frac);
+            if (frac > 0.0f)
+            {
+                g.setColour (levelColour);
+                g.fillRect (r.removeFromLeft (r.getWidth() * frac));
+            }
 
-            // Amber under 0 dBFS-ish, red once we're into the top headroom band (clipping warning).
-            const bool hot = currentDb > 0.0f;
-            g.setColour (hot ? juce::Colour (ForgeLookAndFeel::recordRed)
-                             : juce::Colour (ForgeLookAndFeel::accent));
-            g.fillRect (fill);
+            // 0 dB tick as a vertical line so the user can read the headroom point.
+            const float zeroX = (float) getWidth() * zeroFrac;
+            g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
+            g.fillRect (zeroX, 0.0f, 1.0f, (float) getHeight());
         }
+        else
+        {
+            if (frac > 0.0f)
+            {
+                g.setColour (levelColour);
+                g.fillRect (r.removeFromBottom (r.getHeight() * frac));
+            }
 
-        // 0 dB tick line so the user can read the headroom point.
-        const float zeroFrac = forge::meter::dbToMeterFraction (0.0f);
-        const float zeroY = (float) getHeight() * (1.0f - zeroFrac);
-        g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
-        g.fillRect (0.0f, zeroY, (float) getWidth(), 1.0f);
+            // 0 dB tick as a horizontal line.
+            const float zeroY = (float) getHeight() * (1.0f - zeroFrac);
+            g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
+            g.fillRect (0.0f, zeroY, (float) getWidth(), 1.0f);
+        }
 
         g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
         g.drawRect (getLocalBounds().toFloat(), 1.0f);
@@ -144,6 +167,7 @@ private:
     juce::WeakReference<te::LevelMeasurer> measurer;   // nulls itself when the owner dies (see attach)
     te::LevelMeasurer::Client client;
     float currentDb = forge::meter::kMeterMinDb;
+    bool  horizontal = false;   // W08: left->right fill for a wide meter row (default: vertical, bottom->up)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PeakMeter)
 };

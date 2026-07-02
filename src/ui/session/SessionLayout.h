@@ -22,6 +22,14 @@ namespace SessionLayout
     constexpr int sceneColW = 168;               // pinned right-hand scene column width
     constexpr int headerH   = 78;                // track header band height
     constexpr int stopRowH  = 30;                // per-track clip-stop footer height
+    constexpr int mixerBandH = 96;               // W08: fixed per-track mixer strip band pinned to the
+                                                 // BOTTOM of the (non-scene) area, OUTSIDE the pad
+                                                 // viewport (so vertical pad-scroll never moves it) and
+                                                 // H-scroll-synced under its column. Holds one compact
+                                                 // SessionMixerStrip (meter/fader/pan/M/S) per column.
+                                                 // Does NOT enter contentH (the pad content height) — it
+                                                 // shrinks the viewport only, so the scene-column vs pad
+                                                 // equal-height anti-drift invariant is untouched.
     constexpr int slotPad   = 3;                 // inset inside each pad
     constexpr int numScenes = 16;                // DEFAULT / MINIMUM scene rows (the floor). The LIVE
                                                  // grid scene count is a runtime value (W07 +Scene):

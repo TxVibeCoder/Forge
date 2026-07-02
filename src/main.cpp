@@ -36,6 +36,7 @@
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
 #include "ui/session/SessionView.h"
+#include "ui/session/SessionMixerStrip.h"
 #include "ui/session/SlotVisualState.h"
 #include "ui/export/ExportProgress.h"
 #include "ui/ControlBar.h"
@@ -50,7 +51,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -433,6 +434,13 @@ public:
         // pinned Files (QC: never steal an explicit pane choice).
         sessionView.onTrackFocusChanged = [this] (int trackIndex)
         {
+            // W08: the ChannelTray is Arrange-only now (the Session grid has its own per-column mixer
+            // strips), so Session focus no longer drives the tray. This handler fires only from SessionView
+            // (i.e. while in Session view), so the guard makes it a documented no-op here; the tray follows
+            // arrangeView.onTrackSelected instead.
+            if (viewMode != ViewMode::Arrange)
+                return;
+
             te::AudioTrack* at = nullptr;
 
             if (auto* e = session.getEdit())
@@ -767,6 +775,12 @@ public:
             // Wave 2 (W07): the file-import seams both drop paths route through (session slot + arrange
             // lane). Synchronous; one callAsync yield suffices.
             MessageManager::callAsync ([this] { runDragDropSelftest(); });
+        }
+        else if (mode == SelfTest::sessionmixer)
+        {
+            // Wave 3 (W08): the per-track Session mixer strip's engine->widget sync. Synchronous; one
+            // callAsync yield suffices.
+            MessageManager::callAsync ([this] { runSessionMixerSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -1297,15 +1311,8 @@ private:
         {
             sessionView.grabKeyboardFocus();
 
-            // Seed the channel tray for the grid's CURRENT focus track: the tray-follow seam only
-            // fires on focus CHANGE, so without this the default track 0 never binds (QC) and the
-            // tray shows the last Arrange selection until the user moves focus.
-            if (auto* e = session.getEdit())
-            {
-                const auto tracks = te::getAudioTracks (*e);
-                const int  idx    = sessionView.getFocusTrackIndex();
-                channelTray.setTrack (isPositiveAndBelow (idx, tracks.size()) ? tracks[idx] : nullptr);
-            }
+            // W08: the ChannelTray is Arrange-only now (Session uses per-column mixer strips), so entering
+            // Session view no longer seeds the tray from the grid's focus track.
         }
     }
 
@@ -3820,6 +3827,62 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-sessionmixer (W08): the per-track Session mixer strip's engine->widget sync. Mirrors
+    // --selftest-livesync / --selftest-tray: write vol/pan/mute/solo engine-side on track 0, bind a strip
+    // to it, force ONE refreshControls() tick, then read the strip's controls back through its accessors.
+    void runSessionMixerSelftest()
+    {
+        bool bound = false, faderOk = false, panOk = false, muteOk = false, soloOk = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto tracks = te::getAudioTracks (*ed);
+            if (! tracks.isEmpty())
+            {
+                auto* t0 = tracks[0];
+                EngineHelpers::setTrackVolumeDb (*t0, -9.0f);
+                EngineHelpers::setTrackPan (*t0, -0.5f);
+                t0->setMute (true);
+                t0->setSolo (true);
+
+                SessionMixerStrip strip;
+                strip.setTrack (ed, 0);
+                strip.refreshControls();
+
+                bound   = strip.isBound();
+                faderOk = std::abs (strip.getFaderDb()  - (-9.0)) < 0.15;
+                panOk   = std::abs (strip.getPanValue() - (-0.5)) < 0.02;
+                muteOk  = strip.isMuteOn();
+                soloOk  = strip.isSoloOn();
+
+                t0->setMute (false);   // restore (throwaway edit, kept tidy)
+                t0->setSolo (false);
+            }
+        }
+
+        const bool pass = bound && faderOk && panOk && muteOk && soloOk;
+
+        String report;
+        report << "mode=sessionmixer" << newLine
+               << "bound="   << (bound ? 1 : 0) << newLine
+               << "faderOk="  << (faderOk ? 1 : 0) << newLine
+               << "panOk="    << (panOk ? 1 : 0) << newLine
+               << "muteOk="   << (muteOk ? 1 : 0) << newLine
+               << "soloOk="   << (soloOk ? 1 : 0) << newLine
+               << "result="   << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="  << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write session-mixer selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Session-mixer selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
@@ -4682,6 +4745,7 @@ public:
         // Logging comes up FIRST, before anything else can fail, so startup diagnostics are captured.
         const auto modeDesc = commandLine.contains ("--screenshot")              ? "screenshot"
                             : commandLine.contains ("--selftest-record")         ? "selftest-record"
+                            : commandLine.contains ("--selftest-sessionmixer")   ? "selftest-sessionmixer"   // before -session (substring! W08)
                             : commandLine.contains ("--selftest-session")        ? "selftest-session"
                             : commandLine.contains ("--selftest-midilearn")      ? "selftest-midilearn"      // before -midi (substring)
                             : commandLine.contains ("--selftest-midiinput")      ? "selftest-midiinput"      // before -midi (substring)
@@ -4738,6 +4802,7 @@ public:
 
         const auto mode = commandLine.contains ("--screenshot")              ? SelfTest::screenshot
                         : commandLine.contains ("--selftest-record")         ? SelfTest::record
+                        : commandLine.contains ("--selftest-sessionmixer")   ? SelfTest::sessionmixer   // before -session (substring! W08)
                         : commandLine.contains ("--selftest-session")        ? SelfTest::session
                         : commandLine.contains ("--selftest-midilearn")      ? SelfTest::midilearn      // before -midi (substring)
                         : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)

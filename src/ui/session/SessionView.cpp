@@ -11,8 +11,17 @@ SessionView::SessionView (ProjectSession& s)
 {
     viewport.setViewedComponent (&columnHolder, false);   // we own columnHolder ourselves
     viewport.setScrollBarsShown (true, true);             // (vertical, horizontal): BOTH scrollbars enabled
-    viewport.onScroll = [this] { syncSceneColumnToScroll(); };
+    // ONE scroll seam drives both pinned surfaces: the scene column follows the VERTICAL offset, the
+    // mixer band follows the HORIZONTAL offset (twins, rotated 90 deg — both ride visibleAreaChanged).
+    viewport.onScroll = [this] { syncSceneColumnToScroll(); syncMixerBandToScroll(); };
     addAndMakeVisible (viewport);
+
+    // W08 mixer band: a fixed bottom strip (direct child of SessionView, sibling of the viewport) that
+    // clips its scrolling holder. mixerHolder is the contentW-wide row of strips, translated in x to
+    // mirror the horizontal pad scroll. addChildComponent (mixerBand)/addAndMakeVisible ordering keeps
+    // the band under nothing else (it never overlaps the viewport — resized() carves disjoint bounds).
+    mixerBand.addAndMakeVisible (mixerHolder);
+    addAndMakeVisible (mixerBand);
 
     setWantsKeyboardFocus (true);
 }
@@ -20,8 +29,11 @@ SessionView::SessionView (ProjectSession& s)
 SessionView::~SessionView()
 {
     // R4 teardown order, mirrored here: stop the poll FIRST, then drop children, then clear state.
+    // The mixer strips carry their OWN ~12 Hz timers; clearing the array destroys each strip, and
+    // ~SessionMixerStrip stops its timer FIRST — so no strip tick can land during teardown either.
     stopTimer();
     columns.clear();
+    mixerStrips.clear();
     addTrackColumn.reset();
     scenes.reset();
     focusTrack = focusScene = 0;
@@ -44,9 +56,11 @@ void SessionView::setEdit (te::Edit* e)
     }
     else
     {
-        // R4 — STRICT teardown order; NO engine read afterward.
+        // R4 — STRICT teardown order; NO engine read afterward. Mixer strips (each with its own
+        // timer, stopped first in ~SessionMixerStrip) are cleared alongside the columns.
         stopTimer();
         columns.clear();
+        mixerStrips.clear();
         addTrackColumn.reset();
         scenes.reset();
         focusTrack = focusScene = 0;
@@ -58,6 +72,7 @@ void SessionView::setEdit (te::Edit* e)
 void SessionView::rebuild()
 {
     columns.clear();
+    mixerStrips.clear();
     addTrackColumn.reset();
     scenes.reset();
 
@@ -81,6 +96,17 @@ void SessionView::rebuild()
             auto* column = columns.add (new TrackColumnComponent (*track, trackIndex, gridScenes));
             wireColumn (*column);
             columnHolder.addAndMakeVisible (column);
+
+            // W08: one compact mixer strip per column, bound to the SAME absolute track index the
+            // column + pads use (R1 — the strip caches only (edit, index) and re-resolves live). A
+            // return renders in-place with a subtle tint (INV-4: no grid filtering — filtering would
+            // break ~9 absolute-index sites incl. the hot poll). isAuxReturnTrack is a localized,
+            // additive cosmetic read on the message thread here in rebuild(), never in a poll.
+            auto* strip = mixerStrips.add (new SessionMixerStrip());
+            strip->setIsReturn (session.isAuxReturnTrack (*track));
+            strip->setTrack (edit, trackIndex);
+            mixerHolder.addAndMakeVisible (strip);
+
             ++trackIndex;
         }
 
@@ -114,6 +140,7 @@ void SessionView::rebuild()
     viewport.setViewPosition (0, 0);   // new/rebuilt edit always starts at the top
     resized();
     syncSceneColumnToScroll();          // re-glue the fresh scene column to the (now-reset) scroll offset
+    syncMixerBandToScroll();            // re-glue the fresh mixer band to the (now-reset) H-scroll offset
     repaint();
 
     if (edit != nullptr)
@@ -197,7 +224,17 @@ void SessionView::resized()
     auto area = getLocalBounds();
 
     // Reserve the pinned scene column on the right (OUTSIDE the scrolling viewport, twin of MasterStrip).
+    // Taken from the FULL-height area FIRST, so the scene column still runs the full window height (the
+    // mixer band tucks under the tracks only — INV-1 default; no scene-column change).
     auto sceneArea = area.removeFromRight (SessionLayout::sceneColW);
+
+    // W08: reserve the fixed mixer band along the BOTTOM of the (non-scene) area, BEFORE sizing the
+    // viewport. The viewport therefore shrinks by mixerBandH — but contentH below is UNCHANGED, so the
+    // pad content height and the scene-column height stay EQUAL (the anti-drift invariant). A shorter
+    // viewport only means the grid starts scrolling at a smaller track count; rowBand inputs are
+    // untouched, so no new drift (the W07 scene-drift class is not reintroduced).
+    auto mixerArea = area.removeFromBottom (SessionLayout::mixerBandH);
+    mixerBand.setBounds (mixerArea);
 
     viewport.setBounds (area);
 
@@ -233,6 +270,22 @@ void SessionView::resized()
     if (addTrackColumn != nullptr)
         addTrackColumn->setBounds (x, 0, SessionLayout::addTrackColW, contentH);
 
+    // W08 mixer band: the holder is contentW wide (the SAME width as columnHolder, so strip N shares
+    // column N's x-pitch exactly) and mixerBandH tall. It lives INSIDE mixerBand (a fixed clip region
+    // sized to the bottom strip above), so strips clip at the band's left/right edges. syncMixerBand-
+    // ToScroll() then translates the holder by -viewport.getViewPositionX() to keep strips glued under
+    // their columns while scrolling horizontally (the twin of the scene column's vertical translation).
+    mixerHolder.setSize (contentW, SessionLayout::mixerBandH);
+    {
+        int mx = 0;
+        for (auto* strip : mixerStrips)
+        {
+            strip->setBounds (mx, 0, SessionLayout::trackColW, SessionLayout::mixerBandH);
+            mx += SessionLayout::trackColW + SessionLayout::gap;
+        }
+    }
+    syncMixerBandToScroll();
+
     // The scene column MUST use the SAME content height as the track columns so its shared rowBand
     // partition matches theirs EXACTLY. rowBand divides `height` into N rows by INTEGER floor, so any
     // height difference changes the per-row pitch and scene launch row N drifts progressively from pad
@@ -253,6 +306,15 @@ void SessionView::syncSceneColumnToScroll()
     // Message-thread only (called from the viewport's visibleAreaChanged). Cheap: one move.
     if (scenes != nullptr)
         scenes->setTopLeftPosition (scenes->getX(), -viewport.getViewPositionY());
+}
+
+void SessionView::syncMixerBandToScroll()
+{
+    // The horizontal twin of syncSceneColumnToScroll: translate the mixer holder LEFT by the pad grid's
+    // horizontal scroll offset so strip N stays under column N. The band is OUTSIDE the viewport, so the
+    // vertical offset never touches it — vertical pad-scroll cannot move the band (requirement satisfied
+    // by construction). Message-thread only (viewport.onScroll); cheap: one move.
+    mixerHolder.setTopLeftPosition (-viewport.getViewPositionX(), 0);
 }
 
 void SessionView::paint (Graphics& g)
