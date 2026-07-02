@@ -41,6 +41,11 @@ public:
         poll. Safe to call repeatedly; passing nullptr clears the view. */
     void setClip (te::Clip*);
 
+    /** The clip currently bound to the Inspector, or nullptr. Lets the shell detect (and clear) a clip
+        DETACHED underneath the drawer (e.g. a Session slot delete): the Ptr keeps it alive but its state
+        tree goes parentless, so further edits write to a dead tree. See MainComponent::reconcileDrawerClip. */
+    te::Clip* getClip() const { return clip.get(); }
+
     /** Runs one live-sync poll tick synchronously — the deterministic, headless mirror of the
         10 Hz timer for selftests (same seam shape as MixerView::refreshControls). */
     void refreshNow();

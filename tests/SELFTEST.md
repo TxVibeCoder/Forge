@@ -350,6 +350,70 @@ writes a tempo through `EngineHelpers::setTempoAt` and reads it back off `tempoS
 > `→(bar)`→reads `bar` — proving the free-trigger selector's engine seam. The free-vs-quantized launch
 > *timing* is pre-existing engine behavior (the ticket only exposes the existing `Edit`-level global).
 
+## `Forge --selftest-slotdelete` (Session clip delete)
+
+The acceptance gate for **W07 — Delete clip** (design:
+[../docs/devlog/wave-07-handson-grid.md](../docs/devlog/wave-07-handson-grid.md)). Proves
+`ProjectSession::clearSlot` synchronously: create a born-audible MIDI clip in slot (0,0), assert filled,
+`clearSlot` → empty, `clearSlot` again → **false** (the no-op-when-empty contract), then `Edit::undo()`
+restores the clip (the delete rides the Edit UndoManager — the same stack W05 global Undo drives).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clipCreated` | the MIDI clip inserted into the slot | 1 |
+| `filledBefore` | slot resolves to a clip pre-delete | 1 |
+| `cleared` | `clearSlot` returned true | 1 |
+| `emptyAfter` | slot empty after clear | 1 |
+| `clearEmptyIsNoop` | a second `clearSlot` on the empty slot returns false | 1 |
+| `undoRestored` | `undo()` brings the clip back | 1 |
+
+## `Forge --selftest-addtrack` (append a Session track)
+
+The acceptance gate for **W07 — + Track**. Proves `ProjectSession::appendAudioTrack`: the audio-track count
+increments by exactly 1, and a slot on the newly-appended (last) track resolves + accepts a born-audible clip
+(the new column is a real, addressable track — not a phantom).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `tracksBefore` / `tracksAfter` | audio-track count around the append | `after == before + 1` |
+| `appended` | `appendAudioTrack` returned a track | 1 |
+| `newSlotResolves` | a slot on the new track resolves | 1 |
+| `clipOnNewTrack` | a born-audible clip creates in the new track's slot | 1 |
+
+## `Forge --selftest-scene` (dynamic scene count)
+
+The acceptance gate for **W07 — + Scene**. Proves the grid handles a scene count ≠ 16: `ensureScenes(20)`
+grows `getNumScenes()` past the former `constexpr=16` ceiling, and a clip created in scene 18 resolves. (The
+UI's dynamic-N *rendering* — that rows 16+ paint + stay aligned — is proved by the `session_scenes` screenshot.)
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `scenesBase` | scene count before the grow | — (informational) |
+| `scenesGrown` | scene count after `ensureScenes(20)` | ≥ 20 |
+| `grewPast16` | grew past the former ceiling | 1 |
+| `slot18Resolves` | slot (0,18) resolves | 1 |
+| `clipInScene18` | a clip creates in scene 18 | 1 |
+
+## `Forge --selftest-dragdrop` (file drag-drop import paths)
+
+The acceptance gate for **W07 — real file drag-drop** (Session pads + Arrange lanes). A real OS drag can't be
+synthesized headlessly, so this gate proves the seam paths both drops route through, plus the replace-undo
+contract. **Session leg:** `importAudioIntoSlot` fills a slot; a SECOND import replaces the clip and `undo()`
+restores the prior one (replace-on-drop is undoable — the QC-F2 hardening). **Arrange leg:**
+`importAudioFile(file, time, trackIndex)` lands the clip on track N (a fresh empty target ends with exactly
+one clip, proving the track-index routes and not to track 0). The Arrange pointer→time math is the pure,
+independently unit-testable `TimelineView::xToTime`.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `sessionImported` | `importAudioIntoSlot` returned a clip | 1 |
+| `sessionSlotFilled` | the slot resolves to a clip | 1 |
+| `replaceUndoRestores` | a replace-on-filled drop is undone → the slot stays filled | 1 |
+| `arrangeImported` | `importAudioFile(…, trackIndex)` returned a clip | 1 |
+| `arrangeLandedOnTarget` | the clip landed on the target track (not track 0) | 1 |
+
+> Verified 2026-07-02: **all four W07 gates PASS**, bringing the floor to **21 gates**.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a
@@ -360,6 +424,7 @@ PNG in `%TEMP%` via `createComponentSnapshot`, so the UI can be inspected withou
 | `forge_shot_session.png` | the Session clip grid (matches [mockups](../mockups/) sheet 00) |
 | `forge_shot_arrange.png` / `forge_shot_mix.png` | the Arrange timeline / Mixer |
 | `forge_shot_session_top.png` / `forge_shot_session_scrolled.png` | **vertical-scroll proof** — the grid at a short (1040×360) window, snapped at the top then scrolled to the bottom. Comparing them confirms all 16 scene rows are reachable (not clipped), pads stay ~46 px (no stretch), and the pinned scene column stays aligned with the pads while scrolling. |
+| `forge_shot_session_scenes.png` | **dynamic scene-count proof (W07)** — the demo grid grown to **20 scenes** via `ensureScenes`, scrolled to the bottom: rows 16–20 render, stay row-aligned with the pinned scene column (the `rowBand` equal-height invariant — a QC-fixed drift), and scroll. |
 
 > Verified 2026-06-30: `session_scrolled` shows scenes 10–16 with the scene column aligned to the pads,
 > confirming the Session-grid vertical scroll. This is the headless stand-in for the one check that still

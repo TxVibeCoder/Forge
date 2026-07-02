@@ -662,6 +662,87 @@ void TrackLaneComponent::mouseDown (const MouseEvent& e)
     }
 }
 
+//==============================================================================
+// FileDragAndDropTarget — OS/external audio-file drops onto this lane.
+//
+// A drop imports the FIRST accepted audio file onto THIS lane's track (the lane owns its track, so
+// the track index is implicit) at the drop time. isInterestedInFileDrag is called repeatedly during
+// the drag and must be cheap: it only tests filename extensions (never opens a file). The x,y passed
+// to these callbacks are LANE-relative; the header strip occupies the leftmost headerW px, so a drop
+// in the header (x < headerW) is ignored and the clip-area x is (x - headerW). The actual import is
+// deferred to ArrangeView via onFilesDropped (routes through the ProjectSession seam) — no raw te::
+// import here. dragHover/dragHoverX drive a neutral insertion marker in paint(); both are cleared in
+// fileDragExit AND filesDropped (fileDragExit may not fire after a drop) so the marker never sticks.
+
+bool TrackLaneComponent::isInterestedInFileDrag (const StringArray& files)
+{
+    // Audio-only for v1 (the import seam is wave-only). Accept if ANY dragged file has an audio
+    // extension; a mixed drop is filtered again in filesDropped. soundFileExtensions is the engine's
+    // audio-only list (no MIDI). Cheap string test only — never touch the filesystem here.
+    for (const auto& f : files)
+        if (File (f).hasFileExtension (te::soundFileExtensions))
+            return true;
+
+    return false;
+}
+
+void TrackLaneComponent::fileDragEnter (const StringArray&, int x, int)
+{
+    using namespace ArrangeLayout;
+
+    dragHover  = true;
+    dragHoverX = (x >= headerW) ? (x - headerW) : -1;   // -1 => over the header (no insertion marker)
+    repaint();
+}
+
+void TrackLaneComponent::fileDragMove (const StringArray&, int x, int)
+{
+    using namespace ArrangeLayout;
+
+    // Track the pointer within the lane so the insertion marker previews where the clip will land.
+    const int newX = (x >= headerW) ? (x - headerW) : -1;
+    if (! dragHover || newX != dragHoverX)
+    {
+        dragHover  = true;
+        dragHoverX = newX;
+        repaint();
+    }
+}
+
+void TrackLaneComponent::fileDragExit (const StringArray&)
+{
+    dragHover  = false;
+    dragHoverX = -1;
+    repaint();
+}
+
+void TrackLaneComponent::filesDropped (const StringArray& files, int x, int)
+{
+    using namespace ArrangeLayout;
+
+    // Clear the hover marker FIRST (fileDragExit is not guaranteed after a drop).
+    dragHover  = false;
+    dragHoverX = -1;
+    repaint();
+
+    // Ignore drops on the header strip (no time under the pointer there).
+    if (x < headerW)
+        return;
+
+    // Re-filter to the FIRST accepted audio file (a slot/lane import takes one file, not a loop).
+    for (const auto& f : files)
+    {
+        const File file (f);
+        if (file.hasFileExtension (te::soundFileExtensions))
+        {
+            if (onFilesDropped != nullptr)
+                onFilesDropped (*this, file, x - headerW, jmax (0, getWidth() - headerW));
+
+            return;
+        }
+    }
+}
+
 void TrackLaneComponent::paint (Graphics& g)
 {
     using namespace ArrangeLayout;
@@ -698,6 +779,26 @@ void TrackLaneComponent::paint (Graphics& g)
     {
         g.setColour (Colour (ForgeLookAndFeel::accent));
         g.drawRect (getLocalBounds().removeFromLeft (headerW), 2);
+    }
+
+    // File-drop hover feedback: a NEUTRAL bright insertion marker, deliberately NOT any of the
+    // semantic accents (amber = selection, recordRed = recording, timeTempo = playhead/clock,
+    // playGreen = sound-happening) so "a file will land here" reads as its own thing. A faint white
+    // wash tints the clip area to signal the lane is an active drop target; a 2 px bright neutral
+    // vertical bar at the pointer previews the insertion point. Only drawn over the clip area (right
+    // of the header); dragHoverX == -1 means the pointer is over the header, so no marker is shown.
+    if (dragHover)
+    {
+        auto clipArea = getLocalBounds().withTrimmedLeft (headerW);
+
+        g.setColour (Colour (ForgeLookAndFeel::textPrim).withAlpha (0.08f));
+        g.fillRect (clipArea);
+
+        if (dragHoverX >= 0)
+        {
+            g.setColour (Colour (ForgeLookAndFeel::textPrim).withAlpha (0.9f));
+            g.fillRect (headerW + dragHoverX, 0, 2, getHeight());
+        }
     }
 }
 
@@ -906,6 +1007,25 @@ void ArrangeView::rebuild()
                                                    const MouseEvent& e)
             {
                 showClipAreaContextMenu (l, clipAreaX, clipAreaW, e);
+            };
+
+            // An OS/Explorer audio file was dropped on this lane. Map the clip-area x -> edit time
+            // (snapped to the active grid, exactly like a New-MIDI-Clip drop), resolve the lane's
+            // track index, and forward to the shell's onFilesDropped (ProjectSession import seam +
+            // save + rebuild). The header is already subtracted by the lane before it calls us.
+            lane->onFilesDropped = [this] (TrackLaneComponent& l, const File& file,
+                                           int clipAreaX, int clipAreaW)
+            {
+                if (edit == nullptr || onFilesDropped == nullptr)
+                    return;
+
+                const auto tracks     = te::getAudioTracks (*edit);
+                const int  trackIndex = tracks.indexOf (&l.getTrack());
+                if (trackIndex < 0)
+                    return;
+
+                const auto startTime = snapToGrid (view.xToTime (clipAreaX, clipAreaW));
+                onFilesDropped (trackIndex, file, startTime);
             };
 
             lane->onHeaderClicked = [this] (TrackLaneComponent& l)

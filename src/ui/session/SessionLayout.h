@@ -18,11 +18,14 @@
 namespace SessionLayout
 {
     constexpr int trackColW = 179;               // per-track column width (grid_w / 8 ≈ 179, sheet 00)
+    constexpr int addTrackColW = 44;             // W07: trailing "+ Track" stub column width (narrow add-lane)
     constexpr int sceneColW = 168;               // pinned right-hand scene column width
     constexpr int headerH   = 78;                // track header band height
     constexpr int stopRowH  = 30;                // per-track clip-stop footer height
     constexpr int slotPad   = 3;                 // inset inside each pad
-    constexpr int numScenes = 16;                // default visible scene rows (MVP grid height)
+    constexpr int numScenes = 16;                // DEFAULT / MINIMUM scene rows (the floor). The LIVE
+                                                 // grid scene count is a runtime value (W07 +Scene):
+                                                 // SessionView uses jmax (numScenes, getNumScenes()).
     constexpr int gap       = 0;                 // columns are flush (hairline-separated)
     constexpr int slotH     = 46;                // per-slot pad height used to SIZE the scrollable content
                                                  // (columns then divide their middle region evenly across

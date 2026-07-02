@@ -16,8 +16,11 @@
     ForgeLookAndFeel play-family colours (playGreen / playGreenDim, W04a semantic accents),
     matching the slot pads. Amber stays on the interactive MASTER chrome only.
 
+    A "+ Scene" add-affordance sits in the column's bottom footer band (twin of the track columns'
+    clip-stop footer); clicking it fires onAddScene so the owner grows the grid by one scene (W07).
+
     All engine ops route up through null-guarded std::function seams (onSceneLaunched,
-    onSceneStopped, onStopAll); this component NEVER touches the te:: model directly.
+    onSceneStopped, onStopAll, onAddScene); this component NEVER touches the te:: model directly.
 
     Message-thread only.
 */
@@ -86,6 +89,10 @@ public:
     /** The MASTER "stop all" ■ was clicked → stop every launched clip in the grid. */
     std::function<void()> onStopAll;
 
+    /** W07 +Scene: the "+ Scene" affordance at the bottom of the column was clicked → the owner
+        grows the Edit by one scene and rebuilds. Null-guarded by the owner-facing convention. */
+    std::function<void()> onAddScene;
+
 private:
     class SceneRow;   // one launch row — defined in the .cpp
 
@@ -96,6 +103,7 @@ private:
     juce::TextButton stopAllButton;
     juce::Label      masterLabel, scenesLabel;
     juce::OwnedArray<SceneRow> rows;
+    juce::TextButton addSceneButton { "+ Scene" };   // W07: neutral add-affordance in the footer band
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SceneColumnComponent)
 };

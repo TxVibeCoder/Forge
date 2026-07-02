@@ -3,13 +3,14 @@
 using namespace juce;
 
 //==============================================================================
-TrackColumnComponent::TrackColumnComponent (te::AudioTrack& t, int index)
+TrackColumnComponent::TrackColumnComponent (te::AudioTrack& t, int index, int numScenes)
     : track (t), trackIndex (index), trackColour (t.getColour())
 {
     // --- Clip pads (one per scene) ---------------------------------------------------------
     // Each pad holds (trackIndex, sceneIndex) only (R1) and maps its mouse intent up to this
-    // column's callbacks, tagged with its own sceneIndex.
-    for (int s = 0; s < SessionLayout::numScenes; ++s)
+    // column's callbacks, tagged with its own sceneIndex. Build exactly `numScenes` pads — the
+    // RUNTIME grid scene count SessionView passed in (W07 +Scene), never the compile-time floor.
+    for (int s = 0; s < numScenes; ++s)
     {
         auto* pad = slots.add (new ClipSlotComponent (trackIndex, s, trackColour));
 
@@ -29,6 +30,12 @@ TrackColumnComponent::TrackColumnComponent (te::AudioTrack& t, int index)
         {
             if (onSlotRightClicked != nullptr)
                 onSlotRightClicked (trackIndex, s, e);
+        };
+
+        pad->onFilesDropped = [this, s] (const File& file)
+        {
+            if (onSlotFilesDropped != nullptr)
+                onSlotFilesDropped (trackIndex, s, file);
         };
 
         addAndMakeVisible (pad);

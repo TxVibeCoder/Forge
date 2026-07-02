@@ -195,6 +195,16 @@ SceneColumnComponent::SceneColumnComponent()
     scenesLabel.setColour (Label::textColourId, Colour (ForgeLookAndFeel::textSec));
     scenesLabel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (scenesLabel);
+
+    // "+ Scene" add-affordance (W07), pinned in the column's bottom footer band. Per the Fable
+    // charter it must read as a NEUTRAL/subtle add control, NOT selection-amber (amber = selection
+    // only): panel-tone fill, secondary-text label. The button's own hover highlight (JUCE lightens
+    // the fill on mouse-over) supplies the "brightening on hover" affordance without a second accent.
+    addSceneButton.setColour (TextButton::buttonColourId,  Colour (ForgeLookAndFeel::panelBg));
+    addSceneButton.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textSec));
+    addSceneButton.setTooltip ("Add a scene row to the grid");
+    addSceneButton.onClick = [this] { if (onAddScene) onAddScene(); };
+    addAndMakeVisible (addSceneButton);
 }
 
 SceneColumnComponent::~SceneColumnComponent() = default;
@@ -257,7 +267,10 @@ void SceneColumnComponent::resized()
 
     // Reserve the per-track clip-stop footer height at the bottom so the scene rows occupy the
     // SAME vertical band as the slot pads in every track column (header / rows / stop-footer).
-    r.removeFromBottom (SessionLayout::stopRowH);
+    // The scene column's footer band hosts the "+ Scene" add-affordance (W07) where the track
+    // columns carry their clip-stop ■ — a clean structural parallel, and it scrolls with the grid.
+    auto footer = r.removeFromBottom (SessionLayout::stopRowH);
+    addSceneButton.setBounds (footer.reduced (SessionLayout::slotPad, 2));
 
     // Divide the remaining middle into scene rows via the SHARED SessionLayout::rowBand partition —
     // the IDENTICAL algorithm the track columns use — so each scene launch row lines up exactly with

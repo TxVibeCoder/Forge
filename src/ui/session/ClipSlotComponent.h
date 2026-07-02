@@ -30,8 +30,13 @@
 
 //==============================================================================
 /** A single clip-launch pad. Holds (trackIndex, sceneIndex) only — no cached engine pointer
-    (R1). Its display state is pushed in via setVisualState(); it never re-reads the engine. */
-class ClipSlotComponent : public juce::Component
+    (R1). Its display state is pushed in via setVisualState(); it never re-reads the engine.
+
+    Also an OS-external file-drop target (W07): dragging an audio file from Explorer onto the pad
+    imports it into this slot (mirrors Tracktion's ClipLauncherDemo per-slot recipe). The drop
+    intent bubbles UP via onFilesDropped — the pad never touches the te:: model itself. */
+class ClipSlotComponent : public juce::Component,
+                          public juce::FileDragAndDropTarget
 {
 public:
     ClipSlotComponent (int trackIndex, int sceneIndex, juce::Colour trackColour);
@@ -41,6 +46,16 @@ public:
 
     void mouseDown        (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    //==============================================================================
+    // OS-external file drop (juce::FileDragAndDropTarget, W07). Audio-only: isInterestedInFileDrag
+    // filters to te::soundFileExtensions so a non-audio drag is rejected before any callback fires.
+    // The dragHover highlight is set on enter and CLEARED in every exit path (exit AND drop — JUCE
+    // may not fire fileDragExit after a drop, so filesDropped clears it too).
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit  (const juce::StringArray& files) override;
+    void filesDropped  (const juce::StringArray& files, int x, int y) override;
 
     /** Stores the pushed state + label and repaints, but ONLY if either changed. Called by the
         parent's poll on the message thread with a state derived from a freshly-resolved slot. */
@@ -71,6 +86,9 @@ public:
     std::function<void()> onDoubleClicked;
     /** Fired on a right-click; param is the event for context-menu placement. */
     std::function<void (const juce::MouseEvent&)> onRightClicked;
+    /** Fired when an OS-external audio file is dropped on the pad (W07): the FIRST accepted file.
+        The parent (which owns the ProjectSession seam) imports it into this slot. */
+    std::function<void (const juce::File&)> onFilesDropped;
 
 private:
     // R1: coordinates only — never a te::ClipSlot* / Clip*.
@@ -83,6 +101,7 @@ private:
     SlotVisualState state = SlotVisualState::empty;   // last state pushed by the parent/poll
     juce::String label;                               // clip name (or empty)
     float pulseAlpha = -1.0f;                         // beat-pulse ring alpha; negative = no pulse (static render)
+    bool dragHover = false;                           // W07: an accepted file drag is hovering this pad
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClipSlotComponent)
 };

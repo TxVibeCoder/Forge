@@ -35,11 +35,15 @@ namespace te = tracktion;
 //==============================================================================
 /** One track column: a header, numScenes clip pads, and a clip-stop footer. Holds the track by
     reference (SessionView rebuilds the whole OwnedArray when the Edit/track list changes, so a
-    column never outlives its track) and its fixed trackIndex. Caches no engine pointer (R1). */
+    column never outlives its track) and its fixed trackIndex. Caches no engine pointer (R1).
+
+    numScenes is the RUNTIME grid scene count (W07 +Scene) — SessionView computes it once per
+    rebuild() as jmax (SessionLayout::numScenes, session.getNumScenes()) and passes it here so
+    the pad count tracks the live scene count instead of the compile-time floor. */
 class TrackColumnComponent : public juce::Component
 {
 public:
-    TrackColumnComponent (te::AudioTrack& track, int trackIndex);
+    TrackColumnComponent (te::AudioTrack& track, int trackIndex, int numScenes);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -78,6 +82,8 @@ public:
     std::function<void (int trackIdx, int sceneIdx)> onSlotDoubleClicked;
     /** Right-click on a pad; param is the event for context-menu placement. */
     std::function<void (int trackIdx, int sceneIdx, const juce::MouseEvent&)> onSlotRightClicked;
+    /** An OS-external audio file was dropped on a pad (W07): the parent imports it into that slot. */
+    std::function<void (int trackIdx, int sceneIdx, const juce::File&)> onSlotFilesDropped;
 
     /** The track's clip-stop ■ was clicked — stop every clip on this track. */
     std::function<void (int trackIdx)> onTrackStopAll;
@@ -99,7 +105,7 @@ private:
     const int trackIndex;
     juce::Colour trackColour;
 
-    juce::OwnedArray<ClipSlotComponent> slots;   // numScenes pads, top-to-bottom
+    juce::OwnedArray<ClipSlotComponent> slots;   // one pad per scene (runtime numScenes), top-to-bottom
 
     juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" };
     juce::TextButton stopButton;                 // per-track clip-stop ■ (footer)

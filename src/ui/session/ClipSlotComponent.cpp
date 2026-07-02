@@ -82,6 +82,61 @@ void ClipSlotComponent::mouseDoubleClick (const MouseEvent& e)
 }
 
 //==============================================================================
+// OS-external file drop (W07): mirrors Tracktion's ClipLauncherDemo per-slot recipe. Audio-only —
+// the Session import seam (importAudioIntoSlot) is wave-only, so MIDI/other files are rejected here.
+
+bool ClipSlotComponent::isInterestedInFileDrag (const StringArray& files)
+{
+    // Cheap check only (no file opening, per the JUCE contract): accept if ANY dragged file has an
+    // audio extension. filesDropped re-filters and imports only the first accepted file.
+    for (const auto& f : files)
+        if (File (f).hasFileExtension (te::soundFileExtensions))
+            return true;
+
+    return false;
+}
+
+void ClipSlotComponent::fileDragEnter (const StringArray&, int, int)
+{
+    if (! dragHover)
+    {
+        dragHover = true;
+        repaint();
+    }
+}
+
+void ClipSlotComponent::fileDragExit (const StringArray&)
+{
+    if (dragHover)
+    {
+        dragHover = false;
+        repaint();
+    }
+}
+
+void ClipSlotComponent::filesDropped (const StringArray& files, int, int)
+{
+    // Clear the hover FIRST — JUCE may not fire fileDragExit after a drop (the contract note), so
+    // this is the guaranteed clear path. Always repaint so the drop-ring never lingers.
+    dragHover = false;
+    repaint();
+
+    // Import the FIRST accepted audio file only (a slot holds one clip — no loop-replace). Re-filter
+    // (the drag may have carried a mix); bubble UP so the parent runs the ProjectSession import seam.
+    for (const auto& f : files)
+    {
+        const File file (f);
+        if (file.hasFileExtension (te::soundFileExtensions))
+        {
+            if (onFilesDropped != nullptr)
+                onFilesDropped (file);
+
+            break;
+        }
+    }
+}
+
+//==============================================================================
 void ClipSlotComponent::paint (Graphics& g)
 {
     // Pad chrome per §(d), mirroring ClipComponent::paint's rounded-rect template. Inset by
@@ -204,5 +259,20 @@ void ClipSlotComponent::paint (Graphics& g)
             g.drawRoundedRectangle (b.reduced (3.0f), corner, 1.5f);
         else
             g.drawRoundedRectangle (b, corner, 2.0f);
+    }
+
+    // File-drop hover ring (W07): drawn LAST so it's unmistakable over any pad state. Its colour is a
+    // NEUTRAL bright gray (textPrim), deliberately OUTSIDE the semantic accent vocabulary the Fable charter
+    // reserves (amber = selection, playGreen/Dim = playing/queued, recordRed = recording). It MATCHES the
+    // Arrange-lane drop marker so the SAME gesture reads the SAME across both surfaces (one colour = one
+    // meaning; QC harmonised this off the earlier teal, which doubled as automation's colour). A translucent
+    // wash + ring, so "drop here" can never be confused with any launch/selection/record state. Cleared on
+    // drop and on drag-exit.
+    if (dragHover)
+    {
+        g.setColour (Colour (ForgeLookAndFeel::textPrim).withAlpha (0.15f));
+        g.fillRoundedRectangle (b, corner);
+        g.setColour (Colour (ForgeLookAndFeel::textPrim));
+        g.drawRoundedRectangle (b, corner, 2.5f);
     }
 }

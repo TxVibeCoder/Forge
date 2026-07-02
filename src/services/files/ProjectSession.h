@@ -35,8 +35,11 @@ public:
     /** Persists the current edit to a new file and adopts it as the current file. */
     bool saveAs (const juce::File&);
 
-    /** Imports an audio file as a clip on track 0 starting at `start`. Returns the clip. */
-    te::WaveAudioClip::Ptr importAudioFile (const juce::File&, te::TimePosition start);
+    /** Imports an audio file as a clip on track `trackIndex` (default 0) starting at `start`.
+        Returns the clip. Used by the browser double-click (track 0) and the Arrange timeline
+        file-drop (the dropped lane's index). getOrInsertAudioTrackAt grows the track list if the
+        index is past the end, so a drop onto an existing lane always targets that lane. */
+    te::WaveAudioClip::Ptr importAudioFile (const juce::File&, te::TimePosition start, int trackIndex = 0);
 
     /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
         ensuring the track exists and is born audible (a default 4OSC instrument is added if the
@@ -87,6 +90,25 @@ public:
         (calls save() first if not) so the source serialises relative (Sf), then markAsChanged.
         Returns the new clip, or {} on failure / no edit. */
     te::WaveAudioClip::Ptr importAudioIntoSlot (int trackIndex, int sceneIndex, const juce::File& file);
+
+    /** Removes the clip in cell (trackIndex, sceneIndex): stops a live/queued launch first (via the
+        clip's LaunchHandle so nothing dangles), then detaches the clip with te::Clip::removeFromParent().
+        The removal routes through the Edit's UndoManager — the same one W05 global Undo/Redo runs over —
+        so callers should fire onEditMutated() after, letting the shell seal the transaction + refresh.
+        markAsChanged. Returns false (no-op) if there is no edit, the slot can't be resolved, or the slot
+        is already empty. */
+    bool clearSlot (int trackIndex, int sceneIndex);
+
+    /** Appends a new EMPTY audio track at the END of the track list (te::insertNewAudioTrack at
+        getEndOfTracks). LOAD-BEARING: the end-append keeps every existing absolute track index stable
+        (mixer sends + Session-grid slot addressing depend on it — same invariant as ensureAuxBus).
+        Names it when `name` is non-empty, markAsChanged, then fires onTracksChanged so the shell
+        rebuilds track-ref-caching views (SessionView columns / Arrange lanes / channel tray) and
+        persists. NO instrument is added — createMidiClipInSlot inserts the default 4OSC lazily when a
+        MIDI clip is first born, so a fresh audio track only gains a synth if it actually receives one
+        (pre-adding one would wrongly make every +Track a MIDI track). Returns the new track, or nullptr
+        on failure (logs). */
+    te::AudioTrack* appendAudioTrack (const juce::String& name = {});
 
     /** Queues the clip in cell (trackIndex, sceneIndex) to launch, with per-track exclusivity
         (sibling clips on the same track are stopped). Honours Edit::getLaunchQuantisation() when

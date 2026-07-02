@@ -88,12 +88,12 @@ bool ProjectSession::saveAs (const juce::File& f)
     return true;
 }
 
-te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te::TimePosition start)
+te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te::TimePosition start, int trackIndex)
 {
     if (edit == nullptr)
         return {};
 
-    auto clip = EngineHelpers::loadAudioFileAsClip (*edit, f, 0, start);
+    auto clip = EngineHelpers::loadAudioFileAsClip (*edit, f, trackIndex, start);
 
     if (clip != nullptr)
     {
@@ -547,6 +547,59 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
         FORGE_LOG_ERROR ("Failed to insert audio clip into slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex));
 
     return clip;
+}
+
+bool ProjectSession::clearSlot (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return false;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+
+    if (slot == nullptr || slot->getClip() == nullptr)
+        return false;
+
+    // Stop a live/queued launch first so no LaunchHandle dangles onto the clip we are about to remove.
+    stopClipInSlot (slot, *edit);
+
+    // te::Clip::removeFromParent detaches via the Edit's UndoManager (the same one W05 global Undo
+    // runs over), so the delete is undoable once the shell seals the transaction (onEditMutated). The
+    // slot object itself survives — only its clip is removed, so getClip() reads null afterwards.
+    if (auto c = slot->getClip())
+        c->removeFromParent();
+
+    edit->markAsChanged();
+    return true;
+}
+
+te::AudioTrack* ProjectSession::appendAudioTrack (const juce::String& name)
+{
+    if (edit == nullptr)
+    {
+        FORGE_LOG_ERROR ("appendAudioTrack: no open edit");
+        return nullptr;
+    }
+
+    // Append a NEW audio track at the END of the list (mirrors ensureAuxBus) — keeps every existing
+    // absolute track index stable. Default plugins give it the vol/pan + level-meter tail the mixer reads.
+    auto track = edit->insertNewAudioTrack (te::TrackInsertPoint::getEndOfTracks (*edit), nullptr);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("appendAudioTrack: insertNewAudioTrack failed");
+        return nullptr;
+    }
+
+    if (name.isNotEmpty())
+        track->setName (name);
+
+    edit->markAsChanged();
+
+    // A track was actually added → let the shell rebuild track-ref-caching views + persist.
+    if (onTracksChanged)
+        onTracksChanged();
+
+    return track.get();
 }
 
 void ProjectSession::launchSlot (int trackIndex, int sceneIndex)

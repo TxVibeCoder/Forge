@@ -192,8 +192,16 @@ private:
 };
 
 //==============================================================================
-/** One audio-track lane: a header strip (name + M/S/R + colour swatch) + clip rects. */
-class TrackLaneComponent : public juce::Component
+/** One audio-track lane: a header strip (name + M/S/R + colour swatch) + clip rects.
+
+    Also a juce::FileDragAndDropTarget so an audio file dragged from Windows Explorer (or any
+    external app) can be dropped onto the lane to import it as a clip on THIS lane's track at the
+    drop time. FileDragAndDropTarget (not the internal DragAndDropTarget) is the surface that
+    receives OS/Explorer file drops. The lane owns its track, so the drop's track index is implicit
+    (which lane received it); only the x needs mapping to edit time. The actual import routes through
+    ArrangeView -> the ProjectSession seam via the onFilesDropped callback (never a raw te:: import). */
+class TrackLaneComponent : public juce::Component,
+                           public juce::FileDragAndDropTarget
 {
 public:
     TrackLaneComponent (TimelineView&, te::AudioTrack&);
@@ -201,6 +209,14 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+
+    //==============================================================================
+    // FileDragAndDropTarget — OS/external file drops onto this lane's clip area.
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragMove  (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit  (const juce::StringArray& files) override;
+    void filesDropped  (const juce::StringArray& files, int x, int y) override;
 
     void rebuildClips();
     int  getNumClipComponents() const { return clipComps.size(); }
@@ -248,6 +264,11 @@ public:
     std::function<bool (te::AudioTrack&)> queryAutomationShown;
     /** Invoked after a control (mute/solo/colour) mutates the Edit, so the shell can save. */
     std::function<void()> onEditMutated;
+    /** An audio file was dropped on this lane's clip area. clipAreaX is the drop x relative to the
+        clip area (header already subtracted) and clipAreaWidth its width, so the owner maps x -> time
+        via the shared TimelineView + snap; file is the first accepted audio file. ArrangeView binds
+        this to the ProjectSession import seam (on the lane's track index) + refresh/persist. */
+    std::function<void (TrackLaneComponent&, const juce::File& file, int clipAreaX, int clipAreaWidth)> onFilesDropped;
 
 private:
     TimelineView& view;
@@ -257,6 +278,13 @@ private:
     juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" }, autoButton { "A" };
     bool armed = false;
     bool trackSelected = false;
+
+    // File-drag-over state: true while an accepted audio file hovers this lane's clip area, driving a
+    // neutral insertion marker in paint(). dragHoverX is the clip-area-relative pointer x (>= 0) so
+    // the marker previews where the clip will land; -1 means "no marker" (hover with no valid x yet).
+    // Set in fileDragEnter/Move, CLEARED in fileDragExit AND filesDropped so it can never stick.
+    bool dragHover = false;
+    int  dragHoverX = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TrackLaneComponent)
 };
@@ -360,6 +388,12 @@ public:
         startTime is the (snapped) clip start. The shell binds this to ProjectSession::createMidiClip
         and then rebuild()s. Default null => no-op. */
     std::function<void (int trackIndex, te::TimePosition startTime)> onCreateMidiClipRequested;
+    /** Invoked when an audio file is dropped from the OS (Explorer) onto a track lane. trackIndex is
+        the dropped lane's track index within te::getAudioTracks(*edit); startTime is the (snapped)
+        drop time; file is the first accepted audio file. The shell binds this to
+        ProjectSession::importAudioFile(file, startTime, trackIndex) and then save()+rebuild()s
+        (mirrors onCreateMidiClipRequested). Default null => no-op. */
+    std::function<void (int trackIndex, const juce::File& file, te::TimePosition startTime)> onFilesDropped;
 
 private:
     void selectClip (ClipComponent*);

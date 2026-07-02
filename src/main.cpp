@@ -50,7 +50,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -394,6 +394,18 @@ public:
             }
         };
 
+        // File drag-drop onto an Arrange lane (W07): the lane resolves its own track index and maps the
+        // drop x to a snapped start time; we import the dropped audio onto THAT track (importAudioFile is
+        // track-aware) and rebuild so the clip appears. Null-guarded — unwired it is a safe no-op.
+        arrangeView.onFilesDropped = [this] (int trackIndex, const File& file, te::TimePosition start)
+        {
+            if (session.importAudioFile (file, start, trackIndex) == nullptr)
+                FORGE_LOG_ERROR ("Failed to import dropped audio onto arrange track "
+                                 + juce::String (trackIndex) + ": " + file.getFullPathName());
+            session.save();
+            arrangeView.rebuild();
+        };
+
         // Double-clicking an audio file in the Browser imports it onto the project.
         browserPanel.onImportFile = [this] (const File& f)
         {
@@ -406,7 +418,13 @@ public:
 
         // Session grid — mirror the arrange wiring. The view delegates all engine ops to ProjectSession;
         // here we only route selection/creation to the shared piano-roll drawer and the record arm path.
-        sessionView.onEditMutated = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        sessionView.onEditMutated = [this]
+        {
+            sealUndoTransaction();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
+            reconcileDrawerClip();   // a slot "Delete clip" may have detached the clip the drawer is editing
+        };
 
         // Session focus follows to the channel tray (W04b): SessionView announces focus-TRACK
         // changes (arrow keys / pad clicks) as an INDEX — it caches no track pointers (R1) — so
@@ -582,7 +600,7 @@ public:
         session.onTracksChanged = [this]
         {
             if (! session.save())
-                FORGE_LOG_ERROR ("Failed to save project after aux-bus add");
+                FORGE_LOG_ERROR ("Failed to save project after track-list change");
 
             if (sessionViewBinds() && session.getNumAudioTracks() != sessionView.getNumColumns())
                 sessionView.rebuild();
@@ -728,6 +746,27 @@ public:
             // Tap-tempo model + tempo-write seam gate (hands-on 1.4). Pure math + one engine write on
             // the live edit; synchronous, so one callAsync yield suffices.
             MessageManager::callAsync ([this] { runTapTempoSelftest(); });
+        }
+        else if (mode == SelfTest::slotdelete)
+        {
+            // Wave 2 (W07): the clearSlot seam (delete clip). Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runSlotDeleteSelftest(); });
+        }
+        else if (mode == SelfTest::addtrack)
+        {
+            // Wave 2 (W07): the appendAudioTrack seam (+ Track). Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runAddTrackSelftest(); });
+        }
+        else if (mode == SelfTest::scene)
+        {
+            // Wave 2 (W07): ensureScenes grows the grid past the former 16 ceiling (+ Scene). Synchronous.
+            MessageManager::callAsync ([this] { runSceneSelftest(); });
+        }
+        else if (mode == SelfTest::dragdrop)
+        {
+            // Wave 2 (W07): the file-import seams both drop paths route through (session slot + arrange
+            // lane). Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runDragDropSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -1448,6 +1487,28 @@ private:
             ed->getUndoManager().beginNewTransaction();
     }
 
+    // A structural mutation (a slot/clip delete, or an undo/redo of one) can DETACH the clip the bottom
+    // drawer is editing: the engine keeps the clip alive through the drawer's Ptr, but its state tree is
+    // now parentless, so further edits write to a dead tree (silent no-op edits + undo-stack pollution —
+    // not a crash). Close the drawer onto Detail whenever its held clip has lost its parent. Idempotent +
+    // cheap (a live clip is a no-op), so it is safe to call after EVERY session mutation. Covers BOTH the
+    // MIDI (piano-roll) and audio (DetailView) editors. Shared by undoOrRedo and the session mutation hook
+    // (W07: the new Session "Delete clip" made this hazard reachable for slot clips, not just undo/redo).
+    void reconcileDrawerClip()
+    {
+        if (auto* mc = pianoRoll.getClip())
+            if (! mc->state.getParent().isValid())
+            {
+                pianoRoll.setMidiClip (nullptr);
+                bottomMode = BottomMode::Detail;
+                resized();
+            }
+
+        if (auto* c = detailView.getClip())
+            if (! c->state.getParent().isValid())
+                detailView.setClip (nullptr);
+    }
+
     void doUndo()  { undoOrRedo (true); }
     void doRedo()  { undoOrRedo (false); }
 
@@ -1489,15 +1550,9 @@ private:
         channelTray.refreshNow();
         markerBar.refresh();
 
-        // The piano-roll can now hold a DETACHED clip (a redo-of-delete keeps the Ptr alive but
-        // parentless — further edits would write to a dead state tree with no visible effect).
-        if (auto* mc = pianoRoll.getClip())
-            if (! mc->state.getParent().isValid())
-            {
-                pianoRoll.setMidiClip (nullptr);
-                bottomMode = BottomMode::Detail;
-                resized();
-            }
+        // A redo-of-delete (or any structural undo/redo) can leave the drawer holding a detached clip —
+        // reconcile it (now also covers the audio DetailView, not just the piano-roll).
+        reconcileDrawerClip();
 
         statusLabel.setText (isUndo ? "Undo" : "Redo", dontSendNotification);
         statusHoldUntilMs = Time::getMillisecondCounter() + 1500;
@@ -3555,6 +3610,217 @@ private:
     }
 
     //==============================================================================
+    // Wave 2 (W07) grid-interaction gates — each proves ONE new ProjectSession seam headlessly and
+    // synchronously (seam-level; no transport roll), then writes forge_phase0_selftest.log and quits.
+    // Templates: runTapTempoSelftest / runUndoSelftest. They run in their own SelfTest modes, where the
+    // Session grid is NOT bound (sessionViewBinds() is false), so they exercise the seams directly.
+
+    // --selftest-slotdelete: the clearSlot seam. create -> filled -> clearSlot -> empty; clearSlot on an
+    // already-empty slot returns false (the no-op contract); ed->undo() restores the clip (removeFromParent
+    // rides the Edit UndoManager — the same stack W05 global Undo drives).
+    void runSlotDeleteSelftest()
+    {
+        bool created = false, filledBefore = false, cleared = false, emptyAfter = false,
+             clearEmptyIsNoop = false, undoRestored = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+
+            session.ensureScenes (16);
+            created      = session.createMidiClipInSlot (0, 0, "DEL") != nullptr;
+            filledBefore = session.isSlotFilled (0, 0);
+
+            um.beginNewTransaction();                        // seal a per-gesture unit like the shell does
+            cleared          = session.clearSlot (0, 0);
+            emptyAfter       = ! session.isSlotFilled (0, 0);
+            clearEmptyIsNoop = ! session.clearSlot (0, 0);   // already empty -> false, no-op
+
+            ed->undo();
+            undoRestored = session.isSlotFilled (0, 0);
+        }
+
+        const bool pass = created && filledBefore && cleared && emptyAfter
+                          && clearEmptyIsNoop && undoRestored;
+
+        String report;
+        report << "mode=slotdelete" << newLine
+               << "clipCreated="      << (created ? 1 : 0) << newLine
+               << "filledBefore="     << (filledBefore ? 1 : 0) << newLine
+               << "cleared="          << (cleared ? 1 : 0) << newLine
+               << "emptyAfter="       << (emptyAfter ? 1 : 0) << newLine
+               << "clearEmptyIsNoop=" << (clearEmptyIsNoop ? 1 : 0) << newLine
+               << "undoRestored="     << (undoRestored ? 1 : 0) << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write slot-delete selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Slot-delete selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-addtrack: the appendAudioTrack seam. Track count increments by exactly 1, and a slot on
+    // the newly-appended (last) track resolves + accepts a born-audible MIDI clip (proves the new column
+    // is a real, addressable track — not a phantom).
+    void runAddTrackSelftest()
+    {
+        int  before = 0, after = 0;
+        bool appended = false, newSlotResolves = false, clipOnNewTrack = false;
+
+        if (session.getEdit() != nullptr)
+        {
+            before   = session.getNumAudioTracks();
+            appended = session.appendAudioTrack ("SelfTest Track") != nullptr;
+            after    = session.getNumAudioTracks();
+
+            const int newIdx = after - 1;
+            session.ensureScenes (16);
+            clipOnNewTrack  = session.createMidiClipInSlot (newIdx, 0, "OnNew") != nullptr;
+            newSlotResolves = session.getClipSlot (newIdx, 0) != nullptr;
+        }
+
+        const bool pass = appended && (after == before + 1) && newSlotResolves && clipOnNewTrack;
+
+        String report;
+        report << "mode=addtrack" << newLine
+               << "tracksBefore="    << before << newLine
+               << "tracksAfter="     << after << newLine
+               << "appended="        << (appended ? 1 : 0) << newLine
+               << "newSlotResolves=" << (newSlotResolves ? 1 : 0) << newLine
+               << "clipOnNewTrack="  << (clipOnNewTrack ? 1 : 0) << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write add-track selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Add-track selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-scene: the dynamic scene count (+ Scene). ensureScenes grows the grid past the former
+    // constexpr=16 ceiling, and a clip created in scene 18 resolves — proving the engine + seam carry
+    // N != 16 (the UI's dynamic-N rendering is proved separately by the screenshot matrix).
+    void runSceneSelftest()
+    {
+        int  base = 0, grown = 0;
+        bool grewPast16 = false, slot18Resolves = false, clipInScene18 = false;
+
+        if (session.getEdit() != nullptr)
+        {
+            base = session.getNumScenes();
+            session.ensureScenes (20);                 // grow past the former 16 ceiling
+            grown      = session.getNumScenes();
+            grewPast16 = grown >= 20;
+
+            clipInScene18  = session.createMidiClipInSlot (0, 18, "S18") != nullptr;
+            slot18Resolves = session.getClipSlot (0, 18) != nullptr;
+        }
+
+        const bool pass = grewPast16 && slot18Resolves && clipInScene18;
+
+        String report;
+        report << "mode=scene" << newLine
+               << "scenesBase="     << base << newLine
+               << "scenesGrown="    << grown << newLine
+               << "grewPast16="     << (grewPast16 ? 1 : 0) << newLine
+               << "slot18Resolves=" << (slot18Resolves ? 1 : 0) << newLine
+               << "clipInScene18="  << (clipInScene18 ? 1 : 0) << newLine
+               << "result="         << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="        << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write scene selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Scene selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-dragdrop: the file-import seams both drop paths route through. Session leg: a file
+    // dropped on a pad -> importAudioIntoSlot fills that slot. Arrange leg: a file dropped on lane N ->
+    // importAudioFile(file, time, N) lands the clip on track N (a fresh empty target track ends with
+    // exactly one clip, proving the trackIndex param routes correctly and not to track 0). The pointer
+    // math (xToTime) is a pure function the arrange agent left testable; this gate proves the payload path.
+    void runDragDropSelftest()
+    {
+        bool sessionImported = false, sessionSlotFilled = false, replaceUndoRestores = false,
+             arrangeImported = false, arrangeLandedOnTarget = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            sineFile = createSineWaveFile (44100.0, 1.0, 440.0, 0.2f);
+
+            session.ensureScenes (16);
+
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+
+            // Session-drop path: an OS file dropped on a pad routes to importAudioIntoSlot.
+            um.beginNewTransaction();
+            sessionImported   = session.importAudioIntoSlot (0, 1, sineFile) != nullptr;   // clip A
+            sessionSlotFilled = session.isSlotFilled (0, 1);
+
+            // Replace-on-drop is UNDOABLE (QC4-F2): a SECOND drop onto the filled slot replaces the clip
+            // (importAudioIntoSlot -> DeleteExistingClips::yes); an undo restores the prior clip. Seal the
+            // replace in its own transaction so undo reverts ONLY it (clip A returns -> the slot stays filled).
+            um.beginNewTransaction();
+            session.importAudioIntoSlot (0, 1, sineFile);                                  // clip B replaces A
+            const bool refilledAfterReplace = session.isSlotFilled (0, 1);
+            um.beginNewTransaction();
+            ed->undo();
+            replaceUndoRestores = refilledAfterReplace && session.isSlotFilled (0, 1);
+
+            // Arrange-drop path: a file dropped on lane N routes to importAudioFile(file, time, N).
+            // Append a fresh EMPTY track as an unambiguous drop target (it starts with 0 clips).
+            session.appendAudioTrack ("Drop Target");
+            const int target = session.getNumAudioTracks() - 1;
+            arrangeImported = session.importAudioFile (sineFile, te::TimePosition(), target) != nullptr;
+
+            auto tracks = te::getAudioTracks (*ed);
+            if (target >= 1 && target < tracks.size())
+                arrangeLandedOnTarget = tracks[target]->getClips().size() == 1;   // landed on N, not track 0
+        }
+
+        const bool pass = sessionImported && sessionSlotFilled && replaceUndoRestores
+                          && arrangeImported && arrangeLandedOnTarget;
+
+        String report;
+        report << "mode=dragdrop" << newLine
+               << "sessionImported="       << (sessionImported ? 1 : 0) << newLine
+               << "sessionSlotFilled="     << (sessionSlotFilled ? 1 : 0) << newLine
+               << "replaceUndoRestores="   << (replaceUndoRestores ? 1 : 0) << newLine
+               << "arrangeImported="       << (arrangeImported ? 1 : 0) << newLine
+               << "arrangeLandedOnTarget=" << (arrangeLandedOnTarget ? 1 : 0) << newLine
+               << "result="                << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="               << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write drag-drop selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Drag-drop selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
     // Headless screenshot mode (--screenshot): build a populated demo session and render each view to a
     // PNG via createComponentSnapshot, so the UI can be inspected without a live display. Writes
     // %TEMP%\forge_shot_{session,arrange,mix}.png then quits.
@@ -3711,6 +3977,16 @@ private:
         captureView ("session_top");
         sessionView.getViewport().setViewPositionProportionately (0.0, 1.0);  // scroll to the true bottom
         captureView ("session_scrolled");
+
+        // W07: prove the DYNAMIC scene count renders past the former constexpr=16 ceiling. Grow the demo
+        // grid to 20 scenes (the +Scene path), rebuild, scroll to the true bottom, and snap — rows 16-19
+        // must render + stay aligned (the pinned scene column tracks the pads) with no drift or clipping.
+        session.ensureScenes (20);
+        sessionView.rebuild();
+        sessionView.resized();
+        sessionView.getViewport().setViewPositionProportionately (0.0, 1.0);  // bottom: rows 16-19 in view
+        captureView ("session_scenes");
+
         FORGE_LOG_INFO ("Screenshots written to " + File::getSpecialLocation (File::tempDirectory).getFullPathName());
 
         if (auto* t = session.getTransport())
@@ -4421,6 +4697,10 @@ public:
                             : commandLine.contains ("--selftest-popout")         ? "selftest-popout"         // before bare --selftest
                             : commandLine.contains ("--selftest-undo")           ? "selftest-undo"           // before bare --selftest
                             : commandLine.contains ("--selftest-taptempo")       ? "selftest-taptempo"       // before bare --selftest
+                            : commandLine.contains ("--selftest-slotdelete")     ? "selftest-slotdelete"     // before bare --selftest (W07)
+                            : commandLine.contains ("--selftest-addtrack")       ? "selftest-addtrack"       // before bare --selftest (W07)
+                            : commandLine.contains ("--selftest-scene")          ? "selftest-scene"          // before bare --selftest (W07)
+                            : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -4470,6 +4750,10 @@ public:
                         : commandLine.contains ("--selftest-popout")         ? SelfTest::popout         // before bare --selftest
                         : commandLine.contains ("--selftest-undo")           ? SelfTest::undo           // before bare --selftest
                         : commandLine.contains ("--selftest-taptempo")       ? SelfTest::taptempo       // before bare --selftest
+                        : commandLine.contains ("--selftest-slotdelete")     ? SelfTest::slotdelete     // before bare --selftest (W07)
+                        : commandLine.contains ("--selftest-addtrack")       ? SelfTest::addtrack       // before bare --selftest (W07)
+                        : commandLine.contains ("--selftest-scene")          ? SelfTest::scene          // before bare --selftest (W07)
+                        : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

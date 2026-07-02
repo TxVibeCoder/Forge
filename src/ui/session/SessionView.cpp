@@ -22,6 +22,7 @@ SessionView::~SessionView()
     // R4 teardown order, mirrored here: stop the poll FIRST, then drop children, then clear state.
     stopTimer();
     columns.clear();
+    addTrackColumn.reset();
     scenes.reset();
     focusTrack = focusScene = 0;
     edit = nullptr;
@@ -46,6 +47,7 @@ void SessionView::setEdit (te::Edit* e)
         // R4 — STRICT teardown order; NO engine read afterward.
         stopTimer();
         columns.clear();
+        addTrackColumn.reset();
         scenes.reset();
         focusTrack = focusScene = 0;
         edit = nullptr;
@@ -56,6 +58,7 @@ void SessionView::setEdit (te::Edit* e)
 void SessionView::rebuild()
 {
     columns.clear();
+    addTrackColumn.reset();
     scenes.reset();
 
     lastSlotState.clear();
@@ -65,15 +68,27 @@ void SessionView::rebuild()
 
     if (edit != nullptr)
     {
+        // RUNTIME scene count (W07 +Scene): honour any live count above the SessionLayout floor.
+        // Computed ONCE here and threaded through every FIXED-BOUND site below (pad ctor, scene
+        // column, diff buffers, focus clamp) AND the 25 Hz poll (loop bound + flat index stride),
+        // so the four coupled sites can never drift out of lock-step.
+        gridScenes = jmax (SessionLayout::numScenes, session.getNumScenes());
+
         int trackIndex = 0;
 
         for (auto* track : te::getAudioTracks (*edit))
         {
-            auto* column = columns.add (new TrackColumnComponent (*track, trackIndex));
+            auto* column = columns.add (new TrackColumnComponent (*track, trackIndex, gridScenes));
             wireColumn (*column);
             columnHolder.addAndMakeVisible (column);
             ++trackIndex;
         }
+
+        // W07 +Track: trailing "+" stub column after the last real column, inside columnHolder so it
+        // scrolls with the grid. Click -> appendAudioTrack(); onTracksChanged (shell-wired) rebuilds.
+        addTrackColumn = std::make_unique<AddTrackColumnComponent>();
+        addTrackColumn->onAddTrack = [this] { addTrack(); };
+        columnHolder.addAndMakeVisible (*addTrackColumn);
 
         // Pinned scene column. Scene names are read as PLAIN VALUES for display (R1) — the
         // SceneColumnComponent never caches a te::Scene*.
@@ -82,16 +97,18 @@ void SessionView::rebuild()
             sceneNames.add (scene != nullptr ? scene->name.get() : String());
 
         scenes = std::make_unique<SceneColumnComponent>();
-        scenes->setScenes (sceneNames, SessionLayout::numScenes);
+        scenes->setScenes (sceneNames, gridScenes);
+        scenes->onAddScene = [this] { addScene(); };   // W07 +Scene affordance (bottom of the scene column)
         wireScenes();
         addAndMakeVisible (*scenes);
 
         // Per-pad / per-scene state diff buffers, primed to a value the first poll will overwrite.
-        lastSlotState.insertMultiple (0, SlotVisualState::empty, columns.size() * SessionLayout::numScenes);
-        lastSceneState.insertMultiple (0, SceneLaunchState::idle, SessionLayout::numScenes);
+        // Sized by the RUNTIME gridScenes so the poll's flat stride (t * gridScenes + s) matches.
+        lastSlotState.insertMultiple (0, SlotVisualState::empty, columns.size() * gridScenes);
+        lastSceneState.insertMultiple (0, SceneLaunchState::idle, gridScenes);
 
         focusTrack = jlimit (0, jmax (0, columns.size() - 1), focusTrack);
-        focusScene = jlimit (0, SessionLayout::numScenes - 1, focusScene);
+        focusScene = jlimit (0, gridScenes - 1, focusScene);
     }
 
     viewport.setViewPosition (0, 0);   // new/rebuilt edit always starts at the top
@@ -117,6 +134,7 @@ void SessionView::wireColumn (TrackColumnComponent& column)
     column.onSlotClicked       = [this] (int t, int s)                    { handleSlotClicked (t, s); };
     column.onSlotDoubleClicked = [this] (int t, int s)                    { handleSlotDoubleClicked (t, s); };
     column.onSlotRightClicked  = [this] (int t, int s, const MouseEvent& e) { handleSlotRightClicked (t, s, e); };
+    column.onSlotFilesDropped  = [this] (int t, int s, const File& file)   { handleSlotFilesDropped (t, s, file); };
 
     column.onTrackStopAll = [this] (int t) { session.stopTrackClips (t); };
 
@@ -185,11 +203,15 @@ void SessionView::resized()
 
     const int nTracks  = columns.size();
     const int columnH  = SessionLayout::headerH
-                       + SessionLayout::numScenes * SessionLayout::slotH
-                       + SessionLayout::stopRowH;                       // FIXED 844: 78 + 16*46 + 30
+                       + gridScenes * SessionLayout::slotH
+                       + SessionLayout::stopRowH;                       // runtime height: 78 + N*46 + 30
+                                                                         // (>16 scenes -> taller content, scrolls)
 
-    const int contentW = jmax (viewport.getMaximumVisibleWidth(),
-                               nTracks * SessionLayout::trackColW);
+    // W07 +Track: the trailing "+" stub occupies its own narrow lane after the last track column.
+    const int addColW = (addTrackColumn != nullptr) ? SessionLayout::addTrackColW : 0;
+
+    const int tracksW  = nTracks * SessionLayout::trackColW + addColW;   // real columns + the "+" stub
+    const int contentW = jmax (viewport.getMaximumVisibleWidth(), tracksW);
     const int contentH = columnH;   // fixed height => pads stay slotH tall; short window scrolls,
                                     // tall window shows empty space below (no stretch)
 
@@ -206,21 +228,24 @@ void SessionView::resized()
         x += SessionLayout::trackColW + SessionLayout::gap;
     }
 
-    // The scene column uses the SAME content height as the track columns (not the raw viewport height),
-    // so its shared rowBand partition matches the columns' exactly and the scene rows never drift.
+    // The "+" stub immediately follows the last real column (flush, like the columns themselves),
+    // full content height so its "+" glyph can centre on the grid's vertical span.
+    if (addTrackColumn != nullptr)
+        addTrackColumn->setBounds (x, 0, SessionLayout::addTrackColW, contentH);
+
+    // The scene column MUST use the SAME content height as the track columns so its shared rowBand
+    // partition matches theirs EXACTLY. rowBand divides `height` into N rows by INTEGER floor, so any
+    // height difference changes the per-row pitch and scene launch row N drifts progressively from pad
+    // row N (e.g. 46 vs 45 px/row at N=20 -> ~19 px at the bottom row). It is translated up by the
+    // vertical scroll offset so scene launch row N stays glued to pad row N while scrolling.
+    // (An earlier version subtracted the H-scrollbar thickness here to line the bottom stop band up with
+    // the H-bar-occluded track footers, but that broke rowBand's equal-height invariant — the far worse
+    // bug. The minor bottom-edge overhang when scrolled fully down under an H-scrollbar is accepted.)
     if (scenes != nullptr)
-    {
-        // Same contentH as the track columns (shared rowBand partition), translated up by the
-        // vertical scroll offset so scene launch row N stays glued to pad row N.
-        // Reserve the horizontal-scrollbar band (when shown) so the scene column's bottom stop
-        // band lines up with the H-bar-occluded track footers instead of overhanging them.
-        const int hBar = viewport.isHorizontalScrollBarShown()
-                       ? viewport.getScrollBarThickness() : 0;
         scenes->setBounds (sceneArea.getX(),
                            -viewport.getViewPositionY(),
                            sceneArea.getWidth(),
-                           contentH - hBar);
-    }
+                           contentH);
 }
 
 void SessionView::syncSceneColumnToScroll()
@@ -345,7 +370,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     const bool filled = session.isSlotFilled (trackIdx, sceneIdx);
 
     // New W7 ids come AFTER the existing set so they never collide with {idLaunch=1,idStop,idEdit,idImport}.
-    enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord };
+    enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord, idDelete };
 
     // Re-derive record eligibility from engine truth on demand (never cached, R1).
     auto* track = getTrackAt (trackIdx);
@@ -357,6 +382,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idLaunch, "Launch");
         menu.addItem (idStop,   "Stop");
         menu.addItem (idEdit,   "Edit clip");   // launch-free edit path (mirrors double-click, without launching)
+        menu.addItem (idDelete, "Delete clip"); // W07: empty the slot (filled-only); undoable via W05 global Undo
         menu.addSeparator();
     }
 
@@ -383,6 +409,19 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                 case idStop:   safeThis->session.stopSlot   (trackIdx, sceneIdx); break;
                                 case idEdit:   safeThis->openSlotForEdit    (trackIdx, sceneIdx); break;
                                 case idImport: safeThis->importAudioInto    (trackIdx, sceneIdx); break;
+                                case idDelete:
+                                    // Empty the slot. clearSlot routes removeFromParent through the
+                                    // Edit's UndoManager, so firing onEditMutated() (which seals the
+                                    // W05 undo transaction) makes the delete Ctrl+Z-reversible; rebuild()
+                                    // re-reads the now-empty slot. Mirrors the create/import refresh path.
+                                    if (safeThis->session.clearSlot (trackIdx, sceneIdx))
+                                    {
+                                        if (safeThis->onEditMutated != nullptr)
+                                            safeThis->onEditMutated();
+
+                                        safeThis->rebuild();
+                                    }
+                                    break;
                                 case idRecordSlot:
                                     if (safeThis->onSlotRecord != nullptr)
                                         safeThis->onSlotRecord (trackIdx, sceneIdx);
@@ -425,6 +464,28 @@ void SessionView::importAudioInto (int trackIdx, int sceneIdx)
                                        });
 }
 
+void SessionView::handleSlotFilesDropped (int trackIdx, int sceneIdx, const File& file)
+{
+    // W07 OS-external audio drop. importAudioIntoSlot is the ONE import path (identical to the
+    // file-chooser import and the right-click "Import audio..." item), so drop and menu-import
+    // behave identically. On success fire the create/import refresh callback (onEditMutated seals
+    // the undo transaction + fans the shell refresh) and rebuild() to show the new clip.
+    if (edit == nullptr)
+        return;
+
+    if (session.importAudioIntoSlot (trackIdx, sceneIdx, file))
+    {
+        if (onEditMutated != nullptr)
+            onEditMutated();
+
+        rebuild();
+    }
+    else
+    {
+        FORGE_LOG_ERROR ("Failed to import dropped audio into slot (" + juce::String (trackIdx) + "," + juce::String (sceneIdx) + ")");
+    }
+}
+
 //==============================================================================
 // Keyboard (§c): arrows move the focus cursor, Enter launches the focused slot, Shift+Enter the
 // focused scene. All clamped to grid bounds.
@@ -433,6 +494,24 @@ bool SessionView::keyPressed (const KeyPress& key)
 {
     if (edit == nullptr || columns.isEmpty())
         return false;
+
+    // W07 Delete clip: Delete or Backspace empties the FOCUSED filled slot. clearSlot detaches the
+    // clip through the Edit's UndoManager, and firing onEditMutated() seals the W05 undo transaction,
+    // so the delete is Ctrl+Z-reversible (mirrors the right-click "Delete clip" + create/import path).
+    // Consume the key even on an empty slot so it never falls through to an accidental handler.
+    if (key.isKeyCode (KeyPress::deleteKey) || key.isKeyCode (KeyPress::backspaceKey))
+    {
+        if (session.isSlotFilled (focusTrack, focusScene)
+            && session.clearSlot (focusTrack, focusScene))
+        {
+            if (onEditMutated != nullptr)
+                onEditMutated();
+
+            rebuild();
+        }
+
+        return true;
+    }
 
     if (key.isKeyCode (KeyPress::leftKey))   { setFocus (focusTrack - 1, focusScene); return true; }
     if (key.isKeyCode (KeyPress::rightKey))  { setFocus (focusTrack + 1, focusScene); return true; }
@@ -460,7 +539,7 @@ bool SessionView::keyPressed (const KeyPress& key)
         if (key.getModifiers().isShiftDown())
         {
             // A scene launch with no clips on that row across any track is a silent no-op; surface it.
-            if (focusScene < 0 || focusScene >= SessionLayout::numScenes)
+            if (focusScene < 0 || focusScene >= gridScenes)
                 FORGE_LOG_ERROR ("Failed to launch scene " + juce::String (focusScene) + " via keyboard");
 
             session.launchScene (focusScene);
@@ -480,13 +559,73 @@ bool SessionView::keyPressed (const KeyPress& key)
     return false;
 }
 
+//==============================================================================
+void SessionView::addScene()
+{
+    if (edit == nullptr)
+        return;
+
+    // Grow the Edit by exactly one scene. ensureScenes is grow-only (R3) and deliberately OFF the
+    // undo stack + does NOT markAsChanged, so we persist directly with save() and accept that
+    // +Scene is NOT undoable (intended — a scene row is grid chrome, not an editable clip op).
+    session.ensureScenes (session.getNumScenes() + 1);
+
+    if (! session.save())
+        FORGE_LOG_ERROR ("Failed to save project after +Scene");
+
+    // rebuild() re-reads getNumScenes(), recomputes gridScenes, and recreates the columns + scene
+    // rows + diff buffers at the new size (the poll then lights rows 16+). The 25 Hz poll only
+    // watches TRACK count, never scene count, so a direct rebuild() is the required trigger.
+    rebuild();
+}
+
+void SessionView::addTrack()
+{
+    if (edit == nullptr)
+        return;
+
+    // Append at the END (existing absolute track indices stay stable — Session/mixer addressing
+    // depends on it). appendAudioTrack fires session.onTracksChanged, which the shell has wired to
+    // persist + rebuild BOTH SessionView and ArrangeView — so we deliberately do NOT rebuild() here
+    // (that would double-rebuild). No 4OSC is added: a synth arrives lazily only if a MIDI clip is
+    // later born in one of the new track's slots (createMidiClipInSlot -> ensureDefaultInstrument).
+    if (session.appendAudioTrack() == nullptr)
+        FORGE_LOG_ERROR ("Failed to append audio track via +Track");
+}
+
+//==============================================================================
+void SessionView::AddTrackColumnComponent::paint (Graphics& g)
+{
+    // NEUTRAL add-affordance (Fable charter): a muted "+" on the lane-background tone, brightening
+    // on hover — never selection-amber (amber = selection only). Reads as "the next, empty track".
+    auto b = getLocalBounds();
+
+    g.setColour (Colour (SessionLayout::laneBg).withAlpha (hovered ? 1.0f : 0.6f));
+    g.fillRect (b);
+
+    // Left-edge hairline separates the stub from the last real column (columns sit flush).
+    g.setColour (Colour (ForgeLookAndFeel::hairline));
+    g.fillRect (0, 0, 1, getHeight());
+
+    // The "+" glyph, brightening from secondary to primary text on hover.
+    g.setColour (Colour (hovered ? ForgeLookAndFeel::textPrim : ForgeLookAndFeel::textSec));
+    g.setFont (Font (FontOptions (22.0f)));
+    g.drawText ("+", b, Justification::centred);
+
+    // A vertical "Track" hint under the glyph so the affordance is self-describing (legibility).
+    g.setColour (Colour (ForgeLookAndFeel::textSec));
+    g.setFont (Font (FontOptions (10.0f)));
+    g.drawText ("Track", b.withTrimmedTop (b.getHeight() / 2 + 14).withHeight (14),
+                Justification::centredTop, false);
+}
+
 void SessionView::setFocus (int trackIdx, int sceneIdx)
 {
     if (columns.isEmpty())
         return;
 
     const int newTrack = jlimit (0, columns.size() - 1, trackIdx);
-    const int newScene = jlimit (0, SessionLayout::numScenes - 1, sceneIdx);
+    const int newScene = jlimit (0, gridScenes - 1, sceneIdx);
 
     if (newTrack == focusTrack && newScene == focusScene)
         return;
@@ -604,7 +743,7 @@ void SessionView::timerCallback()
         perTrack.add (std::move (tp));
     }
 
-    for (int s = 0; s < SessionLayout::numScenes; ++s)
+    for (int s = 0; s < gridScenes; ++s)
     {
         bool anyPlaying = false;
         bool anyQueued  = false;
@@ -625,7 +764,7 @@ void SessionView::timerCallback()
             if (state == SlotVisualState::playing)  anyPlaying = true;
             if (state == SlotVisualState::queued || state == SlotVisualState::stopping) anyQueued = true;
 
-            const int idx = t * SessionLayout::numScenes + s;
+            const int idx = t * gridScenes + s;
             if (isPositiveAndBelow (idx, lastSlotState.size()) && lastSlotState.getReference (idx) != state)
             {
                 lastSlotState.set (idx, state);

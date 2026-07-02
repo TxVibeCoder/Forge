@@ -145,8 +145,19 @@ private:
     void handleSlotClicked       (int trackIdx, int sceneIdx);
     void handleSlotDoubleClicked (int trackIdx, int sceneIdx);
     void handleSlotRightClicked  (int trackIdx, int sceneIdx, const juce::MouseEvent&);
+    void handleSlotFilesDropped  (int trackIdx, int sceneIdx, const juce::File&);   // W07 OS-external drop
     void importAudioInto         (int trackIdx, int sceneIdx);
     void openSlotForEdit         (int trackIdx, int sceneIdx);   // route the slot's clip to the drawer
+
+    // W07 +Scene: grow the Edit by one scene, persist, and rebuild the grid at the new count.
+    // NOTE ensureScenes is grow-only + OFF the undo stack (R3) and does NOT markAsChanged, so we
+    // persist explicitly via session.save(); +Scene is intentionally NOT undoable.
+    void addScene();
+
+    // W07 +Track: append a new empty audio track at the END (existing indices stay stable). Fires
+    // session.onTracksChanged, which the shell has wired to rebuild the grid + persist — so this
+    // does NOT rebuild() itself (doing so would double-rebuild).
+    void addTrack();
 
     void setFocus (int trackIdx, int sceneIdx);
     void repaintPad (int trackIdx, int sceneIdx);
@@ -176,17 +187,47 @@ private:
         }
     };
 
+    // W07 +Track: a trailing "+" stub column that sits after the last real track column inside
+    // columnHolder (so it scrolls with the grid, Ableton-style — it reads as "the next, empty
+    // track"). Per the Fable charter it is a NEUTRAL/subtle add control (a muted "+" on the
+    // lane-background tone, brightening on hover), NOT selection-amber. Clicking it fires onAddTrack.
+    struct AddTrackColumnComponent : public juce::Component
+    {
+        std::function<void()> onAddTrack;
+
+        AddTrackColumnComponent()  { setInterceptsMouseClicks (true, false); }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isPopupMenu() && onAddTrack != nullptr)
+                onAddTrack();
+        }
+        void mouseEnter (const juce::MouseEvent&) override { hovered = true;  repaint(); }
+        void mouseExit  (const juce::MouseEvent&) override { hovered = false; repaint(); }
+
+        void paint (juce::Graphics&) override;
+
+        bool hovered = false;
+    };
+
     ScrollingViewport viewport;
     juce::Component columnHolder;
     juce::OwnedArray<TrackColumnComponent> columns;
+    std::unique_ptr<AddTrackColumnComponent> addTrackColumn;   // W07 trailing "+" stub
     std::unique_ptr<SceneColumnComponent> scenes;
 
     // Keyboard focus / selection cursor tracked as INDICES only — never a cached ClipSlot* / Clip*
     // (R1). The pad's `selected` flag (set via setSlotSelected) renders the highlight.
     int focusTrack = 0, focusScene = 0;
 
+    // Runtime grid scene count (W07 +Scene): computed ONCE per rebuild() as
+    // jmax (SessionLayout::numScenes, session.getNumScenes()) and threaded through the pad ctor,
+    // the diff-buffer sizing, the poll loop, and the flat index stride so all four stay lock-step.
+    // The compile-time SessionLayout::numScenes is now only the FLOOR (default rows for an empty edit).
+    int gridScenes = SessionLayout::numScenes;
+
     // Per-pad last-pushed state, so the poll only repaints pads whose state actually changed (§e).
-    // Sized columns × numScenes on rebuild(); indexed [trackIdx * numScenes + sceneIdx].
+    // Sized columns × gridScenes on rebuild(); indexed [trackIdx * gridScenes + sceneIdx].
     juce::Array<SlotVisualState> lastSlotState;
     juce::Array<SceneLaunchState> lastSceneState;
 
