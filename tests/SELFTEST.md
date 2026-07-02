@@ -323,6 +323,33 @@ first gives a guaranteed clean baseline whatever ran before.
 > path additionally fans a cross-surface refresh out after every undo/redo — that path is exercised by the
 > gate's shell but its view-level effects are screenshot/QC territory, not report fields.
 
+## `Forge --selftest-taptempo` (tap-tempo model + tempo-write seam)
+
+The acceptance gate for **hands-on 1.4 — the clickable tempo popup** (design:
+[../docs/devlog/wave-06-handson.md](../docs/devlog/wave-06-handson.md)). Two headless legs. **Leg 1**
+(pure): drives the engine-free `forge::transport::TapTempo` estimator with synthetic timestamps —
+`<2` taps yield no estimate, four taps 500 ms apart read **120.0 BPM**, a `>2000 ms` gap starts a fresh
+sequence (no estimate), and two taps 10 ms apart clamp to the **300 BPM** ceiling. **Leg 2** (engine):
+writes a tempo through `EngineHelpers::setTempoAt` and reads it back off `tempoSequence.getBpmAt` — a
+`140.0` write round-trips, and a below-floor `5.0` write clamps to **20.0**.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `oneTapNull` | a single tap yields no BPM | 1 |
+| `bpm120` | four taps 500 ms apart → 120.0 | 1 |
+| `gapReset` | a >2000 ms gap clears the sequence | 1 |
+| `clampHigh` | a too-fast tap clamps to 300 | 1 |
+| `engineWrite` | `setTempoAt(…,140)` reads back 140 | 1 |
+| `engineClamp` | `setTempoAt(…,5)` reads back the 20 BPM floor | 1 |
+
+> Verified 2026-07-02: **PASS**. The popup's UI (CallOutBox, editable label, ±steppers, TAP button) is
+> screenshot/interaction territory; this gate proves the tap math and the clamped engine write it drives.
+
+> **`--selftest-session` also gained a `launchQRoundTrip` field** (hands-on 1.3): after the launch, the
+> global launch-quantization seam is round-tripped — `setGlobalLaunchQuantisation(none)`→reads `none`,
+> `→(bar)`→reads `bar` — proving the free-trigger selector's engine seam. The free-vs-quantized launch
+> *timing* is pre-existing engine behavior (the ticket only exposes the existing `Edit`-level global).
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated 6-track demo session, launches scene 3, and renders each view to a

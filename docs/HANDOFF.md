@@ -2,21 +2,24 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of the
-> **"W05 — global Undo/Redo + the polish sweep"** wave (one continuous autonomous session shipped
-> W03 → W04a → W04b → W05; see the prior-wave blockquotes). ⚠ **W05's adversarial QC was
-> LIMIT-INTERRUPTED — two dimensions are OWED as the next session's first action (see What's next).**
+> **"W06 — the hands-on wave, part 1: control bar & HUD"** wave — the first build wave off the maintainer's
+> first hands-on session with the app. ⚠ **W05's owed adversarial-QC dimensions (undo-correctness +
+> shell-integration) were NOT run this session — still owed** (W06's own QC did run; see below).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W05 shipped in `5e5dcf2` (code) + a docs commit — COMMITTED + PUSHED to `origin/main` (on
-top of the `7034955` baseline). Working tree clean; the pushed set was sanitized.** Last build **clean**
-(MSVC Debug, 0 warnings) · **all SIXTEEN selftests PASS** — the W04b fifteen plus **`--selftest-undo`** —
-each on the final binary with clean self-exit; `--screenshot` renders the **9-state matrix**.
-Shipped: **global Undo/Redo** (Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the
-Edit's own UndoManager; per-gesture transaction seals; a synchronous cross-surface refresh fan-out; a
-record gate; a piano-roll detached-clip guard), **scene-column polish** (hover, tooltips, full-width
-STOP ALL, beat-pulse parity), **the tray↔mixer strip-widget extraction** (`ui/common/StripWidgets.h`),
-**the empty-centre hint**, and **popout placement persistence**. Full record in
-[devlog/wave-05-undo.md](devlog/wave-05-undo.md).
+**`main`**. **W06 shipped in `e670ab5` (code) + a docs commit on the `7f03974` baseline — sanitized.** Last build **clean**
+(MSVC Debug, 0 warnings) · **all SEVENTEEN selftests PASS** — the W05 sixteen plus **`--selftest-taptempo`**
+— each on the final binary; `--screenshot` renders the **9-state matrix**.
+Shipped (the hands-on plan's Wave 1): **view buttons → top-left**, the **Browser button → a `juce::Path`
+folder icon** (first vector icon in the repo), a **free-trigger launch-quant selector** (`LaunchQType::none`
+over the Edit-level global), a **clickable tempo popup** with ±steppers + **tap-tempo** (first `CallOutBox`
+in the repo; pure `TapTempo` estimator; `EngineHelpers::setTempoAt` clamps [20,300]), **File ▸ Exit**, and a
+**cosmetic launch splash** (honest: cannot mask the ~8 s engine ctor; skipped under every headless flag).
+W06 adversarial QC (4 dimensions × per-finding skeptics) confirmed **2 defects (1 major — the launch-quant
+combo collapsed to 0 px in the ~760–848 px window band; fixed by sharing the trailing space)**. Full record
+in [devlog/wave-06-handson.md](devlog/wave-06-handson.md). The full hands-on plan (Waves 2–5) + the locked
+decisions (+session = scene · self-rendered CC0 · Session/Arrange stay separate) are in the maintainer's
+memory ([[forge-handson-wave-plan]]).
 
 **STANDING MAINTAINER CONSTRAINTS (stated this session):** the maintainer has **no physical MIDI hardware**
 and **runs no manual tests** — every feature must be headless-provable (selftest gates + `--screenshot`).
@@ -269,6 +272,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-tray    # channel-tray live-sync gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-popout  # tear-off round-trip gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-undo    # undo/redo round-trip gate → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-taptempo # tap-tempo model + tempo-write seam gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 9-state matrix (incl. shell_window) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```

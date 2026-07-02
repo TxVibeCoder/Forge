@@ -1,14 +1,17 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W05 — global Undo/Redo + the polish
-sweep** on baseline `7034955` — Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the
-Edit's own UndoManager, transaction sealing at every mutation hook, a synchronous cross-surface refresh
-fan-out, the scene-column polish, the tray↔mixer strip-widget extraction, the empty-centre hint, and popout
-placement persistence — proven by the new `--selftest-undo` on a **SIXTEEN-gate floor**. **Adversarial QC
-was limit-interrupted**: only the polish dimension ran (2 findings recovered + fixed); the undo-correctness
-and shell-integration dimensions are OWED as the next session's first action. Clean MSVC Debug build
-(0 warnings); **all SIXTEEN selftests PASS**; `--screenshot` renders the 9-state matrix. Full record →
-[devlog/wave-05-undo.md](devlog/wave-05-undo.md). Earlier same continuous effort: **W04b** (`cc27300`; →
+*Living status document. Last updated 2026-07-02 (this session: **W06 — the hands-on wave, part 1: control
+bar & HUD** on baseline `7f03974` — the first build wave off the maintainer's first hands-on session. 15
+notes → 7 source-verified investigation agents → an adversarially-verified 5-wave plan → **Wave 1**: view
+buttons moved top-left, the Browser button became a `juce::Path` folder icon, a free-trigger launch-quant
+selector (`LaunchQType::none`) over the Edit-level global, a clickable tempo popup with tap-tempo, File ▸
+Exit, and a cosmetic launch splash. Built by **5 file-disjoint agents** → orchestrator consolidation →
+clean build (0 warnings) → the **SEVENTEEN-gate floor** (new `--selftest-taptempo`; `--selftest-session`
+gained a `launchQRoundTrip` leg) → a 4-dimension adversarial QC (per-finding skeptics) confirming **2
+defects (1 major — the launch-quant combo collapsing to 0 px in a narrow-window band)**, both fixed.
+**all SEVENTEEN selftests PASS**; `--screenshot` renders the 9-state matrix. Full record →
+[devlog/wave-06-handson.md](devlog/wave-06-handson.md). Earlier same continuous effort: **W05**
+(`5e5dcf2`; → [devlog/wave-05-undo.md](devlog/wave-05-undo.md)); **W04b** (`cc27300`; →
 [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md)); **W04a** (`41e3139`; →
 [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md)); **W03** (`ffa494d`; →
 [devlog/wave-03-features.md](devlog/wave-03-features.md)); **W02** (`bb9ef5e`); **Wave 01** (`e3b8c7c`);
@@ -33,7 +36,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
 | **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
-| **Code size** | ~22,500 lines of Forge source (engine/JUCE excluded) across 79 files |
+| **Code size** | ~23,300 lines of Forge source (engine/JUCE excluded) across 83 files |
 
 ---
 
