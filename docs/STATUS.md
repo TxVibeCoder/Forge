@@ -568,7 +568,7 @@ record: [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md).
   screenshot shows the note-seeded groove (Keys = a Sampler). **Committed + PUSHED to `origin/main`**
   (`573170c` code + docs, with W07/W08, sanitize-clean).
 
-### W10 — the hands-on wave, part 5 (the last): the Session → Arrangement "Send to" bridge — SHIPPED  (baseline `76d8f38`)
+### W10 — the hands-on wave, part 5 (the last): the Session → Arrangement "Send to" bridge — SHIPPED (PUSHED)  (baseline `76d8f38`)
 Wave 5 of the hands-on plan — the **final** one. An explicit, one-directional "Send to Arrangement" action; the
 real answer to the maintainer's *"Session clip doesn't appear in Arrange"* note (intended behavior — Session ↔
 Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine across the shared/serial files):
@@ -594,7 +594,7 @@ Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine acr
   WaveAudioClip whose source survived the copy) — both fixes proven headlessly.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-FOUR selftests PASS**; the 10-state screenshot
   matrix renders. After W10 the hands-on plan is **complete**; the Waveform feature-mining backlog is the next
-  planning source.
+  planning source. **Committed + PUSHED to `origin/main`** (`40eccaf` code + `ea3c7a3` docs, sanitize-clean).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

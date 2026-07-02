@@ -8,8 +8,8 @@
 > five W05 mutation hooks + torn-off-popout focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c`) are PUSHED to `origin/main`**; **W10 is
-committed LOCALLY (code + docs), pending the maintainer's push go-ahead** (sanitize-clean). Last build **clean**
+**`main`**. **W07 (`fc0fdbe`), W08 (`0ad7abc`), W09 (`573170c`), and W10 (`40eccaf` code + `ea3c7a3` docs) are
+PUSHED to `origin/main`** (sanitize-clean; local `main` == `origin/main`). Last build **clean**
 (MSVC Debug, 0 warnings) · **all TWENTY-FOUR selftests PASS** — the W09 twenty-three plus **`--selftest-sendarrange`**.
 Shipped (the hands-on plan's Wave 5, the last): an explicit, **one-directional "Send to Arrangement"** action —
 right-click a filled Session slot → **"Send to Arrangement"** copies that clip onto the **same track's** linear
@@ -285,8 +285,8 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 
 ## What's next (the path forward)
 
-> W07 + W08 + W09 are **committed + PUSHED to `origin/main`** (sanitize-clean); **W10 is committed LOCALLY,
-> pending push**. Hardware smoke tests and manual GUI passes are **permanently parked** (standing constraints at
+> W07 + W08 + W09 + W10 are **committed + PUSHED to `origin/main`** (sanitize-clean; local `main` ==
+> `origin/main`). Hardware smoke tests and manual GUI passes are **permanently parked** (standing constraints at
 > the top); the path forward is the headless-provable roadmap. **The hands-on wave plan
 > ([[forge-handson-wave-plan]]) is now COMPLETE** — Waves 1 (W06) · 2 (W07) · 3 (W08) · 4 (W09) · 5 (W10) all
 > shipped. The **Waveform feature-mining backlog** ([devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md))
@@ -532,11 +532,10 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **W10 is committed LOCALLY (code + docs), pending the maintainer's push go-ahead; W07–W09 are on `origin/main`.**
-  W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c` code + docs) are pushed — the sanitize scan ran clean
-  before each push (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity
-  leaks). W10's own pre-push sanitize scan is clean (tracked-set `rg` matched only gitignored `*.local.md` /
-  `*.log`). Prior pushed history: W08 (`0ad7abc`), W07
+- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe`), W08 (`0ad7abc`), W09 (`573170c`),
+  and W10 (`40eccaf` code + `ea3c7a3` docs) are on **`origin/main`** — the sanitize scan ran clean before each
+  push (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks).
+  Local `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
