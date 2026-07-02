@@ -174,7 +174,7 @@ means *deep where it counts for your use*, not "all of it."
 |---|---|---|
 | Session / clip-launch view | **Core (PRIMARY surface)** | Ableton's nonlinear grid — *the* main surface (`SessionView`). |
 | Scenes | **Core** | Fire a row of clips together. |
-| Grid-controller (Launchpad / APC40) integration | **Core (later — "one day")** | External hardware over MIDI on the `ControlSurface` seam; on-screen grid works without it. |
+| Grid-controller (Launchpad / APC40) integration | **Core — driver built (W02); HW pending** | Forge-native driver + a Launchpad driver shipped on the `ControlSurface` seam (gate `--selftest-controlsurface`); on-screen grid works without it. Remaining: on-hardware byte-mapping + an APC40 mkII driver. |
 | Key / MIDI mapping for live control | **Core** | MIDI-learn (`MidiLearn`) + MIDI-clock / Ableton Link sync. |
 | Follow actions | Standard | Clips trigger the next automatically. |
 | Live looping | Pro | |
@@ -247,7 +247,7 @@ means *deep where it counts for your use*, not "all of it."
 | Crash recovery | Standard | |
 | Project versions / snapshots | Standard | "Save as new version." |
 | Recent projects list | Core | |
-| Undo/redo (multi-level + history) | Core | Tracktion's model gives you this. |
+| Undo/redo (multi-level + history) | Core — **shipped (W05)** | Global Edit ▸ Undo/Redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) over the Edit's UndoManager, live menu enablement + cross-surface refresh; gate `--selftest-undo`. Built on Tracktion's model. |
 | Project consolidation (collect files) | Standard | |
 
 ## 16. UI, UX & Hardware Control

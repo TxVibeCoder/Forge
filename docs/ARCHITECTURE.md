@@ -1,6 +1,7 @@
 # DAW Architecture Plan — Native Desktop Build
 *Working title: **Forge** (rename whenever you like)*
-*Status: Draft v1 — for review. Persisted into the repo as the source of truth.*
+*Status: Living as-built reference (the design + engine rationale). For current wave state see
+[STATUS.md](STATUS.md) / [HANDOFF.md](HANDOFF.md).*
 
 > **Product direction (2026-06-30):** Forge is a **sample / scene-based, controller-driven DAW** (Session
 > clip grid primary, Arrange secondary). The authoritative brief is **[DIRECTION.md](DIRECTION.md)**. This
@@ -192,16 +193,23 @@ forge/
 >   `renameMarker` / `removeMarker` / `getMarkers`, keyed by stable `te::EditItemID`).
 > - **`services/export/Exporter`** — WAV mixdown + per-track stems, with **async** off-message-thread variants
 >   (`renderEditToWavAsync` / `renderStemsAsync`, progress + cancel) alongside the preserved sync API.
-> - **`engine/`** — `EngineHelpers` · `RecordController` · `PluginHost` (incl. the 4OSC seam) · `PluginScanner`,
->   plus **`Metronome`** (engine click + native count-in), **`MidiLearn`** (CC→param over Tracktion's native
->   `ParameterControlMappings`), and **`ClipFades`** (automatic short linear edge-fade — anti-click on imported audio).
-> - **`ui/`** — the views (session/ · arrange/ · mixer/ · pianoroll/ · plugins/ · browser/ · transport/ · detail/),
->   plus **`ui/markers/MarkerBar`** (the timeline cue-point strip) and **`ui/export/ExportProgress`** (the
->   async-export progress + cancel panel).
+> - **`engine/`** — `EngineHelpers` · `RecordController` (incl. MIDI slot-record) · `PluginHost` (incl. the 4OSC
+>   seam) · `PluginScanner`, plus **`Metronome`** (engine click + native count-in), **`MidiLearn`** (CC→param over
+>   Tracktion's native `ParameterControlMappings`) and its **`ForgeUIBehaviour`** focused-Edit HW routing (W02),
+>   **`ClipFades`** (anti-click edge-fade), **`AutomationHelpers`** (volume/pan curve seam, W03),
+>   **`MidiClockSync`** + **`MidiClockProbe`** (MIDI-clock out + its wire-byte gate, W03), the Forge-native control
+>   surface **`GridControlDriver`** / **`LaunchpadDriver`** / **`ControlSurfaceHost`** (W02), and
+>   **`dsp/LoudnessAnalyzer`** (offline BS.1770-4 LUFS, W02).
+> - **`ui/`** — the views (session/ · arrange/ [incl. `AutomationLane`] · mixer/ · pianoroll/ · plugins/ · browser/ ·
+>   transport/ [incl. the `LcdDisplay` transport LCD] · detail/), plus **`ui/menu/ForgeMenuModel`** (the top menu bar,
+>   W04a), **`ui/tray/ChannelTray`** (the Arrange channel strip, W04a), **`ui/popout/PopoutWindow`** (tear-off
+>   windows, W04b), **`ui/common/`** (`PeakMeter.h` + `StripWidgets.h` — shared meter + strip styling),
+>   **`ui/markers/MarkerBar`**, and **`ui/export/ExportProgress`**.
 >
-> **Headless verification** is **five** PASS/FAIL selftests — `--selftest` (playback), `--selftest-record`,
-> `--selftest-session`, `--selftest-midi`, `--selftest-midilearn` — plus `--screenshot` (renders each view to a
-> PNG; not a gate). Field contracts in [`../tests/SELFTEST.md`](../tests/SELFTEST.md).
+> **Headless verification** is **sixteen** PASS/FAIL selftests (playback, record, session, midi, midilearn,
+> midiinput, controlsurface, lufs, automation, sync, livesync, lcd, menu, tray, popout, undo) — plus
+> `--screenshot`, which renders a **9-state UI matrix** incl. the window-level `shell_window` (not a gate).
+> Field contracts in [`../tests/SELFTEST.md`](../tests/SELFTEST.md).
 
 ---
 ## 11. Build roadmap

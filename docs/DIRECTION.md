@@ -101,7 +101,7 @@ view (compose in Session → arrange / bounce linearly).
 | **Session UI** | `SessionView` grid (slots/scenes, launch/queue/stop states) as the primary `ViewMode`; scene management; per-slot clip editing via the piano-roll; the `ViewMode` switch becomes `Session ∣ Arrange ∣ Mix` (Session default). |
 | **Control surfaces** *(later — "one day")* | Integration with **external hardware** on the `ControlSurface` seam — **Launchpad** driver, then **APC40 mkII** driver; shared pad-colour/state model with the on-screen grid. The grid is fully usable without it. |
 | **MIDI input** | Note input + record-into-clip (W7); MIDI-learn param mapping; MIDI-clock + Ableton Link sync. |
-| **Vision artifacts** | Reflow the mockup set Session-first (Session = sheet 01, Arrange demoted) + a controller-mapping sheet (Launchpad + APC40 over the grid, with the pad-colour legend); realign ARCHITECTURE/INTERFACE/STATUS. |
+| **Vision artifacts** | Reflow the mockup set Session-first — DONE: Session is the primary sheet (currently **sheet 00**; a further 00→01 renumber is still pending), Arrange demoted, plus a controller-mapping sheet (Launchpad + APC40 over the grid, with the pad-colour legend). ARCHITECTURE/INTERFACE/STATUS realigned. |
 
 > Open design questions to resolve before building: the fate of the control-bar **"Editor"** button (third
 > view vs. drawer); whether the sampler/finger-drum workflow is its own wave; scene follow-actions scope.
