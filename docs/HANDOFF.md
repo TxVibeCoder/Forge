@@ -8,8 +8,8 @@
 > were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. W07 (`fc0fdbe`) + W08 (`0ad7abc`) are on `origin/main`; **W09 (`573170c` code + a docs commit) is
-COMMITTED LOCALLY — awaiting the maintainer's push go-ahead.** Last build **clean** (MSVC Debug, 0 warnings) ·
+**`main`**. **W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09 (`573170c` code + a docs commit) are PUSHED to
+`origin/main`** (sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings) ·
 **all TWENTY-THREE selftests PASS** — the W08 twenty-two plus **`--selftest-demo`**; `--screenshot`'s base
 `session` state now shows the note-seeded groove (Keys = a Sampler, scene 0 the hero groove).
 Shipped (the hands-on plan's Wave 4): the app is **audibly playable out of the box** — per-track instrument
@@ -514,10 +514,10 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **W09 is committed LOCALLY, NOT yet pushed; W07 + W08 are on `origin/main`.** W09 (`573170c` code + a docs
-  commit) sits on the W08 tip in the local `main`, **awaiting the maintainer's push go-ahead**; the sanitize
-  scan ran clean (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity
-  leaks). `origin/main` tip is the W08 docs commit (`1e1a798`). Prior pushed history: W08 (`0ad7abc`), W07
+- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe`), W08 (`0ad7abc`), and W09
+  (`573170c` code + docs) are on **`origin/main`** — the sanitize scan ran clean before the push (only
+  placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Local
+  `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is

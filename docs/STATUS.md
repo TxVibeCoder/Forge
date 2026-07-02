@@ -10,7 +10,7 @@ maintainer chose **HYBRID, no browsable library**. Built by one instrument-layer
 build (0 warnings) → the **TWENTY-THREE-gate floor** (new `--selftest-demo`) → a **3-dimension adversarial QC**
 confirming **NO blockers/majors** (the instrument finder refuted 10 candidate bugs; one doc-drift fixed,
 hardening notes documented). **all TWENTY-THREE selftests PASS**; the base `session` screenshot shows the
-note-seeded groove. Committed locally, awaiting push. Full record →
+note-seeded groove. Committed + **PUSHED to `origin/main`**. Full record →
 [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md). Prior wave: **W08** — per-track Session mixer
 strips (`0ad7abc`, → [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md)); **W07** — Session-grid
 interactions (`fc0fdbe`, → [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md)); **W06** — control
@@ -532,7 +532,7 @@ agent → orchestrator (gate + tray + PeakMeter mode + build) → 4-dimension ad
   `bound/faderOk/panOk/muteOk/soloOk` all 1); the base `session` screenshot shows the band. **Committed +
   PUSHED to `origin/main`** (`0ad7abc` code + `1e1a798` docs, with W07, sanitize-clean).
 
-### W09 — the hands-on wave, part 4: self-rendered instruments + an audible demo — SHIPPED (local; awaiting push)  (baseline `1a59973`)
+### W09 — the hands-on wave, part 4: self-rendered instruments + an audible demo — SHIPPED (PUSHED)  (baseline `1a59973`)
 Wave 4 of the hands-on plan — makes the app **audibly playable out of the box**. Built the established way:
 4 source-verify feasibility investigators → a maintainer scope decision (HYBRID, no browsable library) → one
 instrument-layer agent → orchestrator (demo builder / gate / first-launch hook / build) → 3-dimension QC. Full
@@ -558,8 +558,8 @@ record: [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md).
   size-vs-decodability.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-THREE selftests PASS** (`--selftest-demo`:
   `kickIsSynth/pianoIsSampler/pianoFileExists/clipHasNotes` all 1, `noteCount=16`); the base `session`
-  screenshot shows the note-seeded groove (Keys = a Sampler). **Committed locally; not pushed** (awaiting the
-  maintainer's go-ahead).
+  screenshot shows the note-seeded groove (Keys = a Sampler). **Committed + PUSHED to `origin/main`**
+  (`573170c` code + docs, with W07/W08, sanitize-clean).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
