@@ -90,6 +90,19 @@ Not yet built. Sequencing within W04 is not fixed by this document.
   multi-monitor workflows.
 - **Slide-out drawers.** Evolve the Browser/Detail regions from fixed collapse-to-zero toggles toward
   animated slide-out panels.
+- **The channel tray — a left slide-out mixer strip inside Arrange (maintainer request, 2026-07-01).** The
+  GarageBand/Logic "inspector" pattern: without leaving the Arrange view, a left-edge tray slides out with the
+  SELECTED track's channel controls — fader, pan, mute/solo, A/B sends, the insert chain incl. EQ (opening the
+  full plugin editor on click) — so per-track sound adjustments happen in arrangement context. The standalone
+  Mix view STAYS (it is the all-tracks overview; the tray is the one-track focus tool). Design note: the left
+  region already hosts the Browser, so the tray likely makes the left sidebar multi-modal (Browser | Channel
+  tabs) rather than stacking two panels.
+- **The LCD — a top-centre transport display (maintainer request, 2026-07-01).** A GarageBand-style
+  "little screen on the device", centre of the control bar: bars|beats position counting live, tempo (BPM),
+  and key / time signature — and during record count-in it becomes an animated **1·2·3·4** beat countdown
+  synced to the click (beat boundaries derived from the engine transport per the §1 clock-accuracy rule,
+  never a free-running animation). Heads-up-display character: legible at a glance, visually quiet — an
+  inset screen-like panel in the dark theme using the time/tempo accent, never dominating the layout.
 - **Adjustable-section scaling with persisted sizes.** Resizer-bar drags already work for the Browser width
   and drawer height; this adds persistence across launches (today sizes reset each run) and likely broader
   per-section scaling.
@@ -98,7 +111,8 @@ Not yet built. Sequencing within W04 is not fixed by this document.
 - **Sequence lighting.** Beat-accurate pad-lighting animation on the Session grid (per the dynamic-visuals
   charter in §1), driven by transport/tempo state.
 - **Graphic tempo indicators.** Visual tempo/metronome elements beyond the existing Click toggle, using the
-  time/tempo accent colour.
+  time/tempo accent colour. The LCD above is the primary concrete form of this item; the Wave-01 native
+  count-in already provides the audio side the countdown animates.
 - **The semantic accent system.** Formalizing the accent vocabulary in §1 (interactive, record red, play/
   launch green, time/tempo) as LookAndFeel colour IDs applied consistently across all views — today's shipped
   UI uses a single interactive accent plus record-red; the play/launch-green and time/tempo accents are not
