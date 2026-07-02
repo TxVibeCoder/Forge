@@ -52,7 +52,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -436,6 +436,23 @@ public:
             reconcileDrawerClip();   // a slot "Delete clip" may have detached the clip the drawer is editing
         };
 
+        // W5 "Send to Arrangement": the one-directional Session -> Arrange bridge. The seam copies the
+        // slot clip onto its OWN track's linear timeline (append-at-end); the source slot is untouched
+        // (a copy, not a move), so no grid rebuild is needed — but ArrangeView has no clip-add listener,
+        // so we MUST rebuild its lanes for the new clip to appear. Seal + save like every mutation.
+        sessionView.onSendToArrangement = [this] (int trackIdx, int sceneIdx)
+        {
+            if (session.sendSlotToArrangement (trackIdx, sceneIdx) == nullptr)
+                return;   // empty slot / failure — already logged by the seam
+
+            sealUndoTransaction();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
+
+            arrangeView.rebuild();   // the new linear clip is invisible until the lanes re-enumerate getClips()
+            setStatusMessage ("Sent clip to Arrangement");
+        };
+
         // Session focus follows to the channel tray (W04b): SessionView announces focus-TRACK
         // changes (arrow keys / pad clicks) as an INDEX — it caches no track pointers (R1) — so
         // resolve it fresh here and bind the tray, mirroring arrangeView.onTrackSelected's guards:
@@ -795,6 +812,12 @@ public:
         {
             // Wave 4 (W09): the audible-demo gate — instrument presets applied + notes seeded. Synchronous.
             MessageManager::callAsync ([this] { runDemoSelftest(); });
+        }
+        else if (mode == SelfTest::sendarrange)
+        {
+            // Wave 5 (the last hands-on wave): the Session -> Arrange "Send to" bridge. Synchronous;
+            // one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runSendArrangeSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -3687,6 +3710,178 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-sendarrange (W5, the last hands-on wave): the Session -> Arrange "Send to" bridge. Seed a
+    // MIDI clip with a known note count into slot (0,0), send it to the SAME track's linear timeline, then
+    // assert the faithful, one-directional COPY: the source slot still holds its clip (a copy, not a move);
+    // a NEW clip appears on the track's Arrange timeline; it is a MidiClip carrying the SAME note count
+    // (proves the note sequence rode along in the state clone); it landed at the append point (0 for a
+    // previously-empty lane); and a SECOND send APPENDS a second clip after the first (append-at-end — no
+    // overlap, no replace).
+    void runSendArrangeSelftest()
+    {
+        // MIDI leg (track 0).
+        bool clipCreated = false, notesSeeded = false, sent = false, sourceIntact = false,
+             arrangeClipAppeared = false, isMidiCopy = false, noteCountPreserved = false,
+             landedAtStart = false, copyNotLooping = false, arrangeAudible = false,
+             secondAppended = false, undoRemovedCopy = false, sourceIntactAfterUndo = false;
+        int  seededNotes = 0, copiedNotes = 0, clipsBefore = 0, clipsAfterFirst = 0,
+             clipsAfterSecond = 0, clipsAfterUndo = 0;
+        // Wave leg (track 1) — exercises the AudioClipBase normalization the MIDI leg can't reach.
+        bool waveImported = false, waveSent = false, waveIsAudioClip = false,
+             waveNotLooping = false, waveNoAutoTempo = false, waveSourceMatches = false;
+        juce::File waveFile;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+
+            session.ensureScenes (16);
+
+            // Seed a known 4-note pattern into the slot clip (content-relative beats).
+            if (auto mc = session.createMidiClipInSlot (0, 0, "SEND"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 4; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats ((double) i),
+                                 te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+                seededNotes = seq.getNumNotes();
+                notesSeeded = seededNotes == 4;
+            }
+
+            const auto arrangeClipCount = [ed] (int trackIdx) -> int
+            {
+                auto tracks = te::getAudioTracks (*ed);
+                return trackIdx < tracks.size() ? tracks[trackIdx]->getClips().size() : -1;
+            };
+            const auto trackAt = [ed] (int trackIdx) -> te::AudioTrack*
+            {
+                auto tracks = te::getAudioTracks (*ed);
+                return trackIdx < tracks.size() ? tracks[trackIdx] : nullptr;
+            };
+
+            // Simulate a track whose slot has played: playSlotClips latches TRUE and nothing in the engine
+            // clears it, so WITHOUT the fix the arrange copy is silent (arranger output is gated off). The
+            // send must flip it back to arrange playback.
+            if (auto* t0 = trackAt (0))
+                t0->playSlotClips = true;
+
+            clipsBefore = arrangeClipCount (0);   // 0: nothing on the linear timeline yet
+
+            um.beginNewTransaction();
+            auto* newClip = session.sendSlotToArrangement (0, 0);
+            sent = newClip != nullptr;
+
+            sourceIntact    = session.isSlotFilled (0, 0);   // the slot clip was COPIED, not moved
+            clipsAfterFirst = arrangeClipCount (0);
+            arrangeClipAppeared = clipsAfterFirst == clipsBefore + 1;
+
+            if (auto* t0 = trackAt (0))
+                arrangeAudible = ! t0->playSlotClips.get();   // the fix flipped the track back to arrange playback
+
+            if (auto* midiCopy = dynamic_cast<te::MidiClip*> (newClip))
+            {
+                isMidiCopy         = true;
+                copiedNotes        = midiCopy->getSequence().getNumNotes();
+                noteCountPreserved = seededNotes > 0 && copiedNotes == seededNotes;
+                landedAtStart      = midiCopy->getPosition().getStart().inSeconds() < 0.001;   // empty lane -> start 0
+                copyNotLooping     = ! midiCopy->isLooping();   // the slot's inherited loop range was cleared
+            }
+
+            // A second send must APPEND after the first (append-at-end; not replace, not overlap-at-0).
+            um.beginNewTransaction();
+            auto* secondClip = session.sendSlotToArrangement (0, 0);
+            clipsAfterSecond = arrangeClipCount (0);
+            secondAppended = secondClip != nullptr
+                             && clipsAfterSecond == clipsAfterFirst + 1
+                             && secondClip->getPosition().getStart().inSeconds() > 0.001;
+
+            // Undo leg: one Ctrl+Z removes the second copy and leaves the SOURCE slot intact (the send is
+            // add-only, undoable via the same UndoManager as W05 global undo).
+            ed->undo();
+            clipsAfterUndo        = arrangeClipCount (0);
+            undoRemovedCopy       = clipsAfterUndo == clipsAfterFirst;   // 2 -> 1
+            sourceIntactAfterUndo = session.isSlotFilled (0, 0);
+
+            // Wave leg (track 1): import a sine WAV into slot (1,0), send it, and assert the AudioClipBase
+            // normalization — a NON-looping, NON-auto-tempo WaveAudioClip whose audio source survived the
+            // state copy (matches the slot clip's source). This is the fix path the MIDI leg cannot reach.
+            waveFile = createSineWaveFile (44100.0, 1.0, 440.0, 0.5f);
+            waveImported = session.importAudioIntoSlot (1, 0, waveFile) != nullptr;
+
+            um.beginNewTransaction();
+            auto* waveCopy = session.sendSlotToArrangement (1, 0);
+            waveSent = waveCopy != nullptr;
+
+            if (auto* acb = dynamic_cast<te::AudioClipBase*> (waveCopy))
+            {
+                waveIsAudioClip = true;
+                waveNotLooping  = ! acb->isLooping();
+                waveNoAutoTempo = ! acb->getAutoTempo();
+
+                te::Clip* slotClip = nullptr;
+                if (auto* slot = session.getClipSlot (1, 0))
+                    slotClip = slot->getClip();
+
+                if (auto* slotWave = dynamic_cast<te::WaveAudioClip*> (slotClip))
+                    waveSourceMatches = acb->getSourceFileReference().getFile()
+                                            == slotWave->getSourceFileReference().getFile()
+                                        && slotWave->getSourceFileReference().getFile() != juce::File();
+            }
+        }
+
+        const bool pass = clipCreated && notesSeeded && sent && sourceIntact && arrangeClipAppeared
+                          && isMidiCopy && noteCountPreserved && landedAtStart && copyNotLooping
+                          && arrangeAudible && secondAppended && undoRemovedCopy && sourceIntactAfterUndo
+                          && waveImported && waveSent && waveIsAudioClip && waveNotLooping
+                          && waveNoAutoTempo && waveSourceMatches;
+
+        String report;
+        report << "mode=sendarrange" << newLine
+               << "clipCreated="           << (clipCreated ? 1 : 0) << newLine
+               << "notesSeeded="           << (notesSeeded ? 1 : 0) << newLine
+               << "seededNotes="           << seededNotes << newLine
+               << "sent="                  << (sent ? 1 : 0) << newLine
+               << "sourceIntact="          << (sourceIntact ? 1 : 0) << newLine
+               << "clipsBefore="           << clipsBefore << newLine
+               << "clipsAfterFirst="       << clipsAfterFirst << newLine
+               << "arrangeClipAppeared="   << (arrangeClipAppeared ? 1 : 0) << newLine
+               << "isMidiCopy="            << (isMidiCopy ? 1 : 0) << newLine
+               << "copiedNotes="           << copiedNotes << newLine
+               << "noteCountPreserved="    << (noteCountPreserved ? 1 : 0) << newLine
+               << "landedAtStart="         << (landedAtStart ? 1 : 0) << newLine
+               << "copyNotLooping="        << (copyNotLooping ? 1 : 0) << newLine
+               << "arrangeAudible="        << (arrangeAudible ? 1 : 0) << newLine
+               << "secondAppended="        << (secondAppended ? 1 : 0) << newLine
+               << "clipsAfterSecond="      << clipsAfterSecond << newLine
+               << "undoRemovedCopy="       << (undoRemovedCopy ? 1 : 0) << newLine
+               << "clipsAfterUndo="        << clipsAfterUndo << newLine
+               << "sourceIntactAfterUndo=" << (sourceIntactAfterUndo ? 1 : 0) << newLine
+               << "waveImported="          << (waveImported ? 1 : 0) << newLine
+               << "waveSent="              << (waveSent ? 1 : 0) << newLine
+               << "waveIsAudioClip="       << (waveIsAudioClip ? 1 : 0) << newLine
+               << "waveNotLooping="        << (waveNotLooping ? 1 : 0) << newLine
+               << "waveNoAutoTempo="       << (waveNoAutoTempo ? 1 : 0) << newLine
+               << "waveSourceMatches="     << (waveSourceMatches ? 1 : 0) << newLine
+               << "result="                << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="               << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write send-to-arrange selftest report to: " + reportFile.getFullPathName());
+
+        if (waveFile.existsAsFile())
+            waveFile.deleteFile();
+
+        FORGE_LOG_INFO ("Send-to-arrange selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-addtrack: the appendAudioTrack seam. Track count increments by exactly 1, and a slot on
     // the newly-appended (last) track resolves + accepts a born-audible MIDI clip (proves the new column
     // is a real, addressable track — not a phantom).
@@ -4914,6 +5109,7 @@ public:
                             : commandLine.contains ("--selftest-scene")          ? "selftest-scene"          // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-demo")           ? "selftest-demo"           // before bare --selftest (W09)
+                            : commandLine.contains ("--selftest-sendarrange")    ? "selftest-sendarrange"    // before bare --selftest (W5)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -4969,6 +5165,7 @@ public:
                         : commandLine.contains ("--selftest-scene")          ? SelfTest::scene          // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-demo")           ? SelfTest::demo           // before bare --selftest (W09)
+                        : commandLine.contains ("--selftest-sendarrange")    ? SelfTest::sendarrange    // before bare --selftest (W5)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

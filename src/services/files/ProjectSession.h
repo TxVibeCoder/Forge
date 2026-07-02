@@ -99,6 +99,33 @@ public:
         is already empty. */
     bool clearSlot (int trackIndex, int sceneIndex);
 
+    /** Copies the clip in slot (trackIndex, sceneIndex) onto the SAME track's LINEAR (Arrange)
+        timeline — the explicit, one-directional "Send to Arrangement" bridge (W5). The copy is
+        APPENDED after that track's existing arrange content (track->getTotalRange().getEnd(), == 0
+        for an empty lane), so repeated sends never overlap and build an arrangement left-to-right.
+        Targets the clip's OWN track, so it keeps its instrument / mixer routing.
+
+        This is a COPY, never a move: we clone the source clip's ValueTree state (which carries the
+        wave source / loop / gain / fades OR the MIDI note sequence) and hand it to the multi-arg
+        insertClipWithState, which re-IDs it and stamps the append position in one call — the engine's
+        own duplication idiom (mirrors te::split). te::Clip::moveTo was REJECTED: it re-parents the
+        live clip and would EMPTY the source slot. Session and Arrange stay separate; nothing
+        auto-mirrors (a locked product decision) — this runs only on explicit user action.
+
+        The copy is normalized to a plain linear one-shot — the slot's inherited auto-tempo + full-length
+        loop range are cleared, so a later edge-drag reveals source instead of re-tiling — and the target
+        track is switched to arrange playback (playSlotClips=false) so the copy is actually AUDIBLE (the
+        engine gates arranger output on !playSlotClips, and a track that has launched a slot latches the
+        flag true with nothing clearing it). That flip is the engine's Session->Arrange handoff: it stops
+        any still-playing slot on that track.
+
+        The insert routes through the Edit's UndoManager (the same stack as W05 global Undo), so the
+        caller should seal the transaction and fire the Arrange refresh (arrangeView.rebuild() —
+        ArrangeView has no clip-add listener) afterwards. markAsChanged on success. Returns the new
+        arrange clip, or nullptr (logged) if there is no edit / the slot is empty / the track can't be
+        resolved / the insert failed. */
+    te::Clip* sendSlotToArrangement (int trackIndex, int sceneIndex);
+
     /** Appends a new EMPTY audio track at the END of the track list (te::insertNewAudioTrack at
         getEndOfTracks). LOAD-BEARING: the end-append keeps every existing absolute track index stable
         (mixer sends + Session-grid slot addressing depend on it — same invariant as ensureAuxBus).

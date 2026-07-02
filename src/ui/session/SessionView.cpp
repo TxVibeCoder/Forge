@@ -431,8 +431,8 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     PopupMenu menu;
     const bool filled = session.isSlotFilled (trackIdx, sceneIdx);
 
-    // New W7 ids come AFTER the existing set so they never collide with {idLaunch=1,idStop,idEdit,idImport}.
-    enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord, idDelete };
+    // New ids come AFTER the existing set so they never collide with {idLaunch=1,idStop,idEdit,idImport}.
+    enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord, idDelete, idSendArrange };
 
     // Re-derive record eligibility from engine truth on demand (never cached, R1).
     auto* track = getTrackAt (trackIdx);
@@ -443,8 +443,9 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     {
         menu.addItem (idLaunch, "Launch");
         menu.addItem (idStop,   "Stop");
-        menu.addItem (idEdit,   "Edit clip");   // launch-free edit path (mirrors double-click, without launching)
-        menu.addItem (idDelete, "Delete clip"); // W07: empty the slot (filled-only); undoable via W05 global Undo
+        menu.addItem (idEdit,        "Edit clip");            // launch-free edit path (mirrors double-click, without launching)
+        menu.addItem (idSendArrange, "Send to Arrangement");  // W5: copy this clip onto the track's Arrange timeline (one-directional)
+        menu.addItem (idDelete,      "Delete clip");          // W07: empty the slot (filled-only); undoable via W05 global Undo
         menu.addSeparator();
     }
 
@@ -483,6 +484,12 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
 
                                         safeThis->rebuild();
                                     }
+                                    break;
+                                case idSendArrange:
+                                    // W5: hand off to the shell, which owns the seam + the Arrange rebuild
+                                    // + the seal/save (the source slot is untouched, so no grid rebuild).
+                                    if (safeThis->onSendToArrangement != nullptr)
+                                        safeThis->onSendToArrangement (trackIdx, sceneIdx);
                                     break;
                                 case idRecordSlot:
                                     if (safeThis->onSlotRecord != nullptr)

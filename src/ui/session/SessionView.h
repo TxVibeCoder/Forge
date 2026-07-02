@@ -136,6 +136,12 @@ public:
         session.isSlotRecording. Drives SlotVisualState::recording. */
     std::function<bool (int trackIdx, int sceneIdx)> isSlotRecording;
 
+    /** W5 "Send to Arrangement": a filled slot's clip should be copied onto its own track's linear
+        (Arrange) timeline. The SHELL owns the multi-surface op (SessionView can't reach ArrangeView):
+        it calls ProjectSession::sendSlotToArrangement, then rebuilds the Arrange lanes + seals/saves.
+        (trackIdx, sceneIdx) identify the source slot; null => no-op. */
+    std::function<void (int trackIdx, int sceneIdx)> onSendToArrangement;
+
 private:
     void timerCallback() override;
 

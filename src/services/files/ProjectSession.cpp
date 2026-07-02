@@ -137,6 +137,91 @@ te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange 
     return clip;
 }
 
+te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr || trackIndex < 0 || sceneIndex < 0)
+        return nullptr;
+
+    // Source: the slot clip, resolved fresh via the const getClipSlot (never cached, R1/R2).
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+
+    if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("Send to arrangement: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex)
+                         + " could not be resolved");
+        return nullptr;
+    }
+
+    auto* src = slot->getClip();
+
+    if (src == nullptr)
+    {
+        FORGE_LOG_WARN ("Send to arrangement: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex)
+                        + " is empty — nothing to send");
+        return nullptr;
+    }
+
+    // Destination: the SAME track's LINEAR timeline (keeps the clip's instrument / mixer routing).
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= tracks.size())
+    {
+        FORGE_LOG_ERROR ("Send to arrangement: track " + juce::String (trackIndex) + " out of range");
+        return nullptr;
+    }
+
+    auto* track = tracks[trackIndex];
+
+    // Append point = end of THIS track's existing ARRANGE clips (0 for an empty lane). Slot clips live
+    // in the ClipSlotList, not getClips(), so they never shift the append point. Preserve the source
+    // clip's length + content offset so the copy is faithful; insertClipWithState stamps the position.
+    const auto appendAt = track->getTotalRange().getEnd();
+    const auto srcPos   = src->getPosition();
+    const te::ClipPosition destPos { { appendAt, appendAt + srcPos.getLength() }, srcPos.getOffset() };
+
+    // Faithful copy via the engine's own duplication idiom (mirrors te::split): clone the source state
+    // (carries wave source / loop / gain OR the MIDI sequence), and the multi-arg insertClipWithState
+    // re-IDs + repositions it. deleteExistingClips=false: append, don't replace. A createCopy() is
+    // parentless, so there's no duplicate-ID / re-parent-live-tree assertion (engine gotcha).
+    auto* newClip = track->insertClipWithState (src->state.createCopy(), src->getName(), src->type,
+                                                destPos, /*deleteExistingClips*/ false,
+                                                /*allowSpottingAdjustment*/ false);
+
+    if (newClip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Send to arrangement: failed to insert the copied clip onto track " + juce::String (trackIndex));
+        return nullptr;
+    }
+
+    // Normalize the copy to a plain linear one-shot. A clip placed in a ClipSlot is force-set by the engine
+    // to auto-tempo + a full-length loop range; state.createCopy() carries that onto the timeline. Left
+    // as-is, the arrange clip would RE-TILE its content the instant the user drags its right edge longer
+    // (a QC-confirmed latent bug), and an audio copy would time-warp on a tempo change — neither is what
+    // "Send to Arrangement" should produce. disableLooping() clears the loop while PRESERVING the clip's
+    // visible region (it recomputes the position); setAutoTempo(false) makes a sent audio one-shot behave
+    // like a direct Arrange import. (NB: setLoopRangeBeats({}) is deliberately NOT used — it re-asserts
+    // setAutoTempo(true), so it would undo the normalization.)
+    if (auto* acb = dynamic_cast<te::AudioClipBase*> (newClip))
+    {
+        acb->disableLooping();
+        acb->setAutoTempo (false);
+    }
+    else if (auto* mc = dynamic_cast<te::MidiClip*> (newClip))
+    {
+        mc->disableLooping();
+    }
+
+    // Make the copy AUDIBLE in Arrange playback. A track latches playSlotClips=true when any of its slots
+    // plays, and NOTHING in the engine's live path clears it — so the arranger output stays gated off
+    // (playArranger = ! playSlotClips). Switch this track to arrange playback: the engine's defined
+    // Session -> Arrange handoff (it stops any still-playing slot on THIS track, harmless when none is),
+    // which is exactly what "Send to Arrangement" asks for.
+    track->playSlotClips = false;
+
+    edit->markAsChanged();
+    return newClip;
+}
+
 te::TransportControl* ProjectSession::getTransport() const
 {
     return edit != nullptr ? &edit->getTransport() : nullptr;
