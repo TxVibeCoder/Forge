@@ -1,17 +1,19 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W07 — the hands-on wave, part 2:
-Session-grid interactions** on baseline `aa45ad7` — the second build wave off the maintainer's first hands-on
-session. Delivered **delete clip · +Track · +Scene (dynamic scene count) · real file drag-drop** (Session pads
-+ Arrange lanes) over three new `ProjectSession` seams (`clearSlot`, `appendAudioTrack`, a track-aware
-`importAudioFile`). Built by one serial session-grid spine agent + one parallel Arrange agent → orchestrator
-seams/gates/build → clean build (0 warnings) → the **TWENTY-ONE-gate floor** (four new: `--selftest-slotdelete`
-/ `-addtrack` / `-scene` / `-dragdrop`) → a **5-dimension adversarial QC** (per-finding skeptics) confirming
-**2 real defects — a MAJOR pre-existing scene/pad `rowBand` drift and a HIGH detached-drawer-clip on delete**,
-both fixed. **all TWENTY-ONE selftests PASS**; `--screenshot` renders a **10-state matrix** (new
-`session_scenes`). Committed locally, awaiting the maintainer's push. Full record →
-[devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md). Prior wave: **W06** — control bar & HUD
-(`e670ab5`, → [devlog/wave-06-handson.md](devlog/wave-06-handson.md)). Earlier same continuous effort: **W05**
+*Living status document. Last updated 2026-07-02 (this session: **W08 — the hands-on wave, part 3: per-track
+Session mixer strips** on the W07 tip `3652168` — the third build wave off the maintainer's first hands-on
+session. Delivered a **fixed mixer band under the Session grid** — a compact per-track strip (meter · fader ·
+pan · M/S; no sends) in a new `SessionMixerStrip.{h,cpp}` (the pinned scene column rotated 90°, synced to
+horizontal scroll, shrinking only the viewport so `contentH`/`rowBand` are untouched — **no W07 drift
+regression**) + the **ChannelTray made Arrange-only** + a backward-compatible horizontal mode on the shared
+`PeakMeter`. Built by one session-grid spine agent + orchestrator → clean build (0 warnings) → the
+**TWENTY-TWO-gate floor** (new `--selftest-sessionmixer`) → a **4-dimension adversarial QC** confirming **NO
+blockers/majors**; the surviving findings were **documented, not fixed (per maintainer direction)**. **all
+TWENTY-TWO selftests PASS**; the base `session` screenshot shows the mixer band. Committed locally (3 stacked
+unpushed commits), awaiting the maintainer's push. Full record →
+[devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md). Prior wave: **W07** — Session-grid
+interactions (`fc0fdbe`, → [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md)); **W06** — control
+bar & HUD (`e670ab5`, → [devlog/wave-06-handson.md](devlog/wave-06-handson.md)). Earlier same continuous effort: **W05**
 (`5e5dcf2`; → [devlog/wave-05-undo.md](devlog/wave-05-undo.md)); **W04b** (`cc27300`; →
 [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md)); **W04a** (`41e3139`; →
 [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md)); **W03** (`ffa494d`; →
@@ -502,6 +504,32 @@ Full record: [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md).
   `getNumColumns` off-by-one, hover-stick, R1/R4 teardown, new-callback null-safety.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-ONE selftests PASS**; the 10-state screenshot
   matrix renders. **Committed locally; not yet pushed** (awaiting the maintainer's go-ahead + sanitize).
+
+### W08 — the hands-on wave, part 3: per-track Session mixer strips — SHIPPED (local; awaiting push)  (baseline `3652168`)
+Wave 3 of the hands-on plan. Built the W06/W07 way: 5 source-verify investigators → one `src/ui/session/*` spine
+agent → orchestrator (gate + tray + PeakMeter mode + build) → 4-dimension adversarial QC. Full record:
+[devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md).
+- **The strip** (`SessionMixerStrip.{h,cpp}`, new): a compact per-track strip under each Session column —
+  maintainer-chosen control set **meter · horizontal fader · pan · M/S** (no sends). Modeled on `ChannelTray`
+  (R1 `(edit,index)` identity re-resolve; `PeakMeter` `WeakReference` measurer; `forge::strip` styling reused;
+  vol/pan via `EngineHelpers`, M/S via `track.setMute/setSolo`). Aux returns render **in-place** (tinted via
+  `setIsReturn`; NO grid filtering — that would break ~9 absolute-index sites incl. the hot poll).
+- **The band** (`SessionView` + `SessionLayout::mixerBandH=96`): the pinned scene column **rotated 90°** — a
+  sibling of the viewport, synced to `-getViewPositionX()`, shrinking ONLY the viewport so `contentH` + the
+  scene-column height are untouched. **No W07 scene-drift regression** (QC-confirmed byte-identical).
+- **ChannelTray → Arrange-only** (`main.cpp`, 2 guards): the Session grid no longer drives the tray (the strips
+  replace it); Arrange tray + Mix view untouched; `--selftest-tray` unaffected (drives `setTrack` directly).
+- **Shared `PeakMeter` horizontal mode** (`common/PeakMeter.h`): a backward-compatible `setHorizontal(bool)` +
+  paint branch (all four legacy callers render byte-identically).
+- **QC (4 dimensions):** **NO blockers/majors.** Band/anti-drift, returns/tray/shell, and the PeakMeter change
+  all CLEAN; the strip dimension found only defused latent traps. Per maintainer direction the surviving
+  findings were **DOCUMENTED, not fixed** — the top one is the Ableton **master-strip** opportunity (shorten the
+  scene column to the pad viewport + fill the empty bottom-right corner with a master strip). A **gate-ladder
+  substring bug** was caught pre-ship: `--selftest-sessionmixer` ⊃ `--selftest-session` shadowed it in the
+  ternary ladder (false `mode=session` PASS) — fixed by ordering longest-first; lesson: verify the `mode=` line.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-TWO selftests PASS** (`--selftest-sessionmixer`:
+  `bound/faderOk/panOk/muteOk/soloOk` all 1); the base `session` screenshot shows the band. **Committed locally
+  (3 stacked unpushed commits); not pushed** (awaiting the maintainer's go-ahead).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

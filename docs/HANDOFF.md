@@ -2,33 +2,38 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of the
-> **"W07 — the hands-on wave, part 2: Session-grid interactions"** wave — the second build wave off the
-> maintainer's first hands-on session. ⚠ **W05's owed adversarial-QC dimensions were only PARTIALLY
-> discharged**: W07's QC re-exercised undo-correctness on the new slot-delete path and shell-integration on
-> the new surfaces, but the broader W05 debt (all five W05 mutation hooks, torn-off-popout focus routing) is
-> **still partially owed**.
+> **"W08 — the hands-on wave, part 3: per-track Session mixer strips"** wave — the third build wave off the
+> maintainer's first hands-on session. ⚠ **W05's owed adversarial-QC dimensions remain PARTIALLY owed** (the
+> broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout focus routing were not
+> re-run this wave).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07 is committed LOCALLY (`fc0fdbe` code + a docs commit) on the `aa45ad7` baseline —
-awaiting the maintainer's push go-ahead.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-ONE
-selftests PASS** — the W06 seventeen plus **`--selftest-slotdelete` / `--selftest-addtrack` /
-`--selftest-scene` / `--selftest-dragdrop`** — each on the final binary; `--screenshot` renders the
-**10-state matrix** (the new `session_scenes` proves the >16-row grid renders + stays row-aligned).
-Shipped (the hands-on plan's Wave 2 — grid interactions): **Delete clip** (pad right-click + Delete/Backspace
-→ `clearSlot`, undoable via the W05 stack), **+ Track** (a trailing neutral "+" column stub →
-`appendAudioTrack`), **+ Scene** (the scene count went **dynamic** — `gridScenes = jmax(16, getNumScenes())`
-threaded through the whole grid, + a "+ Scene" footer button; persists, deliberately not undoable), and
-**real OS file drag-drop** onto Session pads (`importAudioIntoSlot`) AND Arrange lanes (the new track-aware
-`importAudioFile(file, time, trackIndex)`). Three new `ProjectSession` seams (`clearSlot`, `appendAudioTrack`,
-the `trackIndex` param). W07 adversarial QC (5 dimensions × per-finding skeptics) confirmed **2 real defects
-fixed** — a **MAJOR pre-existing scene/pad row DRIFT** (the pinned scene column was sized to a different
-height than the track columns, breaking `rowBand`'s equal-height invariant; ~19 px at 20 scenes; masked at the
-1480×940 screenshot size) and a **HIGH detached-drawer-clip on delete** (found by TWO finders; fixed with a
-shared `reconcileDrawerClip`) — plus minors (drop-colour harmonised across surfaces; gate coverage extended;
-one cosmetic aux-return-ordering note). Full record in
-[devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md). The remaining hands-on plan (Waves 3–5) + the
-locked decisions (+session = scene · self-rendered CC0 · Session/Arrange stay separate) are in the maintainer's
-memory ([[forge-handson-wave-plan]]).
+**`main`**. **THREE local commits are stacked and UNPUSHED** on the `aa45ad7` baseline (`origin/main` tip):
+W07 (`fc0fdbe` code + `3652168` docs) and **W08 (`0ad7abc` code + a docs commit)** — all awaiting the
+maintainer's push go-ahead. Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-TWO selftests PASS**
+— the W07 twenty-one plus **`--selftest-sessionmixer`**; `--screenshot`'s 10-state matrix's base `session`
+state now shows the mixer band.
+Shipped (the hands-on plan's Wave 3): a **fixed mixer band under the Session clip grid** — a compact per-track
+strip (**meter · horizontal fader · pan · M/S**, maintainer-chosen; no sends) under each track column, in a
+new `SessionMixerStrip.{h,cpp}` modeled on `ChannelTray` (R1 identity re-resolve; `WeakReference` meter; reuses
+`forge::strip` + `PeakMeter`). The band is the **pinned scene column rotated 90°** — a sibling of the viewport,
+synced to `getViewPositionX()`, shrinking ONLY the viewport so `contentH`/`rowBand` are untouched (**no W07
+scene-drift regression** — QC-confirmed byte-identical). Aux returns render **in-place** (tinted, no grid
+filtering). The **ChannelTray became Arrange-only** (2 `main.cpp` guards; Mix view untouched). The shared
+`PeakMeter` gained a backward-compatible **horizontal mode**. W08 adversarial QC (4 dimensions × per-finding
+skeptics): **NO blockers, NO majors**; the surviving findings were **DOCUMENTED, not fixed (per maintainer
+direction)** — see the deferred list below + [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md).
+The remaining hands-on plan (Waves 4–5) + the locked decisions (+session = scene · self-rendered CC0 ·
+Session/Arrange stay separate) are in the maintainer's memory ([[forge-handson-wave-plan]]).
+
+> **⚠ W08 deferred findings (found by QC, NOT fixed — maintainer said document-only):** ① **[LOW/cosmetic] the
+> Ableton master-strip opportunity** — the scene column runs full-height while the band shortens only the pad
+> viewport, leaving the scene column dangling ~96 px below the pad clip + a ~168×96 empty bottom-right corner;
+> the clean fix is to shorten the scene column to the pad viewport and fill the corner with a **master strip**
+> (a good self-contained follow-up). ② **[MINOR, latent] strip re-bind edge** — `refreshControls()` empty→bound
+> doesn't re-show/re-attach (unreachable today; a trap for a future strip-reuse optimization). ③ **[MINOR,
+> latent] absolute-index re-resolve** — the strip resolves `tracks[index]`, not by pointer identity; safe today
+> (no reorder op), but a future drag-reorder would drive the wrong track. None is a W08 blocker.
 
 **STANDING MAINTAINER CONSTRAINTS (stated this session):** the maintainer has **no physical MIDI hardware**
 and **runs no manual tests** — every feature must be headless-provable (selftest gates + `--screenshot`).
@@ -59,14 +64,19 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W07 (Session-grid interactions)
+## What the LATEST wave did — W08 (per-track Session mixer strips)
 
-The current wave is **W07** — summarised in the intro blockquote above and recorded in full in
-[devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md): delete clip · +Track · +Scene (dynamic scene
-count) · real file drag-drop, over three new `ProjectSession` seams, built by one serial session-grid spine
-agent + one parallel Arrange agent, then a 5-dimension adversarial QC (2 real defects fixed: the MAJOR
-scene/pad `rowBand` drift + the HIGH detached-drawer-clip on delete). The **W06** wave (the prior one) is
-detailed below as history.
+The current wave is **W08** — summarised in the intro blockquote above and recorded in full in
+[devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md): a fixed mixer band (meter · fader · pan ·
+M/S per track column) under the Session grid + the ChannelTray made Arrange-only, built by one session-grid
+spine agent + orchestrator (gate/tray/PeakMeter-horizontal-mode), then a 4-dimension adversarial QC (NO
+blockers/majors; findings documented-not-fixed per maintainer direction).
+
+## What a prior wave did — W07 (Session-grid interactions)
+
+Recorded in [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md): delete clip · +Track · +Scene
+(dynamic scene count) · real file drag-drop, over three new `ProjectSession` seams; a 5-dimension QC fixed the
+MAJOR scene/pad `rowBand` drift + the HIGH detached-drawer-clip on delete. The **W06** wave is detailed below.
 
 ## What a prior wave did — W06: the hands-on wave, part 1 (control bar & HUD)
 
@@ -259,25 +269,27 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > the maintainer's push go-ahead + a sanitize pass). Hardware smoke tests and manual GUI passes are
 > **permanently parked** (standing constraints at the top); the path forward is the headless-provable
 > roadmap. **The active track is the hands-on wave plan** ([[forge-handson-wave-plan]]) — Waves 1 (W06) + 2
-> (W07) shipped; Waves 3–5 remain.
+> (W07) + 3 (W08) shipped; Waves 4–5 remain.
 
-1. **▶ NEXT: hands-on plan Wave 3 — per-track mixer strips under each Session column.** A compact channel
-   strip (fader / pan / M-S / sends) under each track column in the Session grid; the existing `ChannelTray`
-   becomes Arrange-only; the standalone **Mix** view stays. Run it the W06/W07 way (source-verify →
-   file-disjoint agents → orchestrator build + gates → adversarial QC). Full ticketed detail is in the plan.
-   **Two things to fold in from W07's QC:** (a) the **aux-return ordering** cosmetic — the Session grid renders
-   aux-return tracks as launch columns and `+Track` lands a new track after a Return lane; a mixer-strips wave
-   is the natural place to decide whether to filter `isAuxReturnTrack` out of the grid; (b) the +Track/+Scene
-   affordances are **grid-local only** (no menu-bar entries) — a menu-parity pass is a Fable design-authority
-   follow-up if wanted.
-2. **⚠ STILL PARTIALLY OWED: the W05 QC dimensions.** W07's QC re-exercised **undo-correctness** on the new
-   slot-delete path (dimension ②) and **shell-integration** on the new W07 surfaces (dimension ⑤) — but the
-   BROADER W05 debt is **not** cleared: the full undo-correctness sweep across all five W05 mutation hooks
-   (undo interleaved with launch/record/project-swap; the record gate) and shell-integration for **torn-off
-   popouts** (refresh fan-out + key routing with popout focus) still want a dedicated adversarial pass.
-3. **Later hands-on waves.** Wave 4 = self-rendered CC0 instruments/library + a note-writing demo project
-   (today's demo clips are EMPTY — silent); Wave 5 (deferred) = the explicit Session → Arrangement "Send to"
-   bridge (the real answer to the "Session clip doesn't appear in Arrange" note).
+1. **▶ NEXT: hands-on plan Wave 4 — self-rendered CC0 instruments/library + a note-writing demo project.**
+   Today's demo clips are **EMPTY (silent)** — the grid launches but makes no sound in the demo. Wave 4 =
+   self-rendered CC0 one-shots (no third-party packs — public AGPLv3 repo) + a small note-writing demo project
+   (4-on-floor + bass + piano) so the app is audibly playable out of the box. Run it the W06/W07/W08 way
+   (source-verify → agents → orchestrator build + gates → adversarial QC). Full ticketed detail is in the plan.
+2. **W08 deferred QC follow-ups (documented, not fixed — maintainer direction).** Best next-wave candidates:
+   (a) **the Ableton master-strip** — shorten the Session scene column to the pad viewport and fill the
+   ~168×96 empty bottom-right corner with a master strip (fader/meter over the existing MASTER "stop all"); a
+   clean self-contained ticket. (b) The two **latent strip traps** (the `refreshControls()` empty→bound re-bind
+   edge; the absolute-index-not-identity re-resolve) — one-line invariant comments now, real fixes only if a
+   strip-reuse or drag-reorder feature is added. (c) Carried from W07: **aux-return ordering** cosmetic + the
+   **grid-local-only** +Track/+Scene affordances (menu parity is a Fable call).
+3. **⚠ STILL PARTIALLY OWED: the W05 QC dimensions.** W07/W08 QC re-exercised undo-correctness + shell-integration
+   on the *new* surfaces, but the BROADER W05 debt is **not** cleared: the full undo-correctness sweep across
+   all five W05 mutation hooks (undo interleaved with launch/record/project-swap; the record gate) and
+   shell-integration for **torn-off popouts** (refresh fan-out + key routing with popout focus) still want a
+   dedicated adversarial pass.
+4. **Later hands-on waves.** Wave 5 (deferred) = the explicit Session → Arrangement "Send to" bridge (the real
+   answer to the "Session clip doesn't appear in Arrange" note).
 4. **Candidate-feature source.** [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md) — a
    ranked backlog mined from the Waveform guide (launcher expressiveness / follow-actions / performance
    recording top the list, all engine-native). Feeds planning; open design calls flagged in the doc.
@@ -316,7 +328,8 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-addtrack # appendAudioTrack gate (W07) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-scene    # dynamic scene count > 16 gate (W07) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-dragdrop # session+arrange file-import + replace-undo gate (W07) → PASS/FAIL
-& ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (incl. shell_window + session_scenes) → %TEMP%\forge_shot_*.png
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sessionmixer # per-track Session strip vol/pan/M-S sync gate (W08) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
 
@@ -489,11 +502,12 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed LOCALLY, NOT yet pushed.** W07 (`fc0fdbe` code + a docs commit) sits on the
-  `aa45ad7` baseline in the local `main`, **awaiting the maintainer's push go-ahead**; the sanitize scan ran
-  clean (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks).
-  `origin/main` tip is **`aa45ad7`** (W06 `e670ab5` + the Waveform backlog + a HANDOFF-refresh docs commit).
-  Prior pushed history:
+- **Latest work is committed LOCALLY, NOT yet pushed — THREE commits stacked.** W07 (`fc0fdbe` code +
+  `3652168` docs) and W08 (`0ad7abc` code + a docs commit) sit on the `aa45ad7` baseline in the local `main`,
+  **awaiting the maintainer's push go-ahead** (they said "launch next wave," not "push", so W08 stacked on the
+  unpushed W07); the sanitize scan ran clean (only placeholder `C:\Users\…` / `<user>` forms in doc text — no
+  real machine paths / identity leaks). `origin/main` tip is still **`aa45ad7`** (W06 `e670ab5` + the Waveform
+  backlog + a HANDOFF-refresh docs commit). Prior pushed history:
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
   `.gitignore`d — copyrighted, never committed).
