@@ -1,17 +1,18 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (this session: **W08 — the hands-on wave, part 3: per-track
-Session mixer strips** on the W07 tip `3652168` — the third build wave off the maintainer's first hands-on
-session. Delivered a **fixed mixer band under the Session grid** — a compact per-track strip (meter · fader ·
-pan · M/S; no sends) in a new `SessionMixerStrip.{h,cpp}` (the pinned scene column rotated 90°, synced to
-horizontal scroll, shrinking only the viewport so `contentH`/`rowBand` are untouched — **no W07 drift
-regression**) + the **ChannelTray made Arrange-only** + a backward-compatible horizontal mode on the shared
-`PeakMeter`. Built by one session-grid spine agent + orchestrator → clean build (0 warnings) → the
-**TWENTY-TWO-gate floor** (new `--selftest-sessionmixer`) → a **4-dimension adversarial QC** confirming **NO
-blockers/majors**; the surviving findings were **documented, not fixed (per maintainer direction)**. **all
-TWENTY-TWO selftests PASS**; the base `session` screenshot shows the mixer band. Committed + **PUSHED to
-`origin/main`** (W07 + W08, sanitize-clean). Full record →
-[devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md). Prior wave: **W07** — Session-grid
+*Living status document. Last updated 2026-07-02 (this session: **W09 — the hands-on wave, part 4:
+self-rendered instruments + an audible demo** on the W08 tip `1a59973` — the fourth build wave off the
+maintainer's first hands-on session. Makes the app **audibly playable out of the box**: per-track instrument
+presets (a 4OSC kick, a 4OSC bass, a **Sampler** loaded with a **self-rendered CC0 piano one-shot** —
+`InstrumentSamples.{h,cpp}`, xorshift32-deterministic, into `%APPDATA%\Forge\library`), a note-written C-minor
+demo (4-on-floor kick · walking bass · Cm–Ab–Bb–Cm chord stabs), and a **first-launch welcome demo**. The
+maintainer chose **HYBRID, no browsable library**. Built by one instrument-layer agent + orchestrator → clean
+build (0 warnings) → the **TWENTY-THREE-gate floor** (new `--selftest-demo`) → a **3-dimension adversarial QC**
+confirming **NO blockers/majors** (the instrument finder refuted 10 candidate bugs; one doc-drift fixed,
+hardening notes documented). **all TWENTY-THREE selftests PASS**; the base `session` screenshot shows the
+note-seeded groove. Committed locally, awaiting push. Full record →
+[devlog/wave-09-instruments.md](devlog/wave-09-instruments.md). Prior wave: **W08** — per-track Session mixer
+strips (`0ad7abc`, → [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md)); **W07** — Session-grid
 interactions (`fc0fdbe`, → [devlog/wave-07-handson-grid.md](devlog/wave-07-handson-grid.md)); **W06** — control
 bar & HUD (`e670ab5`, → [devlog/wave-06-handson.md](devlog/wave-06-handson.md)). Earlier same continuous effort: **W05**
 (`5e5dcf2`; → [devlog/wave-05-undo.md](devlog/wave-05-undo.md)); **W04b** (`cc27300`; →
@@ -530,6 +531,35 @@ agent → orchestrator (gate + tray + PeakMeter mode + build) → 4-dimension ad
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-TWO selftests PASS** (`--selftest-sessionmixer`:
   `bound/faderOk/panOk/muteOk/soloOk` all 1); the base `session` screenshot shows the band. **Committed +
   PUSHED to `origin/main`** (`0ad7abc` code + `1e1a798` docs, with W07, sanitize-clean).
+
+### W09 — the hands-on wave, part 4: self-rendered instruments + an audible demo — SHIPPED (local; awaiting push)  (baseline `1a59973`)
+Wave 4 of the hands-on plan — makes the app **audibly playable out of the box**. Built the established way:
+4 source-verify feasibility investigators → a maintainer scope decision (HYBRID, no browsable library) → one
+instrument-layer agent → orchestrator (demo builder / gate / first-launch hook / build) → 3-dimension QC. Full
+record: [devlog/wave-09-instruments.md](devlog/wave-09-instruments.md).
+- **The instrument layer** (`src/engine/dsp/InstrumentSamples.{h,cpp}` new + `PluginHost.{h,cpp}`): a procedural
+  CC0 **piano one-shot** generator (8 inharmonic partials + strike transient, xorshift32-deterministic, mono
+  44.1 kHz, temp-then-move into `%APPDATA%\Forge\library\piano.wav`, idempotent) + the **Sampler** registered as
+  a built-in + `applyInstrumentPreset(track, {Kick|Bass|Piano})` (removes any head synth, then Kick/Bass = a
+  programmed 4OSC, Piano = the Sampler loaded with the one-shot, mapped chromatically).
+- **The demo** (`main.cpp`): `seedDemoNotes` writes per-instrument patterns (kick 4-on-floor · walking C-minor
+  bass · Cm–Ab–Bb–Cm chord stabs); `populateDemoContent` applies the presets BEFORE creating clips (so
+  `ensureDefaultInstrument` no-ops) + seeds notes + adds a Keys(2,0) hero cell so **scene 0** is a coherent
+  kick+bass+piano groove; `launchScene(0)` for the screenshot.
+- **First-launch welcome demo** (`main.cpp:206`): a brand-new user (fresh default project) opens into the
+  playable demo — in-memory only, does not auto-play, File > New still gives empty, and it does not reappear on
+  the 2nd launch. A meaningful launch-behavior change, flagged for the maintainer.
+- **Gate `--selftest-demo`** (floor 22→23): the Kick preset is a 4OSC, the Piano preset is a real Sampler, the
+  piano one-shot exists on disk, and a seeded clip holds notes.
+- **QC (3 dimensions): NO blockers/majors — all CLEAN.** The instrument-layer finder refuted 10 candidate bugs
+  against the engine source; the demo/first-launch finder refuted the preset-stacking + launch-behavior worries;
+  hygiene/determinism/CC0 all confirmed. One LOW doc-drift fixed (SELFTEST scene 3→0). Non-blocking hardening
+  notes documented: a render/ingestion gate leg (prove the Sampler *ingested* the one-shot), and `looksValid`
+  size-vs-decodability.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-THREE selftests PASS** (`--selftest-demo`:
+  `kickIsSynth/pianoIsSampler/pianoFileExists/clipHasNotes` all 1, `noteCount=16`); the base `session`
+  screenshot shows the note-seeded groove (Keys = a Sampler). **Committed locally; not pushed** (awaiting the
+  maintainer's go-ahead).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

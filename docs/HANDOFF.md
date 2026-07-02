@@ -2,29 +2,29 @@
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of the
-> **"W08 — the hands-on wave, part 3: per-track Session mixer strips"** wave — the third build wave off the
-> maintainer's first hands-on session. ⚠ **W05's owed adversarial-QC dimensions remain PARTIALLY owed** (the
-> broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout focus routing were not
-> re-run this wave).
+> **"W09 — the hands-on wave, part 4: self-rendered instruments + an audible demo"** wave — the fourth build
+> wave off the maintainer's first hands-on session. ⚠ **W05's owed adversarial-QC dimensions remain PARTIALLY
+> owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout focus routing
+> were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07 (`fc0fdbe` code + `3652168` docs) and W08 (`0ad7abc` code + `1e1a798` docs) are PUSHED to
-`origin/main`** (sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings)
-· **all TWENTY-TWO selftests PASS**
-— the W07 twenty-one plus **`--selftest-sessionmixer`**; `--screenshot`'s 10-state matrix's base `session`
-state now shows the mixer band.
-Shipped (the hands-on plan's Wave 3): a **fixed mixer band under the Session clip grid** — a compact per-track
-strip (**meter · horizontal fader · pan · M/S**, maintainer-chosen; no sends) under each track column, in a
-new `SessionMixerStrip.{h,cpp}` modeled on `ChannelTray` (R1 identity re-resolve; `WeakReference` meter; reuses
-`forge::strip` + `PeakMeter`). The band is the **pinned scene column rotated 90°** — a sibling of the viewport,
-synced to `getViewPositionX()`, shrinking ONLY the viewport so `contentH`/`rowBand` are untouched (**no W07
-scene-drift regression** — QC-confirmed byte-identical). Aux returns render **in-place** (tinted, no grid
-filtering). The **ChannelTray became Arrange-only** (2 `main.cpp` guards; Mix view untouched). The shared
-`PeakMeter` gained a backward-compatible **horizontal mode**. W08 adversarial QC (4 dimensions × per-finding
-skeptics): **NO blockers, NO majors**; the surviving findings were **DOCUMENTED, not fixed (per maintainer
-direction)** — see the deferred list below + [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md).
-The remaining hands-on plan (Waves 4–5) + the locked decisions (+session = scene · self-rendered CC0 ·
-Session/Arrange stay separate) are in the maintainer's memory ([[forge-handson-wave-plan]]).
+**`main`**. W07 (`fc0fdbe`) + W08 (`0ad7abc`) are on `origin/main`; **W09 (`573170c` code + a docs commit) is
+COMMITTED LOCALLY — awaiting the maintainer's push go-ahead.** Last build **clean** (MSVC Debug, 0 warnings) ·
+**all TWENTY-THREE selftests PASS** — the W08 twenty-two plus **`--selftest-demo`**; `--screenshot`'s base
+`session` state now shows the note-seeded groove (Keys = a Sampler, scene 0 the hero groove).
+Shipped (the hands-on plan's Wave 4): the app is **audibly playable out of the box** — per-track instrument
+presets (a 4OSC **kick**, a 4OSC **bass**, and a **Sampler** loaded with a **self-rendered CC0 piano
+one-shot**), a note-written **C-minor demo** (4-on-floor kick · walking bass · Cm–Ab–Bb–Cm chord stabs), and a
+**first-launch welcome demo** (a brand-new user opens into a playable session; File > New still gives empty;
+in-memory only, does not auto-play). NEW: `InstrumentSamples.{h,cpp}` (a procedural CC0 piano one-shot,
+xorshift32-deterministic, generated into `%APPDATA%\Forge\library`) + `PluginHost::applyInstrumentPreset` + the
+Sampler registered as a built-in instrument. The maintainer chose **HYBRID, no browsable library** (a browsable
+library needs new browser→slot interaction, deferred to its own wave). W09 adversarial QC (3 dimensions):
+**NO blockers, NO majors** — all clean (the instrument-layer finder refuted 10 candidate bugs against the
+engine source); one doc-drift fixed, hardening notes documented. Full record →
+[devlog/wave-09-instruments.md](devlog/wave-09-instruments.md). The remaining hands-on plan (Wave 5) + the
+locked decisions (+session = scene · self-rendered CC0 · Session/Arrange stay separate) are in the maintainer's
+memory ([[forge-handson-wave-plan]]).
 
 > **⚠ W08 deferred findings (found by QC, NOT fixed — maintainer said document-only):** ① **[LOW/cosmetic] the
 > Ableton master-strip opportunity** — the scene column runs full-height while the band shortens only the pad
@@ -64,13 +64,19 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W08 (per-track Session mixer strips)
+## What the LATEST wave did — W09 (self-rendered instruments + an audible demo)
 
-The current wave is **W08** — summarised in the intro blockquote above and recorded in full in
-[devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md): a fixed mixer band (meter · fader · pan ·
-M/S per track column) under the Session grid + the ChannelTray made Arrange-only, built by one session-grid
-spine agent + orchestrator (gate/tray/PeakMeter-horizontal-mode), then a 4-dimension adversarial QC (NO
-blockers/majors; findings documented-not-fixed per maintainer direction).
+The current wave is **W09** — summarised in the intro blockquote above and recorded in full in
+[devlog/wave-09-instruments.md](devlog/wave-09-instruments.md): per-track instrument presets (4OSC kick/bass +
+a Sampler with a self-rendered CC0 piano one-shot), a note-written C-minor demo, and a first-launch welcome
+demo, built by one instrument-layer agent + orchestrator (demo builder / gate / first-launch hook), then a
+3-dimension adversarial QC (NO blockers/majors; the instrument-layer finder refuted 10 candidate bugs).
+
+## What a prior wave did — W08 (per-track Session mixer strips)
+
+Recorded in [devlog/wave-08-session-mixer.md](devlog/wave-08-session-mixer.md): a fixed mixer band (meter ·
+fader · pan · M/S per track column) under the Session grid + the ChannelTray made Arrange-only; a 4-dimension
+QC found no blockers/majors (findings documented-not-fixed per maintainer direction).
 
 ## What a prior wave did — W07 (Session-grid interactions)
 
@@ -268,14 +274,20 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > W07 + W08 are **committed + PUSHED to `origin/main`** (sanitize-clean). Hardware smoke tests and manual GUI passes are
 > **permanently parked** (standing constraints at the top); the path forward is the headless-provable
 > roadmap. **The active track is the hands-on wave plan** ([[forge-handson-wave-plan]]) — Waves 1 (W06) + 2
-> (W07) + 3 (W08) shipped; Waves 4–5 remain.
+> (W07) + 3 (W08) + 4 (W09) shipped; only Wave 5 remains.
 
-1. **▶ NEXT: hands-on plan Wave 4 — self-rendered CC0 instruments/library + a note-writing demo project.**
-   Today's demo clips are **EMPTY (silent)** — the grid launches but makes no sound in the demo. Wave 4 =
-   self-rendered CC0 one-shots (no third-party packs — public AGPLv3 repo) + a small note-writing demo project
-   (4-on-floor + bass + piano) so the app is audibly playable out of the box. Run it the W06/W07/W08 way
-   (source-verify → agents → orchestrator build + gates → adversarial QC). Full ticketed detail is in the plan.
-2. **W08 deferred QC follow-ups (documented, not fixed — maintainer direction).** Best next-wave candidates:
+1. **▶ NEXT: hands-on plan Wave 5 (the last) — the Session → Arrangement "Send to" bridge.** An explicit,
+   one-directional "Send to Arrangement" action (never auto-mirror — a locked decision): take a Session
+   clip/scene and place it on the linear Arrange timeline. This is the real answer to the maintainer's "Session
+   clip doesn't appear in Arrange" note. Run it the established way (source-verify → agents → orchestrator build
+   + gates → adversarial QC). After Wave 5 the hands-on plan is complete; the Waveform feature-mining backlog
+   (item 5) becomes the next planning source.
+2. **W09 follow-ups (documented, not fixed).** (a) **A render/ingestion gate leg** — `--selftest-demo` proves the
+   piano one-shot exists on disk + the Sampler is inserted, but not that the Sampler *ingested* the sample (an
+   async load); pumping the loop + asserting a note renders to non-zero audio would prove the final audible link.
+   (b) The **browsable CC0 instrument library** (deferred from W09's scope choice) — needs the missing
+   browser→Session-slot interaction; its own wave.
+3. **W08 deferred QC follow-ups (documented, not fixed — maintainer direction).** Best next-wave candidates:
    (a) **the Ableton master-strip** — shorten the Session scene column to the pad viewport and fill the
    ~168×96 empty bottom-right corner with a master strip (fader/meter over the existing MASTER "stop all"); a
    clean self-contained ticket. (b) The two **latent strip traps** (the `refreshControls()` empty→bound re-bind
@@ -328,6 +340,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-scene    # dynamic scene count > 16 gate (W07) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-dragdrop # session+arrange file-import + replace-undo gate (W07) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sessionmixer # per-track Session strip vol/pan/M-S sync gate (W08) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-demo     # audible demo: instrument presets + seeded notes (W09) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -501,10 +514,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe` code + `3652168` docs) and W08
-  (`0ad7abc` code + `1e1a798` docs) are on **`origin/main`** — the sanitize scan ran clean before the push
-  (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity leaks). Local
-  `main` == `origin/main`. Prior pushed history: W06 (`e670ab5` / `aa45ad7`),
+- **W09 is committed LOCALLY, NOT yet pushed; W07 + W08 are on `origin/main`.** W09 (`573170c` code + a docs
+  commit) sits on the W08 tip in the local `main`, **awaiting the maintainer's push go-ahead**; the sanitize
+  scan ran clean (only placeholder `C:\Users\…` / `<user>` forms in doc text — no real machine paths / identity
+  leaks). `origin/main` tip is the W08 docs commit (`1e1a798`). Prior pushed history: W08 (`0ad7abc`), W07
+  (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
   `.gitignore`d — copyrighted, never committed).
