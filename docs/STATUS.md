@@ -1,18 +1,18 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-01 (this session: **W02 — MIDI-learn HW routing · Forge-native
-control surface · offline LUFS** — three engine-facing feature seams (roadmap items 2a / 3 / 4) built against
-source-verified Tracktion facts and proven headless, in **ONE scoped commit `bb9ef5e`** on top of `1eb876d`.
-**Committed + PUSHED to `origin/main`** (docs commits `d5dbe1a` + `2da5f16` follow it; the pushed set was
-sanitized); working tree clean: clean MSVC Debug build (0 warnings); **all EIGHT selftests PASS** — `--selftest`, `--selftest-record`,
-`--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
-`--selftest-controlsurface`, `--selftest-lufs`; full record → [devlog/wave-02-features.md](devlog/wave-02-features.md).
-Prior session: **Wave 01 — six parallel feature seams** (Forge's first multi-CLI wave — metronome + count-in ·
-MIDI-learn (Ctrl+L) · buses/sends (A/B aux) · async export + progress · markers · anti-click clip edge-fade;
-**pushed**, `e3b8c7c`; full record → [devlog/wave-01-features.md](devlog/wave-01-features.md)). Before that:
-**W7 — MIDI record into Session clip slots** (`160f6cc`, verdict A, proven by `--selftest-midi`), and
-**Session-grid vertical scroll** + an **app-wide logging + error-handling subsystem** (`src/core/Log.*`,
-logging-at-the-seam a standing build principle; `8d15234`).)*
+*Living status document. Last updated 2026-07-01 (this session: **W03 — automation lanes · MIDI-clock out ·
+async LUFS · live cross-surface refresh · INTERFACE.md rewrite** — four engine/UI features + a docs rewrite,
+built by a tiered multi-agent wave on baseline `cede941` and proven by THREE new headless gates on an
+**eleven-gate floor**; adversarial QC confirmed 9 findings (1 blocker) — all fixed — and the new sync gate
+exposed + fixed a **latent product UAF** in the mixer's master meter (a raw pointer into the playback
+context's level measurer). Clean MSVC Debug build (0 warnings); **all ELEVEN selftests PASS** — `--selftest`,
+`--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
+`--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
+`--selftest-livesync`; full record → [devlog/wave-03-features.md](devlog/wave-03-features.md). Prior session:
+**W02 — MIDI-learn HW routing · Forge-native control surface · offline LUFS** (`bb9ef5e`, pushed; →
+[devlog/wave-02-features.md](devlog/wave-02-features.md)). Before that: **Wave 01 — six parallel feature
+seams** (`e3b8c7c`, pushed; → [devlog/wave-01-features.md](devlog/wave-01-features.md)); **W7 — MIDI record
+into Session clip slots** (`160f6cc`); **Session-grid vertical scroll + the logging subsystem** (`8d15234`).)*
 *Primary product direction (Session/scene-based, controller-driven) is in **[DIRECTION.md](DIRECTION.md)** —
 it supersedes any "arrangement-first" framing still in this file pending a Session-first rewrite.*
 *For picking the project back up cold, start with **[HANDOFF.md](HANDOFF.md)**.*
@@ -33,7 +33,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
 | **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
-| **Code size** | ~8,400 lines of Forge source (engine/JUCE excluded) across 43 files |
+| **Code size** | ~15,800 lines of Forge source (engine/JUCE excluded) across 68 files |
 
 ---
 
@@ -340,6 +340,44 @@ offered for item 4, the user chose LUFS); **Launchpad first** (APC40 deferred). 
   clean (control surface constructs inert, logs "no Launchpad input found — control surface inactive"). The
   export-done LUFS readout + Ctrl+L MIDI-learn still want a maintainer-only GUI smoke pass.
 
+### W03 — automation lanes · MIDI-clock out · async LUFS · live refresh — SHIPPED  (this session; baseline `cede941`)
+Four engine/UI features + the INTERFACE.md Session-first rewrite, selected for **headless provability** (the
+maintainer has no MIDI hardware and runs no manual tests — a standing constraint now, so hardware smoke items
+stay parked). Process: 4 source-verify spikes → 3 adversarial skeptics (one refuted + corrected the sync
+recipe pre-build) → 6 file-disjoint implementation agents on **tiered models** → orchestrator integration
+(3 new gates) → an 18-agent adversarial QC (9 confirmed, 1 refuted, all fixed). Full record:
+[devlog/wave-03-features.md](devlog/wave-03-features.md).
+- **Automation lanes** (`engine/AutomationHelpers.h` + `ui/arrange/AutomationLane.{h,cpp}` + ArrangeView): a
+  header-only seam over each track's VolumeAndPanPlugin curves (units = fader position 0..1 / pan −1..+1;
+  every mutator ends in `updateStream()` — activation is otherwise async) + a collapsible 46 px per-track
+  lane in Arrange (an **A** toggle beside M/S/R; click adds, drag moves, right-click deletes/clears; Volume|Pan
+  selector; pixel-exact via the shared `TimelineView` axis). The lane listens for `curveHasChanged` so
+  external curve edits (mixer fader single-point move — accepted engine semantics — MIDI-learn, undo) repaint
+  live. Points persist in the `.tracktionedit` automatically. Proven by **`--selftest-automation`**.
+- **MIDI-clock out** (`engine/MidiClockSync.h` + `engine/MidiClockProbe.h` + TransportBar **Clock** toggle):
+  per-device `setSendingClock` through a small seam. Proven by **`--selftest-sync`** — a probe subclass
+  captures the ACTUAL wire bytes (SPP, start, 24 PPQN clock train within 0.5–1.5× expected, stop), with an
+  honest SKIP-degrade on zero-MIDI-out machines and a fully lossless teardown (device entry, scan interval,
+  and NAME-keyed persisted props all restored). **Ableton Link deferred** — the wrapper is compiled out and
+  the library is NOT vendored (a dependency + license decision).
+- **LUFS off the message thread** (`Exporter` + `LoudnessAnalyzer`): analysis now runs on the export render
+  worker after the WAV closes; the message thread receives only a finished value under the existing alive
+  token; a per-chunk **abort predicate** keeps `~AsyncRender`'s 5 s join bound honest. The W02 QC callback
+  invariant is preserved verbatim. `--selftest-lufs` gained file+thread and abort legs.
+- **Live cross-surface refresh** (MixerView + DetailView): the 28 Hz mixer tick runs a structural guard then
+  guarded engine→widget sync (drag brackets, focus, `dontSendNotification`; repaint/allocation-free steady
+  state; zero tick logging); DetailView polls at 10 Hz. Proven by **`--selftest-livesync`**.
+- **The hang that became a product fix:** the first sync-gate run froze at shutdown — bisected to the master
+  strip's PeakMeter holding a raw pointer into `EditPlaybackContext::masterLevels`, whose owner (the playback
+  context) the gate freed; `removeClient` then walked freed memory. Reachable in the real app via device
+  restarts. Fixed by holding meter sources as **`juce::WeakReference<te::LevelMeasurer>`** (self-nulling on
+  owner death) — one mechanism also covering the plugin-cull race on track meters (QC major).
+- **QC blockers/majors fixed:** a deterministic ReturnStrip 28 Hz UAF after deleting an aux-return track
+  (re-resolve-before-deref, the R1 rule); the Clock toggle left unwired at integration (the gate drove the
+  seam directly — exactly the gap adversarial QC exists to catch); the meter cull race; the stale automation
+  lane on external curve edits. Plus 5 minors (degrade-path roll, props restore, drag clamp, hit-test z-order,
+  INTERFACE.md tense).
+
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
 Now **hardened against a default-device hot-swap** (a headset unplug falling back to onboard audio): the
@@ -381,6 +419,9 @@ src/
 │   └── export/Exporter            render the Edit → 24-bit WAV (whole-edit mixdown + per-track stems); async render + progress/cancel; offline BS.1770-4 LUFS on the render (→ export-done status strip)
 ├── engine/
 │   ├── EngineHelpers.h            track insert, clip load, file chooser, transport toggles, lazy record-input open, track vol/pan
+│   ├── AutomationHelpers.h        header-only automation seam over VolumeAndPanPlugin curves — add/move/remove/clear points, every mutator commits the stream (W03)
+│   ├── MidiClockSync.h            MIDI-clock-out seam (setSendClockToAll/isSendingClockAny over the device manager; W03)
+│   ├── MidiClockProbe.h           selftest-only MidiOutputDevice subclass capturing wire bytes for --selftest-sync (W03)
 │   ├── RecordController           recording recipe (enable/arm/record) + disarm + isTrackArmed; MIDI slot record (enableMidiInputs, armFirstMidiInputToSlot/…ToTrack, disarmSlot/…MidiTrack, isSlotMidiArmed/isTrackMidiArmed)
 │   ├── ForgeUIBehaviour           te::UIBehaviour subclass — reports the app's open Edit as the focused Edit so the engine's native CC→param routing reaches it (MIDI-learn HW routing, W02 2a)
 │   ├── GridControlDriver.h        device-agnostic grid-controller driver seam (W02 item 3)
@@ -393,7 +434,8 @@ src/
     ├── ForgeLookAndFeel.h         dark amber theme (colour IDs)
     ├── ControlBar                 merged top strip + view-switch + region toggles + Plugins/Export menu
     ├── transport/TransportBar     play/stop/rec/loop + timecode/bars|beats
-    ├── arrange/ArrangeView        ruler + snap-division selector, lanes (M/S/R + colour), clips (waveform, drag, snap), selection, playhead
+    ├── arrange/ArrangeView        ruler + snap-division selector, lanes (M/S/R/A + colour), clips (waveform, drag, snap), selection, playhead
+    ├── arrange/AutomationLane     collapsible per-track volume/pan automation sub-lane (point add/drag/delete, curve-change listener; W03)
     ├── mixer/MixerView            channel strips (fader/pan/M/S), insert slots (bypass + reorder), master strip + post-fader meter
     ├── plugins/PluginWindow       floating plugin editor windows (native / generated)
     ├── browser/BrowserView        left-region file browser (double-click → import)
@@ -478,6 +520,15 @@ tests/  SELFTEST.md
   empty slot (Ctrl+Enter / right-click "Record into slot") into a born-audible `MidiClip`; transport-driven
   (verdict A), proven by `--selftest-midi`. Its own MIDI enable sequence in `RecordController`. **Post-MVP
   remaining:** horizontal auto-scroll-to-clip. Live GUI draw→play path still needs a manual smoke pass.
+- [x] **W03 — automation lanes + MIDI-clock out + async LUFS + live refresh — DONE** (this session).
+  Volume/pan automation lanes in Arrange (`--selftest-automation`); MIDI-clock out with a wire-byte capture
+  gate (`--selftest-sync`); LUFS analysis on the render worker with an abort guard (extended
+  `--selftest-lufs`); live cross-surface refresh (`--selftest-livesync`); INTERFACE.md rewritten
+  Session-first. QC: 9 confirmed findings fixed incl. a latent master-meter UAF (now
+  `WeakReference`-sourced meters) and a ReturnStrip 28 Hz UAF. **Remaining:** Ableton Link (vendoring
+  decision); aux-send knobs/return inserts not live-synced; the W04 UX wave (menu bar, popouts, slide-outs,
+  section scaling, sequence lighting, tempo indicators, semantic accents, state-matrix screenshots).
+  Details: [devlog/wave-03-features.md](devlog/wave-03-features.md).
 - [x] **W02 — MIDI-learn HW routing + control surface + offline LUFS — DONE** (`bb9ef5e`, pushed to
   `origin/main`). Focused-Edit `ForgeUIBehaviour` (item 2a, `--selftest-midiinput`); a Forge-native grid
   control-surface driver + a Novation Launchpad driver (item 3, `--selftest-controlsurface`; byte mapping needs a
@@ -510,7 +561,7 @@ tests/  SELFTEST.md
 | 0 — Toolchain | Build + first sound | ✅ done |
 | 1 — The spine | Record & play a track (load/save, import, transport, playhead, record) | ✅ done (device-override fixed; **recording verified end-to-end on real hardware**) |
 | 2 — Mixer & plugins | Volume/pan/mute/solo, buses, sends; **VST3/AU hosting**; built-in FX | ✅ done (strips/inserts/meters/master + insert bypass/reorder + plugin hosting + external scan UI + floating windows + **buses/sends (aux A/B, W01 P3)** done) |
-| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish + W7 record built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; **W7 MIDI record into Session slots done** (`160f6cc`, verdict A, `--selftest-midi` PASS → `docs/devlog/midi-record-design.md`); **MIDI-learn param mapping (W01 P2) + its HW-routing focused-Edit `ForgeUIBehaviour` (W02 item 2a, `--selftest-midiinput` PASS)** done; automation to do) |
+| 3 — MIDI & editing | MIDI tracks + piano roll; built-in synth; non-destructive audio editing; automation | ⏳ (**MIDI MVP + W6 polish + W7 record built** — draw a clip + hear it via 4OSC, polymorphic `ClipComponent`, piano-roll with velocity/multi-select/copy-paste → `docs/devlog/midi-build.md`; **W7 MIDI record into Session slots done** (`160f6cc`, verdict A, `--selftest-midi` PASS → `docs/devlog/midi-record-design.md`); **MIDI-learn param mapping (W01 P2) + its HW-routing focused-Edit `ForgeUIBehaviour` (W02 item 2a, `--selftest-midiinput` PASS)** done; **volume/pan automation lanes (W03, `--selftest-automation` PASS)** done — plugin-param lanes to do) |
 | 4 — Polish | Comping, metering (LUFS), export (WAV/MP3/stems), markers, snap | ⏳ (peak meters + WAV mixdown + per-track stems + snap-division + **markers (W01 P5)** + **async export w/ progress (W01 P4)** + **metronome/count-in (W01 P1)** + **anti-click edge-fade (W01 P6)** + **offline BS.1770-4 LUFS on export (W02 item 4, `--selftest-lufs` PASS)** done; comping to do) |
 | 5 — Deferred | Sidechain, warp, controller mapping, advanced routing, video | ⏳ (**controller mapping — a Forge-native grid control-surface driver + a Novation Launchpad driver built (W02 item 3, `--selftest-controlsurface` PASS; byte mapping needs a real device), APC40 mkII deferred**; sidechain/warp/routing/video to do) |
 
@@ -545,15 +596,19 @@ surface is becoming the **Session clip grid**, so the sequence is reordered arou
    mkII** driver (deferred — its faders/transport/metering are where the framework carries real plumbing).
 3. **MIDI input roles.** ✅ **W7 note-record into slots DONE** (`160f6cc`); ✅ **MIDI-learn param mapping (W01 P2)
    + its HW-routing focused-Edit `ForgeUIBehaviour` (W02 item 2a, `--selftest-midiinput`)** DONE — real physical-CC
-   drive is a real-hardware smoke item (a virtual device has no `controllerParser`). Still to do: **MIDI-clock /
-   Ableton Link** sync.
+   drive is a real-hardware smoke item (a virtual device has no `controllerParser`). ✅ **MIDI-clock OUT DONE
+   (W03, `--selftest-sync`)**. Still to do: **Ableton Link** — the engine wrapper is compiled out and the Link
+   library is NOT vendored; enabling it is a dependency + license decision, deferred.
 4. **Done this slice (now reusable inside slots/scenes):** ✅ recording verified on real hardware; ✅ MIDI
    MVP + W6 piano-roll polish (draw + hear, velocity / multi-select / copy-paste); ✅ **W7 MIDI record into
    Session slots**. A **manual GUI smoke pass** of the draw→play + slot-record path is still worth doing.
 5. **Carried-over polish.** ✅ buses/sends + async export + markers (W01), ✅ **offline LUFS on export (W02
-   item 4)**; still to do: automation (volume/pan/plugin-param lanes); comping; an optional **live short-term LUFS
+   item 4, moved onto the render worker in W03)**, ✅ **volume/pan automation lanes + live cross-surface
+   refresh (W03)**; still to do: plugin-param automation lanes; comping; an optional **live short-term LUFS
    meter** (would require forking the engine for a post-fader sample tap — no non-mutating tap exists today);
-   off-thread record-input open.
+   off-thread record-input open. **Next planned: the W04 UX wave** (menu bar, popouts/slide-outs, section
+   scaling + persistence, scene layout polish, sequence lighting, tempo indicators, semantic accents,
+   state-matrix screenshots — see INTERFACE.md).
 
 ---
 

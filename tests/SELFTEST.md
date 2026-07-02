@@ -190,12 +190,62 @@ The acceptance gate for **W02 item 4 — offline LUFS** (design:
 integrated-loudness analyzer (K-weighting biquads, 400 ms/75%-overlap gating, −70 LUFS abs + −10 LU rel gates) on
 a known signal and checks it against the spec reference: a mono full-scale 1 kHz sine measures **−3.00 LUFS**.
 
-**Asserts:** the analyzer's integrated loudness for a mono full-scale 1 kHz sine is **−3.00 LUFS within ±0.5 LU**.
+**Asserts:** (buffer leg) the analyzer's integrated loudness for a mono full-scale 1 kHz sine is **−3.00 LUFS
+within ±0.5 LU**; (file+thread leg, W03) `analyzeFile` run on a spawned worker thread — the exact static path
+the async export worker executes — agrees with the buffer-fed result within **0.1 LU**; (abort leg, W03) an
+always-true abort predicate returns the silence sentinel promptly, proving the cancel/teardown guard.
 
 > The ±0.5 LU tolerance is the BS.1770-4 reference-signal check. **Live master LUFS is not offered:** the
 > read-only `tracktion_engine` submodule exposes no post-fader sample tap and JUCE sums secondary callbacks, and
 > integrated loudness is a whole-program measurement — so the analysis runs on the export render (offline), which
-> is the correct tool. The measured integrated LUFS is surfaced in the export-done status strip.
+> is the correct tool. Since W03 that analysis runs **on the render worker thread** (the UI never blocks); the
+> measured integrated LUFS is surfaced in the export-done status strip.
+
+## `Forge --selftest-automation` (volume-curve automation read)
+
+The acceptance gate for **W03 — automation lanes** (design:
+[../docs/devlog/wave-03-features.md](../docs/devlog/wave-03-features.md)). Imports a tone on track 0, writes a
+falling 2-point volume curve through the `AutomationHelpers` seam (fader position 0.8 @ 0 s → 0.2 @ 2 s,
+linear), forces the read stream live (`updateStream` — activation is otherwise deferred to a 10 ms engine
+timer), rolls the transport, and polls `volParam->getCurrentValue()` at 10 Hz (bounded ~4 s, looping off).
+
+### PASS criteria (all must hold)
+- preconditions: curve active, exactly 2 points, static `getValueAt(1.5 s)` = 0.35 ± 0.01, automation read ON;
+- the FIRST poll tick (early sample) reads **≥ 0.7**;
+- a tick in the 1.5–2.4 s window (late sample) reads **≤ 0.45** — the curve demonstrably drives the parameter
+  during playback.
+
+## `Forge --selftest-sync` (MIDI-clock output, end-to-end)
+
+The acceptance gate for **W03 — MIDI-clock out** (design:
+[../docs/devlog/wave-03-features.md](../docs/devlog/wave-03-features.md)). Captures the engine's ACTUAL clock
+bytes: a probe subclass of `te::MidiOutputDevice` overrides the virtual `sendMessageNow` (the seam that writes
+to the wire, downstream of the real graph + 24 PPQN generator + 1 ms dispatcher) and logs every message. The
+gate freezes the periodic MIDI rescan, evicts the engine's same-NAME device entry (restored at teardown),
+injects the probe as sole owner of a real system MIDI out (on stock Windows: the Microsoft GS software synth),
+rolls ~2 s, stops, yields 300 ms for the dispatcher to flush the stop edge, then verifies. The real device's
+persisted props (shared by NAME with the probe) are snapshotted and losslessly restored.
+
+### PASS criteria (all must hold)
+- probe enabled + its port actually opened (checked via the underlying device, never `openDevice()`'s
+  return string) + `setSendingClock` round-trips + transport rolled;
+- captured: ≥ 1 song-position pointer, ≥ 1 start/continue, clock count within **0.5×–1.5×** of
+  `seconds × (bpm/60) × 24`, ≥ 1 stop after the stop edge.
+- **Zero-MIDI-outs machines degrade honestly** (`skip-degraded=1`): property round-trip + no-crash roll only —
+  the gate never claims clock-out it didn't capture.
+
+## `Forge --selftest-livesync` (cross-surface live refresh)
+
+The acceptance gate for **W03 — live cross-surface refresh** (design:
+[../docs/devlog/wave-03-features.md](../docs/devlog/wave-03-features.md)). Writes engine-side values exactly as
+another surface would, then forces one sync tick through the views' deterministic test seams (the mirrors of
+their poll timers).
+
+### PASS criteria (all must hold)
+- mixer leg: after `setTrackVolumeDb(−12)` + `setMute(true)` and one `refreshControls()`, strip 0's fader reads
+  **−12 dB ± 0.15** (0.1 slider snap + fader-curve round-trip) and its mute reads true;
+- inspector leg: after `setGainDB(−6)` and one `refreshNow()`, the gain slider reads **−6 dB ± 0.1** —
+  no re-select, no rebuild.
 
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 

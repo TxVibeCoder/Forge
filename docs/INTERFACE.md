@@ -1,119 +1,126 @@
 # Forge — Interface Plan
 
-*How Forge looks and is laid out. Companion to ARCHITECTURE.md (the engine/design) and
-FEATURE_CATALOG.md (the feature landscape). Informed by a study of Ableton Live, Logic,
-Pro Tools, Cubase, and Reaper interfaces.*
+> **Session-first.** Forge's primary surface is the Session clip grid, played from mouse + keyboard today
+> and — one day — from external grid controllers (Launchpad / APC40 mkII) over MIDI. This document describes
+> **how the UI looks and is laid out**; it does not set product direction. Read
+> **[DIRECTION.md](DIRECTION.md)** first (the authoritative product brief — Session-first, controller-driven),
+> then **[STATUS.md](STATUS.md)** for what is actually shipped, then **[HANDOFF.md](HANDOFF.md)** for the
+> current state. Companion to [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design) and
+> [FEATURE_CATALOG.md](FEATURE_CATALOG.md) (the feature landscape).
 
-## Direction
+*This is a rewrite (W03) of the prior arrangement-first 7-phase plan, which is superseded per
+[DIRECTION.md](DIRECTION.md). Everything here reflects only what STATUS.md records as shipped or explicitly
+in-flight; anything else is marked planned. No counts, dates, or commit hashes are asserted beyond what those
+docs already state.*
 
-> **⚠ Direction reset (2026-06-30):** Forge is a **sample / scene-based DAW** — the **Session clip grid
-> is the PRIMARY surface**, played from Ableton-style grid controllers (Launchpad / APC40 mkII), with
-> **Arrange a secondary view**. The authoritative brief is **[DIRECTION.md](DIRECTION.md)**; it supersedes
-> the older "arrangement-first / Session deferred" framing that parts of this plan below still reflect
-> (being reworked Session-first).
+---
 
-Adopt **Ableton Live's look + interaction model** — single-window discipline, the collapsible regional
-skeleton, the "one bottom panel, many modes" detail view, keyboard-driven collapse, hover help, and colour
-as a first-class attribute. The center is a *view slot* driven by a `ViewMode` enum — now
-**`{Session, Arrange, Mixer}` with Session the default/primary** (was `{Arrange, Mixer}`). Views render the
-same Edit. The **Session grid** maps to Tracktion's clip-launcher (`ClipSlot` / scenes / `LaunchHandle`) and
-is driven both on-screen and from hardware grid controllers by the **same pad-colour/state model** — the
-control surface is a first-class input, not an afterthought (see [DIRECTION.md](DIRECTION.md)).
+## 1. UI identity + design charter
 
-## Window layout — `ForgeShell` (evolves from today's `MainComponent`)
+Forge's screen surface is **Ableton-style**: single window, a Session clip grid as the primary lens over the
+Edit, a secondary linear Arrange view, and a full-window Mixer — all driven by the same underlying project
+state, never separate documents.
 
-One resizable `juce::DocumentWindow` → a single shell Component with a fixed regional
-skeleton. Nothing spawns OS windows except plugin GUIs (and explicit tear-offs later).
-Layout uses **nested `StretchableLayoutManager`s** (one per axis — never one manager for a
-2-D grid) with draggable `StretchableLayoutResizerBar`s; collapse = set a region's size to 0
-and re-lay-out.
+- **Dark theme, fixed.** No light mode. One shared `ForgeLookAndFeel` installed via
+  `setDefaultLookAndFeel`; all colors route through LookAndFeel colour IDs (zero hard-coded colors in views)
+  so any future theme pass is one centralized change.
+- **"Clean means organized, not minimal."** Forge does not shrink its feature set to fit a sparse screen — it
+  organizes full feature density behind structured navigation: menus, submenus, collapsible sidebars, and a
+  bottom drawer that swaps modes by selection. A lean *default* layout (secondary regions collapsed) keeps the
+  first impression uncluttered, but every feature stays reachable, not hidden behind a minimalist cut.
+- **A small semantic accent-colour vocabulary, used as wayfinding.** One colour = one meaning, everywhere it
+  appears, applied conservatively (accents mark state, they don't decorate):
+  - **Interactive / selected accent** — the default UI accent (currently warm amber): focus, selection,
+    active toggle.
+  - **Record red** — reserved strictly for active recording and clip-clipping. Never repurposed for generic
+    "danger" or "delete" affordances.
+  - **Play / launch green** *(planned — today only the interactive accent and record red are distinct; see
+    §4)* — playing and queued-to-play clip/scene states in the Session grid, distinct from the interactive
+    accent so "this is live" reads at a glance.
+  - **A time/tempo accent** *(planned — see §4)* — playhead, tempo/metronome indicators, and other
+    transport-clock elements share one colour family so anything tempo-derived is visually grouped.
+- **Dynamic, beat-accurate visuals** *(planned — see §4 sequence lighting / tempo indicators)*. Every
+  beat-synced element on screen — Session-grid sequence lighting on pads, tempo indicators, metronome flash —
+  derives its timing from the **engine transport/tempo**, never from a free-running UI timer. A UI poll may
+  *read* the engine's beat/tempo position at a display rate, but the beat boundary itself is always computed
+  from transport state, so visuals never drift from what's actually playing.
+- **A traditional top menu bar as the discoverable command index.** File / Edit / View / Track / Transport /
+  Options / Help via JUCE's `MenuBarModel`, with keyboard shortcuts displayed beside each item. This is the
+  exhaustive, discoverable index of everything Forge can do — the Control Bar and context menus remain the
+  fast path for the same commands, but the menu bar is the one place a new user (or a rarely-used command) can
+  always be found. *(Planned — see §4.)*
 
-| Region | Location | Nature | Default | Toggle |
-|---|---|---|---|---|
-| **Control Bar** | top, full width, ~44px | docked, always on | open | — (clusters via View menu) |
-| **Browser / Inspector** | left of work zone | collapsible slide-out (Browse + Inspect tabs) | collapsed early | `B` / `I` + edge button, resizable |
-| **Center view slot** | center | tabbed view (Arrange / Mixer / Session-later) | open, Arrange | F9 / F11 segmented control |
-| **Detail Drawer** | bottom of center | bottom drawer (clip / piano-roll / automation / device chain) | collapsed | `E`, Shift+Tab swaps content, Esc collapses, resizable |
-| **Right rack** | right of work zone | reserved (meters / returns / monitor) | hidden (0-width) | — until populated |
-| **Status strip** | very bottom, full width, ~24px | docked, always on | open | — |
+## 2. Current surface inventory (shipped)
 
-The work zone is split **Left | Center | Right** (horizontal manager); the Center is split
-**Top (arrange) | Bottom (drawer)** (a *separate* vertical manager).
+This section describes only what [STATUS.md](STATUS.md) records as built and verified. See STATUS §2 for the
+full build record and §3 for the code map.
 
-## View model
+| Surface | Role | Notes |
+|---|---|---|
+| **Session grid** | Primary view (default `ViewMode`, **F8**) | Tracks × scenes clip-launch grid on Tracktion's `ClipSlot`/`Scene`/`LaunchHandle`; single-click launches, right-click "Edit clip", double-click opens; keyboard launch; vertical scroll with fixed-height pads so all scene rows are reachable; MIDI slot recording (arm a track, capture an empty slot into a born-audible clip). |
+| **Arrange** | Secondary view | Bars\|beats ruler, a denominator-aware snap-division selector, clip drag-to-move with snap, markers, per-lane mute/solo/arm + colour, selection, waveform + playhead. |
+| **Mixer** | Full-window view-switch | Channel strips (fader/pan/mute/solo), per-track plugin insert slots (bypass + reorder), aux A/B sends per track + two aux-return strips, a master strip with a post-fader meter. |
+| **Browser** | Left region, collapsible | File tree; double-click an audio file to import. |
+| **Detail drawer** | Bottom region, selection-driven | Audio clip inspector (name/gain/fades/waveform) for audio clips; a full piano-roll editor (draw/move/resize/delete notes, velocity lane, multi-select, copy/paste) for MIDI clips — routed by clip type. |
+| **Control Bar** | Top, docked | File commands, embedded transport, Session/Arrange/Mixer view-switch, Browser/drawer region toggles, Plugins + Export menus. |
+| **Transport Bar** | Embedded in Control Bar | Play/stop/record/loop, timecode/bars\|beats, a Click (metronome) toggle, and a count-in selector. |
+| **Floating plugin windows** | Non-persistent | Native editor for external VST3/AU plugins, a generated parameter panel for built-ins; auto-close with their Edit. |
+| **Export** | Async, off the message thread | WAV mixdown + per-track stems with a progress/cancel panel; the export-done status strip shows the render's offline BS.1770-4 integrated LUFS. |
 
-- **Center** = one view via `ViewMode`. Switching is a *lens change* over the same Edit —
-  selection, transport, and mixer values are shared, so Arrange→Mix→Arrange loses no state.
-- **Detail Drawer** = independent, selection-driven, with two sub-modes (Shift+Tab):
-  *Clip-edit* (piano-roll for MIDI, waveform/warp/fades for audio, automation) vs
-  *Device-chain* (the track's horizontal instrument+effects chain). Optional vertical split
-  shows notes + device knobs together (fixing Ableton's "can't see both" cost).
-- Meaningful combos all work: Arrange+piano-roll (compose), Arrange+device-chain (sound-design
-  while arranging), Mixer+device-chain (mix a channel), Mixer+drawer-collapsed (pure faders).
+## 3. In-flight (W03)
 
-## Non-persistent surfaces
+Being built this wave — not yet in STATUS.md as shipped:
 
-| Surface | Type | Trigger | Phase |
-|---|---|---|---|
-| Right-click context menu | `PopupMenu::showMenuAsync` | right-click an object | P2 |
-| Tooltips + Info/Help hover box | `TooltipWindow` + bottom-left text area | hover dwell | P2 |
-| Value popups / dropdowns | `PopupMenu` / inline editable label | click a combo/value | P3 |
-| Control callouts (quantize, snap, groove) | `CallOutBox` | click a compact control | P3 |
-| Color-swatch palette + "clip color = track color" | popup / `CallOutBox` grid | "Color…" in a menu | P4 |
-| Open / Save As / Import | `FileChooser::launchAsync` | file commands | exists |
-| Audio device settings | `AudioDeviceSelectorComponent` | Audio button | exists → folds into Preferences |
-| Preferences (tabbed) | `DialogWindow` async | Ctrl+, | P6 |
-| Export / Render | `DialogWindow` async | Ctrl+Shift+B | P6 |
-| Plugin (VST/AU) editor | floating `ResizableWindow` (per the engine's PluginWindow.h) | double-click a device | P5 |
-| Tear-off / detached panel | reparent into a `ResizableWindow` | drag-out | P7 (optional) |
+- **Per-track volume/pan automation lanes in Arrange.** Editable automation curves alongside clips, the first
+  step of the deferred "automation" item in the engine roadmap.
+- **A MIDI-clock-out toggle in the transport bar.** Lets Forge drive external gear's clock from its own
+  transport — a step toward the DIRECTION.md MIDI-clock/Link sync role, scoped to clock-out only.
+- **Live cross-surface value refresh.** Today the Mixer and clip Inspector read engine state on `setEdit`/
+  selection only (a manual-rebuild model) — a value changed on one surface doesn't reflect on another until
+  re-selected. This wave adds live refresh so mixer and inspector values stay in sync across surfaces without
+  a re-select.
 
-## Theme
+## 4. Planned (W04 UX wave)
 
-Dark, low-contrast, accent-driven. One shared `ForgeLookAndFeel` (installed via
-`setDefaultLookAndFeel`); **all colors routed through LookAndFeel colour IDs** (zero
-hard-coded colors) so theming/high-contrast is one centralized pass.
+Not yet built. Sequencing within W04 is not fixed by this document.
 
-- Backgrounds in three tints: shell `#1A1C1E`, panels `#232629`, raised `#2D3135`.
-- Text: primary `#D6D9DC`, secondary `#8A9095`; hairlines a notch lighter than their panel.
-- **One configurable accent** (default warm amber `#E0902F`) for playhead, record-arm,
-  selection, focus. **Red reserved** strictly for active recording + clip-clipping.
-- Per-track/clip **color is first-class** (saturated header/clip tint over the dark base).
-- Typography: one clean sans; ~13px labels, ~11px metadata; **monospaced digits** for
-  timecode/tempo so they don't jitter. Compact ~24–28px rows; 150px header, 76px lane.
-- **Default to a lean layout** (Browser + Drawer collapsed) — the dense, fully-expanded
-  view reads as cluttered, so it's opt-in via toggles, never the default.
+- **Menu bar.** The traditional File/Edit/View/Track/Transport/Options/Help `MenuBarModel` bar described in
+  §1, as the exhaustive discoverable command index, shortcuts shown beside items.
+- **Popout / tear-off panels.** Detach a region (e.g. a plugin chain, the piano-roll) into its own window for
+  multi-monitor workflows.
+- **Slide-out drawers.** Evolve the Browser/Detail regions from fixed collapse-to-zero toggles toward
+  animated slide-out panels.
+- **Adjustable-section scaling with persisted sizes.** Resizer-bar drags already work for the Browser width
+  and drawer height; this adds persistence across launches (today sizes reset each run) and likely broader
+  per-section scaling.
+- **Scene layout polish.** Refinements to the Session grid's scene-row presentation beyond the shipped
+  vertical scroll.
+- **Sequence lighting.** Beat-accurate pad-lighting animation on the Session grid (per the dynamic-visuals
+  charter in §1), driven by transport/tempo state.
+- **Graphic tempo indicators.** Visual tempo/metronome elements beyond the existing Click toggle, using the
+  time/tempo accent colour.
+- **The semantic accent system.** Formalizing the accent vocabulary in §1 (interactive, record red, play/
+  launch green, time/tempo) as LookAndFeel colour IDs applied consistently across all views — today's shipped
+  UI uses a single interactive accent plus record-red; the play/launch-green and time/tempo accents are not
+  yet distinct.
+- **A state-matrix screenshot review harness.** A headless review tool that walks a matrix of UI states
+  (view × selection × transport state, etc.) and captures screenshots for systematic visual review, building
+  on the existing `--screenshot` mode (which renders each view once, not a state matrix).
 
-## Build order
+---
 
-1. **Shell refactor** (no new features): `MainComponent` → `ForgeShell`; nested layout
-   managers + resizer bars; merge title strip + toolbar + TransportBar into one Control Bar;
-   keep Status strip; re-seat the existing ArrangeView in the center slot; install
-   `ForgeLookAndFeel` (dark) + an app-wide `TooltipWindow`; `ViewMode{Arrange}` wired.
-2. **Arrange polish + discoverability**: per-lane inline controls (name, color chip,
-   mute/solo/arm, height); right-click context menus; bottom-left Info/Help box; top
-   bars|beats ruler + snap/grid selector; central selection state.
-3. **Left Browser/Inspector column**: Browse (file/sample/instrument tree, drag-onto-track) +
-   Inspect (selection properties); value popups; first `CallOutBox` clusters.
-4. **Detail Drawer** (keystone): audio clip editor first, then piano-roll, then automation;
-   double-click-to-open, `E`/Esc, Shift+Tab clip/device swap; color-swatch palette.
-5. **Mixer view + device chain + plugins**: Mixer as a center view-switch (channel strips);
-   device/effect chain as the drawer's Device mode; floating plugin editor windows.
-6. **Config + delivery modals**: tabbed Preferences (Ctrl+,, folds in Audio settings);
-   Export/Render (Ctrl+Shift+B).
-7. **Power-user + Session seam** (optional): tear-off panels / multi-monitor; saved layouts;
-   and — only when non-linear launching is wanted — `SessionView` as the third center view.
+## Open questions (carried over, unresolved)
 
-## Open questions (to confirm)
+- **The Control Bar "Editor" button** — third view, a drawer toggle, or dropped entirely? Unresolved across
+  the mockup set; see [HANDOFF.md](HANDOFF.md) open decisions.
+- **Mixer placement long-term** — currently a full-window view-switch (Logic/Cubase-style); whether a docked
+  bottom/right mixer that coexists with Session/Arrange is ever wanted remains open.
+- **Multi-monitor / tear-off priority** and plugin-window strategy beyond the floating windows already
+  shipped — deferred to the W04 popout/tear-off work in §4.
 
-1. ~~Session view stays deferred (build arrangement-first, reserve only the seam)?~~ **RESOLVED 2026-06-30 — NO.** The Session clip grid is the **primary** surface; Arrange is secondary (see [DIRECTION.md](DIRECTION.md)).
-2. Mixer placement: a center view-switch (full-window, Logic/Cubase-style) vs a docked
-   bottom/right mixer that coexists with the arrange timeline?
-3. Accent color: warm amber, or a distinct Forge brand hue? Dark-only for now?
-4. Keyboard scheme: single-letter toggles (B/I/E, Shift+Tab) + F9/F11 view-switch — OK on Windows?
-5. Multi-monitor / tear-off priority, plugin-window strategy, saved layouts — defer to P7?
+---
 
-> **Note (current code):** the **Detail Drawer (P4) is built for both clip types** — the audio clip
-> inspector (`DetailView`) AND the **MIDI piano-roll** (`PianoRollView`: draw/move/resize/delete +
-> velocity lane, multi-select, copy/paste), routed by clip type. MIDI tracks are live (a `te::AudioTrack`
-> hosts MIDI clips audible via a default 4OSC). See [STATUS.md §2](STATUS.md) + [devlog/midi-build.md](devlog/midi-build.md).
-> Still to come on the drawer: automation lanes, and device-chain (Device mode).
+*Companion docs: [DIRECTION.md](DIRECTION.md) (product identity) · [STATUS.md](STATUS.md) (living roadmap) ·
+[HANDOFF.md](HANDOFF.md) (pick-up-cold state) · [ARCHITECTURE.md](ARCHITECTURE.md) (engine/design) ·
+[FEATURE_CATALOG.md](FEATURE_CATALOG.md) (feature landscape) · [../mockups/](../mockups/) (to-scale UI
+mockups, sheet 00 = the Session grid).*
