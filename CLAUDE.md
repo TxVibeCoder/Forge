@@ -62,14 +62,14 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-FOUR gates as of W10): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-SIX gates as of W11): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
-  `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`;   (⚠ new gate
-  names that CONTAIN an existing name must be ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`;
-  verify the report's `mode=` line)
+  `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
+  `--selftest-followaction`, `--selftest-launchmode`;   (⚠ new gate names that CONTAIN an existing name must be
+  ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`; verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
@@ -99,6 +99,13 @@ conflict, surface it.
 - **A clip copied out of a `ClipSlot` carries slot-normalized state (W10)** — auto-tempo on, a full-length loop
   range, `start=0`. To place it on the linear timeline as a plain one-shot, `disableLooping()` +
   `setAutoTempo(false)`. **Never** `setLoopRangeBeats({})` to clear the loop — it re-asserts `setAutoTempo(true)`.
+- **The FOLLOWACTIONS auto-plant footgun (W11)** — writing a clip's follow-action DURATION
+  (`followActionBeats`/`followActionNumLoops` > 0) on an **empty** action list makes the engine auto-add a
+  `currentGroupRoundRobin` action (`tracktion_Clip.cpp:524-545` → `tracktion_FollowActions.cpp:498`). Always set
+  the action **type explicitly** after ensuring an action exists (and/or pre-create the action before writing a
+  duration). `Clip::getFollowActions()` also **lazily creates** the FOLLOWACTIONS child — a const reader must
+  guard on `state.getChildWithName(IDs::FOLLOWACTIONS).isValid()` before calling it, or a pure read dirties the
+  edit.
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

@@ -1,6 +1,14 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (latest: **W10 — the hands-on wave, part 5 (the last): the
+*Living status document. Last updated 2026-07-02 (latest: **W11 — frontier program Wave 1: launcher
+expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
+10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
+new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine
+FOLLOWACTIONS auto-plant footgun defeated; follow actions ride graph-build with zero per-tick work. Gates
+`--selftest-followaction` + `--selftest-launchmode` (floor 24→26); 5-dimension QC — 3 dims REFUTED clean, Trigger
+byte-identical, 3 routing findings fixed. **All TWENTY-SIX selftests PASS.** Full record →
+[devlog/wave-11-launcher-expressiveness.md](devlog/wave-11-launcher-expressiveness.md). Prior: **W10 — the
+hands-on wave, part 5 (the last): the
 Session → Arrangement "Send to" bridge** on the W09 tip `76d8f38` — the fifth and FINAL build wave off the
 maintainer's first hands-on session; the hands-on plan is now **COMPLETE**. An explicit one-directional "Send to
 Arrangement" copies a filled Session slot's clip onto the same track's linear timeline (append-at-end ·
@@ -595,6 +603,30 @@ Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine acr
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-FOUR selftests PASS**; the 10-state screenshot
   matrix renders. After W10 the hands-on plan is **complete**; the Waveform feature-mining backlog is the next
   planning source. **Committed + PUSHED to `origin/main`** (`40eccaf` code + `ea3c7a3` docs, sanitize-clean).
+
+### W11 — frontier program Wave 1: launcher expressiveness — SHIPPED (local)  (baseline `90449ce`)
+The **first** wave of the frontier build program (the 10-wave plan a discovery swarm produced after W10). Per-clip
+**follow actions** + **loop-toggle** + **launch modes** — the maintainer-flagged #1 gap, turning the Session grid
+into a performable instrument. Built to a frozen source-verified spec: orchestrator serial spine + one
+file-disjoint agent (Role B) + a 5-dimension adversarial QC. Full record:
+[devlog/wave-11-launcher-expressiveness.md](devlog/wave-11-launcher-expressiveness.md).
+- **Seams** (`ProjectSession`): `setFollowAction` / `getFollowAction` / `setFollowActionDuration` (defeat the
+  engine FOLLOWACTIONS auto-plant footgun — always set the action type explicitly), `setSlotClipLooping` /
+  `isSlotClipLooping`, `setLaunchMode` / `getLaunchMode` (int `forgeLaunchMode` on `clip->state`; absence reads
+  Trigger), `isSlotActive` (playing OR queued). Follow actions are consumed at graph-build (`EditNodeBuilder` →
+  `SlotControlNode`): zero per-tick work, R1-safe.
+- **UI**: three submenus in `SessionView::handleSlotRightClicked` (Follow action / Loop / Launch mode); a shared
+  `launchOrToggle` (mouse + Enter); `handleSlotReleased` (Gate stop-on-release); `ClipSlotComponent` gained an
+  `onReleased` / `mouseUp` (Role B), forwarded via `TrackColumnComponent::onSlotReleased`.
+- **Gates** `--selftest-followaction` (11 legs: footgun re-checks + the KEY `createFollowAction` functor proof +
+  ValueTree round-trip + undo + loop-toggle) and `--selftest-launchmode` (7 legs). Floor **24 → 26**.
+- **QC (5 dimensions):** follow-action / lifetime-R1 / loop-toggle **REFUTED clean**; **Trigger launch
+  byte-identical**; 3 routing findings **fixed** — the Toggle queued-race (`isSlotActive` includes queued), Enter
+  mode-aware, and the W10 send-to-arrange copy no longer carries launcher-only metadata onto the Arrange clip; the
+  Gate quantise quick-click **documented** (immediate under free-trigger quant; immediate-launch is a follow-up).
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**; the FOLLOWACTIONS
+  auto-plant footgun banked in CLAUDE.md. **Committed LOCALLY, pending push.** Next: frontier Wave 2 (per-clip
+  launch quantise).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
