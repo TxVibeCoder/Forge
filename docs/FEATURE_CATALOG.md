@@ -176,7 +176,7 @@ means *deep where it counts for your use*, not "all of it."
 | Scenes | **Core** | Fire a row of clips together. |
 | Grid-controller (Launchpad / APC40) integration | **Core — driver built (W02); HW pending** | Forge-native driver + a Launchpad driver shipped on the `ControlSurface` seam (gate `--selftest-controlsurface`); on-screen grid works without it. Remaining: on-hardware byte-mapping + an APC40 mkII driver. |
 | Key / MIDI mapping for live control | **Core** | MIDI-learn (`MidiLearn`) + MIDI-clock / Ableton Link sync. |
-| Follow actions | Standard | Clips trigger the next automatically. |
+| Follow actions | **Standard — BUILT (W11)** | Per-clip follow actions (chain / stop / next / round-robin) + loop-toggle + launch modes (Trigger/Gate/Toggle); gates `--selftest-followaction` / `--selftest-launchmode`. |
 | Live looping | Pro | |
 | Crossfader | Pro | DJ-style blending. |
 

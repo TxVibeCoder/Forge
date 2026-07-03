@@ -55,7 +55,7 @@ Windows + macOS. Repo: <https://github.com/TxVibeCoder/Forge> (public, AGPLv3).
 | **Build** | CMake (≥3.22); generator "Visual Studio 17 2022"; **MSVC v143** (C++20) |
 | **Identity** | **Sample / scene-based** — an Ableton-style **Session clip grid**, played from grid controllers (Launchpad / APC40 mkII). Linear arrange is **secondary**. See **[DIRECTION.md](DIRECTION.md)**. |
 | **UI direction** | Ableton's *look + interaction*; the **Session clip grid is the primary surface** (Arrange = secondary view); **controller-driven**; dark + **warm amber** accent; single-window. |
-| **Code size** | ~23,300 lines of Forge source (engine/JUCE excluded) across 83 files |
+| **Code size** | ~26,200 lines of Forge source (engine/JUCE excluded) across 87 files |
 
 ---
 

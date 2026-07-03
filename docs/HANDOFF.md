@@ -228,8 +228,8 @@ A long, multi-phase session. The arc:
 
 Phases 0–4 + startup hardening + MIDI MVP/W6 + **W7 MIDI record into slots** + the **Session clip-launch grid**
 (with vertical scroll) + the **logging subsystem** + the **Wave-01 feature seams** + the **W02 engine seams** +
-the **W03 features** + the **W04a/W04b UX waves** + **W05 undo/polish**, all shipped, building clean, all
-SIXTEEN selftests PASS:
+the **W03 features** + the **W04a/W04b UX waves** + **W05 undo/polish** (plus W06–W11 on top — see the wave
+summaries above), all shipped, building clean, the full selftest floor (now **TWENTY-SIX** gates) passing:
 
 - **Session grid (PRIMARY view)** — tracks × 16 scenes of launchable clips on `ClipSlot` / `Scene` /
   `LaunchHandle`; single-click launches (instant), right-click "Edit clip" (launch-free), double-click opens;
@@ -599,7 +599,7 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   local paths): a `README` control doc + one self-contained `P#-<slug>.md` per CLI (its territory, "take-as-given"
   facts, *propose-don't-edit* for shared files, scoped commits, and **CLIs do NOT build**) + a `P#-consolidation`
   packet for the orchestrator role (owns `main.cpp`/`CMakeLists`/`ProjectSession`; runs the single build + the
-  five-selftest floor + adversarial QC + docs + sanitize + push). Full rule: **`CLAUDE.md` → Wave Orchestration
+  full selftest floor + adversarial QC + docs + sanitize + push). Full rule: **`CLAUDE.md` → Wave Orchestration
   Rule**. **Wave 01 shipped six features this way** (~35 min of parallel build vs. ~2 h serial); the CLAUDE.md
   nested-comment gotcha caught its own predicted bug at consolidation, and QC caught two integration UAFs no
   single CLI could see. No `.wave-active` sentinel (Forge has no auto-sync) — the load-bearing guard is **scoped
