@@ -14,6 +14,12 @@
 
 namespace te = tracktion;
 
+/** Per-clip launch mode (Wave 1). Trigger = today's one-shot launch; Gate = plays while the pad is held and
+    stops on release; Toggle = each click toggles launch/stop. Stored as an int on the clip's ValueTree under
+    "forgeLaunchMode"; ABSENCE of the property reads as Trigger (Trigger == 0), so every pre-Wave-1 edit and
+    selftest gate is unchanged. Repeat/retrigger is deferred to v2. */
+enum class LaunchMode { Trigger = 0, Gate = 1, Toggle = 2 };
+
 class ProjectSession
 {
 public:
@@ -167,6 +173,53 @@ public:
     /** Current Edit-global launch quantisation, or te::LaunchQType::bar (the engine default) if
         there is no open edit. Const, non-mutating. */
     te::LaunchQType getGlobalLaunchQuantisation() const;
+
+    //==============================================================================
+    // Launcher expressiveness seam (Wave 1). Message-thread only; each op resolves the clip via the const
+    // getClipSlot(...)->getClip() (never cached, R1) and FORGE_LOG_WARNs a null-edit / empty-slot path.
+
+    /** Sets clip (trackIndex, sceneIndex)'s single follow action — what the launcher does after the clip has
+        played for its follow-action duration (chain to the next clip, stop, replay, etc.). Keeps EXACTLY one
+        Action and sets its type EXPLICITLY, which defeats the engine footgun where writing a follow-action
+        duration on an empty action list auto-plants a currentGroupRoundRobin action. markAsChanged. No-op
+        (logged) if the slot has no clip. */
+    void setFollowAction (int trackIndex, int sceneIndex, te::FollowAction action);
+
+    /** The clip's current follow action, or FollowAction::none if unset / no clip. CONST, NON-MUTATING:
+        guards on the FOLLOWACTIONS child existing before touching getFollowActions() (which would lazily
+        grow the tree), so a pure read never dirties the edit. */
+    te::FollowAction getFollowAction (int trackIndex, int sceneIndex) const;
+
+    /** Sets WHEN the follow action fires: after `amount` loops (FollowActionDurationType::loops) or `amount`
+        beats (::beats). Ensures an Action exists first (so the duration write doesn't auto-plant a default
+        action) but does NOT set the action type — the UI always pairs this with setFollowAction, whose
+        explicit type-set follows and wins. "after N loops" is honoured only while the clip isLooping().
+        markAsChanged. No-op (logged) if the slot has no clip. */
+    void setFollowActionDuration (int trackIndex, int sceneIndex,
+                                  te::Clip::FollowActionDurationType type, double amount);
+
+    /** Toggles clip (trackIndex, sceneIndex) between looping and one-shot. Looping sets a REAL full-clip loop
+        range [0, getLengthInBeats()] (auto-tempo follows for audio clips — the beat-locked loop); one-shot
+        calls disableLooping(). NEVER setLoopRangeBeats({}) (an empty range re-asserts auto-tempo — the W5/W10
+        gotcha). markAsChanged. No-op (logged) if the slot has no clip. */
+    void setSlotClipLooping (int trackIndex, int sceneIndex, bool shouldLoop);
+
+    /** True if clip (trackIndex, sceneIndex) is looping. Const, non-mutating. */
+    bool isSlotClipLooping (int trackIndex, int sceneIndex) const;
+
+    /** Sets clip (trackIndex, sceneIndex)'s launch mode (Trigger / Gate / Toggle) — stored as an int on the
+        clip's ValueTree ("forgeLaunchMode"), undoable. markAsChanged. No-op (logged) if the slot has no clip. */
+    void setLaunchMode (int trackIndex, int sceneIndex, LaunchMode mode);
+
+    /** The clip's launch mode, or LaunchMode::Trigger if unset / no clip (absence reads as Trigger, so every
+        pre-Wave-1 clip is Trigger). Const, non-mutating. */
+    LaunchMode getLaunchMode (int trackIndex, int sceneIndex) const;
+
+    /** True if clip (trackIndex, sceneIndex) is ACTIVE — currently playing OR queued-to-play. Const,
+        non-mutating (reads the message-safe getPlayingStatus / getQueuedStatus; never advance(), R5). Drives
+        Toggle launch-mode: a click stops an active-or-pending clip, so a click during the launch-quantise
+        pre-roll toggles the pending launch OFF rather than re-queuing it. */
+    bool isSlotActive (int trackIndex, int sceneIndex) const;
 
     //==============================================================================
     // Session MIDI-record seam (W7). Message-thread only.

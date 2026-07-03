@@ -45,6 +45,7 @@ public:
     void paint (juce::Graphics&) override;
 
     void mouseDown        (const juce::MouseEvent&) override;
+    void mouseUp          (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
     //==============================================================================
@@ -82,6 +83,8 @@ public:
     /** Fired on a left single-click (the parent decides: launch a filled slot, or create/import
         into an empty one). */
     std::function<void()> onClicked;
+    /** Fired on a plain left mouse-UP (non-popup) — drives Gate launch-mode "stop on release". Null => no-op. */
+    std::function<void()> onReleased;
     /** Fired on a left double-click (the parent opens a filled MIDI slot's clip in the drawer). */
     std::function<void()> onDoubleClicked;
     /** Fired on a right-click; param is the event for context-menu placement. */

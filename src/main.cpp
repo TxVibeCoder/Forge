@@ -52,7 +52,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -818,6 +818,16 @@ public:
             // Wave 5 (the last hands-on wave): the Session -> Arrange "Send to" bridge. Synchronous;
             // one callAsync yield suffices.
             MessageManager::callAsync ([this] { runSendArrangeSelftest(); });
+        }
+        else if (mode == SelfTest::followaction)
+        {
+            // Wave 1: per-clip follow-action + loop-toggle seams. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runFollowActionSelftest(); });
+        }
+        else if (mode == SelfTest::launchmode)
+        {
+            // Wave 1: per-clip launch-mode seam. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runLaunchModeSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -3882,6 +3892,190 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-followaction (W1): the per-clip follow-action + loop-toggle seams. Synchronous. Fills slots
+    // (0,0) and (0,1) so trackNext has a valid sibling (FollowActions createFollowAction resolves non-null
+    // only when a filled clip exists AFTER this one). Proves set/read-back, EXACTLY-one-action (the engine
+    // auto-plant footgun defeated), duration persist WITH the action surviving (footgun re-check), a non-null
+    // resolved functor for trackNext + an empty functor for none, a ValueTree round-trip (serialization), an
+    // undo revert, and the loop toggle (incl. never-empty loop range). It does NOT prove the clip AUDIBLY
+    // chains (needs a pumped playback loop the harness doesn't run — parked, W09/W10 convention).
+    void runFollowActionSelftest()
+    {
+        bool bothClipsCreated = false, setReadsBack = false, actionListSingle = false,
+             durationPersists = false, functorNonNull = false, noneGivesEmpty = false,
+             valueTreeRoundTrip = false, undoReverts = false,
+             loopToggleOn = false, loopToggleOff = false, neverEmptyLoopRange = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            session.ensureScenes (8);
+
+            bothClipsCreated = (session.createMidiClipInSlot (0, 0, "FA0") != nullptr)
+                            && (session.createMidiClipInSlot (0, 1, "FA1") != nullptr);
+
+            const auto clipAt = [this] (int t, int s) -> te::Clip*
+            {
+                if (auto* slot = session.getClipSlot (t, s))
+                    return slot->getClip();
+                return nullptr;
+            };
+
+            // Leg 2: set + read back.
+            session.setFollowAction (0, 0, te::FollowAction::trackNext);
+            setReadsBack = session.getFollowAction (0, 0) == te::FollowAction::trackNext;
+
+            // Leg 3: EXACTLY one action, front == trackNext (footgun: no stray currentGroupRoundRobin auto-plant).
+            if (auto* c = clipAt (0, 0))
+                if (auto* fa = c->getFollowActions())
+                {
+                    auto actions = fa->getActions();
+                    actionListSingle = actions.size() == 1 && ! actions.empty()
+                                    && actions.front()->action == te::FollowAction::trackNext;
+                }
+
+            // Leg 4: duration persists AND the action type survived the duration write (footgun re-check).
+            session.setFollowActionDuration (0, 0, te::Clip::FollowActionDurationType::loops, 1.0);
+            if (auto* c = clipAt (0, 0))
+                durationPersists = c->followActionDurationType == te::Clip::FollowActionDurationType::loops
+                                && c->followActionNumLoops == 1.0
+                                && session.getFollowAction (0, 0) == te::FollowAction::trackNext;
+
+            // Leg 5: KEY PROOF — createFollowAction resolves a non-null functor for trackNext (sibling at (0,1)).
+            if (auto* c = clipAt (0, 0))
+                functorNonNull = (bool) te::createFollowAction (*c);
+
+            // Leg 6: none -> empty functor.
+            session.setFollowAction (0, 0, te::FollowAction::none);
+            if (auto* c = clipAt (0, 0))
+                noneGivesEmpty = ! (bool) te::createFollowAction (*c);
+
+            // Leg 7: ValueTree round-trip (serialization proof, no disk I/O).
+            session.setFollowAction (0, 0, te::FollowAction::trackFirst);
+            session.setFollowActionDuration (0, 0, te::Clip::FollowActionDurationType::loops, 3.0);
+            if (auto* c = clipAt (0, 0))
+            {
+                const auto copy = c->state.createCopy();
+                const auto faChild = copy.getChildWithName (te::IDs::FOLLOWACTIONS);
+                const auto typeStr = faChild.getChild (0).getProperty (te::IDs::type).toString();
+                const auto parsed  = te::followActionFromString (typeStr);
+                const double loops = (double) copy.getProperty (te::IDs::followActionNumLoops, -1.0);
+                valueTreeRoundTrip = parsed.has_value() && *parsed == te::FollowAction::trackFirst && loops == 3.0;
+            }
+
+            // Leg 8: undo reverts a follow-action set on (0,1) (rides the Edit UndoManager).
+            um.clearUndoHistory();
+            um.beginNewTransaction();
+            session.setFollowAction (0, 1, te::FollowAction::trackLast);
+            const bool wasSet = session.getFollowAction (0, 1) == te::FollowAction::trackLast;
+            ed->undo();
+            undoReverts = wasSet && session.getFollowAction (0, 1) != te::FollowAction::trackLast;
+
+            // Legs 9-11: loop toggle (the "after N loops" precondition), incl. the never-empty-loop-range gotcha.
+            session.setSlotClipLooping (0, 0, true);
+            if (auto* c = clipAt (0, 0))
+            {
+                loopToggleOn = session.isSlotClipLooping (0, 0) && c->isLooping();
+                neverEmptyLoopRange = c->getLoopLengthBeats() > te::BeatDuration();
+            }
+            session.setSlotClipLooping (0, 0, false);
+            if (auto* c = clipAt (0, 0))
+                loopToggleOff = ! c->isLooping();
+        }
+
+        const bool pass = bothClipsCreated && setReadsBack && actionListSingle && durationPersists
+                       && functorNonNull && noneGivesEmpty && valueTreeRoundTrip && undoReverts
+                       && loopToggleOn && loopToggleOff && neverEmptyLoopRange;
+
+        String report;
+        report << "mode=followaction" << newLine
+               << "bothClipsCreated="   << (bothClipsCreated ? 1 : 0) << newLine
+               << "setReadsBack="       << (setReadsBack ? 1 : 0) << newLine
+               << "actionListSingle="   << (actionListSingle ? 1 : 0) << newLine
+               << "durationPersists="   << (durationPersists ? 1 : 0) << newLine
+               << "functorNonNull="     << (functorNonNull ? 1 : 0) << newLine
+               << "noneGivesEmpty="     << (noneGivesEmpty ? 1 : 0) << newLine
+               << "valueTreeRoundTrip=" << (valueTreeRoundTrip ? 1 : 0) << newLine
+               << "undoReverts="        << (undoReverts ? 1 : 0) << newLine
+               << "loopToggleOn="       << (loopToggleOn ? 1 : 0) << newLine
+               << "loopToggleOff="      << (loopToggleOff ? 1 : 0) << newLine
+               << "neverEmptyLoopRange="<< (neverEmptyLoopRange ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write follow-action selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Follow-action selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-launchmode (W1): the per-clip launch-mode seam (Trigger / Gate / Toggle). Synchronous,
+    // state-level: proves the default is Trigger, set/read-back for Toggle + Gate, ValueTree persistence, that
+    // ABSENCE of the property reads as Trigger (so every pre-W1 clip + gate is unchanged), and that the
+    // isSlotPlaying query the Toggle routing reads is sound. The AUDIBLE Gate-hold / Toggle-off transitions are
+    // driven by the view's mouse routing (not a seam) and are parked/manual — proven-adjacent by the launch
+    // path in --selftest-session; this gate never fakes a PASS for them (gate-honesty rule).
+    void runLaunchModeSelftest()
+    {
+        bool bothClips = false, defaultIsTrigger = false, setToggleReadsBack = false,
+             setGateReadsBack = false, persists = false, absenceIsTrigger = false, toggleQuerySound = false;
+
+        if (session.getEdit() != nullptr)
+        {
+            session.ensureScenes (8);
+            bothClips = (session.createMidiClipInSlot (0, 0, "LM0") != nullptr)
+                     && (session.createMidiClipInSlot (0, 1, "LM1") != nullptr);
+
+            defaultIsTrigger = session.getLaunchMode (0, 0) == LaunchMode::Trigger;   // fresh clip, no property
+
+            session.setLaunchMode (0, 0, LaunchMode::Toggle);
+            setToggleReadsBack = session.getLaunchMode (0, 0) == LaunchMode::Toggle;
+
+            session.setLaunchMode (0, 0, LaunchMode::Gate);
+            setGateReadsBack = session.getLaunchMode (0, 0) == LaunchMode::Gate;
+
+            if (auto* slot = session.getClipSlot (0, 0))
+                if (auto* c = slot->getClip())
+                {
+                    const auto copy = c->state.createCopy();
+                    persists = (int) copy.getProperty (juce::Identifier ("forgeLaunchMode"), -1) == (int) LaunchMode::Gate;
+                }
+
+            absenceIsTrigger = session.getLaunchMode (0, 1) == LaunchMode::Trigger;   // (0,1) never set
+            toggleQuerySound = ! session.isSlotActive (0, 0);   // nothing launched -> not active -> a Toggle click would launch
+        }
+
+        const bool pass = bothClips && defaultIsTrigger && setToggleReadsBack && setGateReadsBack
+                       && persists && absenceIsTrigger && toggleQuerySound;
+
+        String report;
+        report << "mode=launchmode" << newLine
+               << "bothClips="          << (bothClips ? 1 : 0) << newLine
+               << "defaultIsTrigger="   << (defaultIsTrigger ? 1 : 0) << newLine
+               << "setToggleReadsBack=" << (setToggleReadsBack ? 1 : 0) << newLine
+               << "setGateReadsBack="   << (setGateReadsBack ? 1 : 0) << newLine
+               << "persists="           << (persists ? 1 : 0) << newLine
+               << "absenceIsTrigger="   << (absenceIsTrigger ? 1 : 0) << newLine
+               << "toggleQuerySound="   << (toggleQuerySound ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write launch-mode selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Launch-mode selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-addtrack: the appendAudioTrack seam. Track count increments by exactly 1, and a slot on
     // the newly-appended (last) track resolves + accepts a born-audible MIDI clip (proves the new column
     // is a real, addressable track — not a phantom).
@@ -5110,6 +5304,8 @@ public:
                             : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-demo")           ? "selftest-demo"           // before bare --selftest (W09)
                             : commandLine.contains ("--selftest-sendarrange")    ? "selftest-sendarrange"    // before bare --selftest (W5)
+                            : commandLine.contains ("--selftest-followaction")   ? "selftest-followaction"   // before bare --selftest (W1)
+                            : commandLine.contains ("--selftest-launchmode")     ? "selftest-launchmode"     // before bare --selftest (W1)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -5166,6 +5362,8 @@ public:
                         : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-demo")           ? SelfTest::demo           // before bare --selftest (W09)
                         : commandLine.contains ("--selftest-sendarrange")    ? SelfTest::sendarrange    // before bare --selftest (W5)
+                        : commandLine.contains ("--selftest-followaction")   ? SelfTest::followaction   // before bare --selftest (W1)
+                        : commandLine.contains ("--selftest-launchmode")     ? SelfTest::launchmode     // before bare --selftest (W1)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

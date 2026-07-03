@@ -150,6 +150,8 @@ private:
 
     // Interaction dispatch (all engine ops via session).
     void handleSlotClicked       (int trackIdx, int sceneIdx);
+    void handleSlotReleased      (int trackIdx, int sceneIdx);   // Gate launch-mode: stop on mouse-up (W1)
+    void launchOrToggle          (int trackIdx, int sceneIdx);   // W1 mode-aware launch (shared by click + Enter)
     void handleSlotDoubleClicked (int trackIdx, int sceneIdx);
     void handleSlotRightClicked  (int trackIdx, int sceneIdx, const juce::MouseEvent&);
     void handleSlotFilesDropped  (int trackIdx, int sceneIdx, const juce::File&);   // W07 OS-external drop

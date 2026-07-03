@@ -20,6 +20,12 @@ TrackColumnComponent::TrackColumnComponent (te::AudioTrack& t, int index, int nu
                 onSlotClicked (trackIndex, s);
         };
 
+        pad->onReleased = [this, s]
+        {
+            if (onSlotReleased != nullptr)
+                onSlotReleased (trackIndex, s);
+        };
+
         pad->onDoubleClicked = [this, s]
         {
             if (onSlotDoubleClicked != nullptr)

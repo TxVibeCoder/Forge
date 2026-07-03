@@ -218,6 +218,13 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
     // which is exactly what "Send to Arrangement" asks for.
     track->playSlotClips = false;
 
+    // Strip launcher-only metadata: an Arrange clip is never launched, so a copied follow action / launch
+    // mode is dead data (the engine's node-builder reads them only for ClipSlotList clips, never the arrange
+    // path). Removing it keeps the arrange clip clean and immunises a future move-not-copy from surfacing a
+    // launcher-only concept on a clip that has no launcher (W1 QC — inert-but-drift-prone residue).
+    newClip->state.removeChild (newClip->state.getChildWithName (te::IDs::FOLLOWACTIONS), &edit->getUndoManager());
+    newClip->state.removeProperty (juce::Identifier ("forgeLaunchMode"), &edit->getUndoManager());
+
     edit->markAsChanged();
     return newClip;
 }
@@ -752,6 +759,194 @@ void ProjectSession::setGlobalLaunchQuantisation (te::LaunchQType t)
 te::LaunchQType ProjectSession::getGlobalLaunchQuantisation() const
 {
     return edit != nullptr ? edit->getLaunchQuantisation().type.get() : te::LaunchQType::bar;
+}
+
+//==============================================================================
+// Launcher expressiveness seam (Wave 1). Message-thread only. Each op resolves the clip via the const
+// getClipSlot(...)->getClip() (never cached, R1). Follow actions are consumed by the engine at graph-build
+// (EditNodeBuilder passes createFollowAction(clip) into the SlotControlNode) — Forge does ZERO per-tick work.
+
+void ProjectSession::setFollowAction (int trackIndex, int sceneIndex, te::FollowAction action)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("setFollowAction: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    auto* fa = clip->getFollowActions();   // lazily creates the FOLLOWACTIONS child (mutation intended here)
+
+    if (fa == nullptr)
+    {
+        FORGE_LOG_WARN ("setFollowAction: clip type has no follow actions");
+        return;
+    }
+
+    // Keep EXACTLY one Action, then set its type EXPLICITLY. The explicit set is what defeats the engine
+    // footgun: writing a follow-action DURATION on an empty action list auto-plants a currentGroupRoundRobin
+    // action (Clip::valueTreePropertyChanged -> FollowActions::addAction defaulting the type).
+    if (fa->getActions().empty())
+        fa->addAction();
+
+    while (fa->getActions().size() > 1)             // trim extras -> exactly one (weighted lists are v2)
+        fa->removeAction (*fa->getActions().back());
+
+    if (auto actions = fa->getActions(); ! actions.empty())
+        actions.front()->action = action;
+
+    edit->markAsChanged();
+}
+
+te::FollowAction ProjectSession::getFollowAction (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return te::FollowAction::none;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+        return te::FollowAction::none;
+
+    // Non-mutating read: guard on the FOLLOWACTIONS child EXISTING before calling getFollowActions() (which
+    // lazily creates it and would dirty the tree). No child -> no follow action set.
+    if (! clip->state.getChildWithName (te::IDs::FOLLOWACTIONS).isValid())
+        return te::FollowAction::none;
+
+    if (auto* fa = clip->getFollowActions())
+        if (auto actions = fa->getActions(); ! actions.empty())
+            return actions.front()->action;
+
+    return te::FollowAction::none;
+}
+
+void ProjectSession::setFollowActionDuration (int trackIndex, int sceneIndex,
+                                              te::Clip::FollowActionDurationType type, double amount)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("setFollowActionDuration: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    // Ensure an Action exists BEFORE writing the duration so the duration write doesn't trip the auto-plant.
+    // We do NOT set the action type here — the UI always pairs this with setFollowAction, whose explicit
+    // type-set follows and wins.
+    if (auto* fa = clip->getFollowActions())
+        if (fa->getActions().empty())
+            fa->addAction();
+
+    clip->followActionDurationType = type;
+
+    if (type == te::Clip::FollowActionDurationType::loops)
+        clip->followActionNumLoops = amount;
+    else
+        clip->followActionBeats = te::BeatDuration::fromBeats (amount);
+
+    edit->markAsChanged();
+}
+
+void ProjectSession::setSlotClipLooping (int trackIndex, int sceneIndex, bool shouldLoop)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("setSlotClipLooping: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    if (shouldLoop)
+        // A REAL full-clip loop range (never setLoopRangeBeats({}) — an empty range re-asserts auto-tempo,
+        // the W5/W10 gotcha). setLoopRangeBeats is a Clip virtual: MidiClip sets the loop; AudioClipBase
+        // additionally sets auto-tempo(true), keeping an audio loop beat-locked.
+        clip->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition() + clip->getLengthInBeats() });
+    else
+        clip->disableLooping();
+
+    edit->markAsChanged();
+}
+
+bool ProjectSession::isSlotClipLooping (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return false;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    return clip != nullptr && clip->isLooping();
+}
+
+void ProjectSession::setLaunchMode (int trackIndex, int sceneIndex, LaunchMode mode)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("setLaunchMode: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    // Forge-owned property on the clip's ValueTree — persists with the edit, undoable. Absence reads as
+    // Trigger (Trigger == 0), so every pre-Wave-1 clip is Trigger and no existing gate changes.
+    static const juce::Identifier forgeLaunchModeProp ("forgeLaunchMode");
+    clip->state.setProperty (forgeLaunchModeProp, (int) mode, &edit->getUndoManager());
+    edit->markAsChanged();
+}
+
+LaunchMode ProjectSession::getLaunchMode (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return LaunchMode::Trigger;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+        return LaunchMode::Trigger;
+
+    static const juce::Identifier forgeLaunchModeProp ("forgeLaunchMode");
+    return (LaunchMode) (int) clip->state.getProperty (forgeLaunchModeProp, (int) LaunchMode::Trigger);
+}
+
+bool ProjectSession::isSlotActive (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return false;
+
+    if (auto* slot = getClipSlot (trackIndex, sceneIndex))
+        if (auto* clip = slot->getClip())
+            if (auto lh = clip->getLaunchHandle())
+            {
+                if (lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                    return true;
+
+                if (auto queued = lh->getQueuedStatus())   // queued-to-play counts as active (Toggle pre-roll)
+                    return *queued == te::LaunchHandle::QueueState::playQueued;
+            }
+
+    return false;
 }
 
 //==============================================================================

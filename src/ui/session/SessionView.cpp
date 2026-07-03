@@ -159,6 +159,7 @@ void SessionView::rebuild()
 void SessionView::wireColumn (TrackColumnComponent& column)
 {
     column.onSlotClicked       = [this] (int t, int s)                    { handleSlotClicked (t, s); };
+    column.onSlotReleased      = [this] (int t, int s)                    { handleSlotReleased (t, s); };
     column.onSlotDoubleClicked = [this] (int t, int s)                    { handleSlotDoubleClicked (t, s); };
     column.onSlotRightClicked  = [this] (int t, int s, const MouseEvent& e) { handleSlotRightClicked (t, s, e); };
     column.onSlotFilesDropped  = [this] (int t, int s, const File& file)   { handleSlotFilesDropped (t, s, file); };
@@ -379,7 +380,7 @@ void SessionView::handleSlotClicked (int trackIdx, int sceneIdx)
 
     if (session.isSlotFilled (trackIdx, sceneIdx))
     {
-        session.launchSlot (trackIdx, sceneIdx);
+        launchOrToggle (trackIdx, sceneIdx);   // mode-aware (W1); Trigger stays the byte-identical launch path
         return;
     }
 
@@ -407,6 +408,29 @@ void SessionView::handleSlotClicked (int trackIdx, int sceneIdx)
     }
 }
 
+void SessionView::handleSlotReleased (int trackIdx, int sceneIdx)
+{
+    // Gate launch-mode: the clip plays only while the pad is held — stop it on release. A no-op for
+    // Trigger / Toggle and for empty slots, so the proven click path is unaffected.
+    if (session.isSlotFilled (trackIdx, sceneIdx)
+        && session.getLaunchMode (trackIdx, sceneIdx) == LaunchMode::Gate)
+        session.stopSlot (trackIdx, sceneIdx);
+}
+
+void SessionView::launchOrToggle (int trackIdx, int sceneIdx)
+{
+    // Launch-mode routing (W1), shared by the mouse click and keyboard Enter. Toggle stops an ACTIVE
+    // (playing OR queued-to-play) clip, else launches it — so a click during the launch-quantise pre-roll
+    // toggles the pending launch off. Trigger and Gate both launch (Gate additionally stops on mouse-up via
+    // handleSlotReleased; the keyboard has no release, so Gate-via-Enter is a one-shot). Trigger is the
+    // proven, byte-identical launch path (getLaunchMode short-circuits before isSlotActive is called).
+    if (session.getLaunchMode (trackIdx, sceneIdx) == LaunchMode::Toggle
+        && session.isSlotActive (trackIdx, sceneIdx))
+        session.stopSlot (trackIdx, sceneIdx);
+    else
+        session.launchSlot (trackIdx, sceneIdx);
+}
+
 void SessionView::handleSlotDoubleClicked (int trackIdx, int sceneIdx)
 {
     setFocus (trackIdx, sceneIdx);
@@ -431,8 +455,26 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     PopupMenu menu;
     const bool filled = session.isSlotFilled (trackIdx, sceneIdx);
 
-    // New ids come AFTER the existing set so they never collide with {idLaunch=1,idStop,idEdit,idImport}.
+    // New ids come AFTER the existing set so they never collide with {idLaunch=1..idSendArrange}.
     enum { idLaunch = 1, idStop, idEdit, idImport, idRecordSlot, idStopRecord, idDelete, idSendArrange };
+    // W1 launcher-expressiveness ids in distinct high ranges (follow-action is a contiguous range indexing
+    // kFollowActions; loop + the launch modes are single ids). No overlap with the small set above.
+    enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
+           idModeTrigger = 300, idModeGate, idModeToggle };
+
+    // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
+    // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
+    static const std::pair<te::FollowAction, const char*> kFollowActions[] =
+    {
+        { te::FollowAction::none,            "None" },
+        { te::FollowAction::globalStop,      "Stop" },
+        { te::FollowAction::globalPlayAgain, "Play again" },
+        { te::FollowAction::trackNext,       "Next clip" },
+        { te::FollowAction::trackPrevious,   "Previous clip" },
+        { te::FollowAction::trackFirst,      "First clip" },
+        { te::FollowAction::trackLast,       "Last clip" },
+        { te::FollowAction::trackRoundRobin, "Round robin" },
+    };
 
     // Re-derive record eligibility from engine truth on demand (never cached, R1).
     auto* track = getTrackAt (trackIdx);
@@ -446,6 +488,26 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idEdit,        "Edit clip");            // launch-free edit path (mirrors double-click, without launching)
         menu.addItem (idSendArrange, "Send to Arrangement");  // W5: copy this clip onto the track's Arrange timeline (one-directional)
         menu.addItem (idDelete,      "Delete clip");          // W07: empty the slot (filled-only); undoable via W05 global Undo
+
+        // W1 launcher expressiveness: per-clip follow action / loop / launch mode.
+        PopupMenu followMenu;
+        const auto currentFA = session.getFollowAction (trackIdx, sceneIdx);
+        for (int i = 0; i < (int) juce::numElementsInArray (kFollowActions); ++i)
+            followMenu.addItem (idFollowBase + i, kFollowActions[i].second, true,
+                                kFollowActions[i].first == currentFA);
+        followMenu.addSeparator();
+        followMenu.addItem (idFollowRandomV2, "Random (v2)", false, false);   // trackAny/trackOther deferred
+        menu.addSubMenu ("Follow action", followMenu);
+
+        menu.addItem (idLoopToggle, "Loop", true, session.isSlotClipLooping (trackIdx, sceneIdx));
+
+        PopupMenu modeMenu;
+        const auto currentMode = session.getLaunchMode (trackIdx, sceneIdx);
+        modeMenu.addItem (idModeTrigger, "Trigger", true, currentMode == LaunchMode::Trigger);
+        modeMenu.addItem (idModeGate,    "Gate",    true, currentMode == LaunchMode::Gate);
+        modeMenu.addItem (idModeToggle,  "Toggle",  true, currentMode == LaunchMode::Toggle);
+        menu.addSubMenu ("Launch mode", modeMenu);
+
         menu.addSeparator();
     }
 
@@ -465,6 +527,20 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                         {
                             if (safeThis == nullptr || result == 0)
                                 return;
+
+                            // W1 follow-action submenu: a contiguous id range -> the kFollowActions table.
+                            if (result >= idFollowBase
+                                && result < idFollowBase + (int) juce::numElementsInArray (kFollowActions))
+                            {
+                                const auto fa = kFollowActions[result - idFollowBase].first;
+                                safeThis->session.setFollowAction (trackIdx, sceneIdx, fa);
+                                if (fa != te::FollowAction::none)   // default duration: after 1 loop
+                                    safeThis->session.setFollowActionDuration (trackIdx, sceneIdx,
+                                        te::Clip::FollowActionDurationType::loops, 1.0);
+                                if (safeThis->onEditMutated != nullptr)
+                                    safeThis->onEditMutated();
+                                return;
+                            }
 
                             switch (result)
                             {
@@ -498,6 +574,22 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                 case idStopRecord:
                                     if (safeThis->onSlotRecordStop != nullptr)
                                         safeThis->onSlotRecordStop (trackIdx, sceneIdx);
+                                    break;
+                                case idLoopToggle:   // W1: toggle looping <-> one-shot
+                                    safeThis->session.setSlotClipLooping (trackIdx, sceneIdx,
+                                        ! safeThis->session.isSlotClipLooping (trackIdx, sceneIdx));
+                                    if (safeThis->onEditMutated != nullptr)
+                                        safeThis->onEditMutated();
+                                    break;
+                                case idModeTrigger:
+                                case idModeGate:
+                                case idModeToggle:   // W1: set the per-clip launch mode
+                                    safeThis->session.setLaunchMode (trackIdx, sceneIdx,
+                                        result == idModeGate   ? LaunchMode::Gate
+                                      : result == idModeToggle ? LaunchMode::Toggle
+                                                               : LaunchMode::Trigger);
+                                    if (safeThis->onEditMutated != nullptr)
+                                        safeThis->onEditMutated();
                                     break;
                                 default: break;
                             }
@@ -619,7 +711,7 @@ bool SessionView::keyPressed (const KeyPress& key)
             if (! session.isSlotFilled (focusTrack, focusScene))
                 FORGE_LOG_ERROR ("Failed to launch slot (" + juce::String (focusTrack) + "," + juce::String (focusScene) + ") via keyboard");
 
-            session.launchSlot (focusTrack, focusScene);
+            launchOrToggle (focusTrack, focusScene);   // W1: Enter is mode-aware too (Toggle can toggle off)
         }
 
         return true;

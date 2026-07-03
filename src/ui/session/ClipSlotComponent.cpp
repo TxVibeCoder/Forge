@@ -70,6 +70,19 @@ void ClipSlotComponent::mouseDown (const MouseEvent& e)
         onClicked();
 }
 
+void ClipSlotComponent::mouseUp (const MouseEvent& e)
+{
+    // Plain LEFT release only. A popup (right-click) interaction went through the mouseDown early
+    // return and must NOT fire the release path — guard it here too so a right-click drag that ends
+    // over the pad can't trip Gate's "stop on release". Trigger/Toggle modes simply leave onReleased
+    // unbound, so wiring this alongside mouseDown's launch is safe (R1: no engine pointer touched).
+    if (e.mods.isPopupMenu())
+        return;
+
+    if (onReleased != nullptr)
+        onReleased();
+}
+
 void ClipSlotComponent::mouseDoubleClick (const MouseEvent& e)
 {
     if (e.mods.isPopupMenu())

@@ -78,6 +78,8 @@ public:
 
     /** Left single-click on a pad (parent decides launch vs. create/import). */
     std::function<void (int trackIdx, int sceneIdx)> onSlotClicked;
+    /** Left mouse-UP on a pad (parent stops a Gate-launch-mode clip on release; W1). */
+    std::function<void (int trackIdx, int sceneIdx)> onSlotReleased;
     /** Left double-click on a pad (parent opens a filled MIDI slot's clip in the drawer). */
     std::function<void (int trackIdx, int sceneIdx)> onSlotDoubleClicked;
     /** Right-click on a pad; param is the event for context-menu placement. */
