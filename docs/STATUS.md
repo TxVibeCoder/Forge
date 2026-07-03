@@ -604,7 +604,7 @@ Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine acr
   matrix renders. After W10 the hands-on plan is **complete**; the Waveform feature-mining backlog is the next
   planning source. **Committed + PUSHED to `origin/main`** (`40eccaf` code + `ea3c7a3` docs, sanitize-clean).
 
-### W11 — frontier program Wave 1: launcher expressiveness — SHIPPED (local)  (baseline `90449ce`)
+### W11 — frontier program Wave 1: launcher expressiveness — SHIPPED (PUSHED)  (baseline `90449ce`)
 The **first** wave of the frontier build program (the 10-wave plan a discovery swarm produced after W10). Per-clip
 **follow actions** + **loop-toggle** + **launch modes** — the maintainer-flagged #1 gap, turning the Session grid
 into a performable instrument. Built to a frozen source-verified spec: orchestrator serial spine + one
@@ -625,8 +625,8 @@ file-disjoint agent (Role B) + a 5-dimension adversarial QC. Full record:
   mode-aware, and the W10 send-to-arrange copy no longer carries launcher-only metadata onto the Arrange clip; the
   Gate quantise quick-click **documented** (immediate under free-trigger quant; immediate-launch is a follow-up).
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**; the FOLLOWACTIONS
-  auto-plant footgun banked in CLAUDE.md. **Committed LOCALLY, pending push.** Next: frontier Wave 2 (per-clip
-  launch quantise).
+  auto-plant footgun banked in CLAUDE.md. **Committed + PUSHED to `origin/main`** (`5c3738e` code + `0f9d5cc`
+  docs, sanitize-clean). Next: frontier Wave 2 (per-clip launch quantise).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
