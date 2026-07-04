@@ -350,6 +350,13 @@ writes a tempo through `EngineHelpers::setTempoAt` and reads it back off `tempoS
 > `→(bar)`→reads `bar` — proving the free-trigger selector's engine seam. The free-vs-quantized launch
 > *timing* is pre-existing engine behavior (the ticket only exposes the existing `Edit`-level global).
 
+> **`--selftest-session` also gained a `perClipLaunchQ` field** (W12, frontier Wave 2): on the fixture clip in
+> slot (0,0), with the global at `bar`, a per-clip override is set to `none` and the **real** launch resolver is
+> proven to honour it — `resolveEffectiveLaunchQType(0,0) == none` while `getGlobalLaunchQuantisation() == bar` —
+> then `clearClipLaunchQuantisation` reverts it and it inherits `bar` again. Asserting through
+> `resolveEffectiveLaunchQType` (which delegates into the exact file-local resolver the live launch feeds) proves
+> precedence through the real path, not a mirror. No new gate name — the floor stays 26.
+
 ## `Forge --selftest-slotdelete` (Session clip delete)
 
 The acceptance gate for **W07 — Delete clip** (design:

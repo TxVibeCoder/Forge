@@ -1,17 +1,22 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-02**, end of **"W11 — frontier program
-> Wave 1: launcher expressiveness (follow-actions · loop-toggle · launch-modes)"** — the **FIRST** wave of the
-> 10-wave **frontier build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a
-> discovery swarm produced after the hands-on plan completed at W10. ⚠ **W05's owed adversarial-QC dimensions
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W12 — frontier program
+> Wave 2: per-clip launch quantise override"** — the **SECOND** wave of the 10-wave **frontier build program**
+> ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a discovery swarm produced after the
+> hands-on plan completed at W10 (frontier Wave 1 = W11 launcher expressiveness). ⚠ **W05's owed adversarial-QC dimensions
 > remain PARTIALLY owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean; local `main` ==
-`origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-SIX selftests PASS** — the W10 twenty-four plus **`--selftest-followaction`** + **`--selftest-launchmode`**.
-Shipped (frontier Wave 1 — the maintainer-flagged **#1 gap**, DIRECTION's identity core): right-click a filled
+**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12 (per-clip launch
+quantise) + a docs sanitization are committed LOCALLY (`03f6efd` code; tip ahead of `origin/main`) — NOT pushed,
+held for the maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-SIX selftests PASS**
+(W12 added no gate — it extended `--selftest-session` with a `perClipLaunchQ` leg).
+Shipped (W12 — frontier Wave 2): right-click a filled Session slot → **Launch quantise** → *Global (inherit)* or
+any of the 23 launch-Q values; the clip snaps on its own grid via new `ProjectSession` seams + a
+`resolveEffectiveLaunchQType` proof bridge (6-dimension adversarial QC: **ship**). Prior wave (frontier Wave 1 =
+W11 — the maintainer-flagged **#1 gap**, DIRECTION's identity core): right-click a filled
 Session slot → **Follow action** (None / Stop / Play-again / Next / Previous / First / Last / Round-robin; Random
 deferred to v2), **Loop** (checkable one-shot↔loop), and **Launch mode** (Trigger / Gate / Toggle) submenus, over
 new `ProjectSession` seams + the `ClipSlotComponent` `onReleased`/`mouseUp` (Role B, file-disjoint). Follow actions
@@ -69,9 +74,27 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W11 (frontier Wave 1: launcher expressiveness)
+## What the LATEST wave did — W12 (frontier Wave 2: per-clip launch quantise)
 
-The current wave is **W11** — the FIRST wave of the frontier build program — summarised in the intro blockquote
+**W12** adds a **per-clip launch-quantise override**: a filled Session slot can snap on its own grid (a 1/16 hat
+fill vs a 1-bar bass) instead of only the Edit-global launch quant. Right-click a filled slot → **Launch
+quantise** → *Global (inherit)* or any of the 23 `LaunchQType` values. Full record →
+[devlog/wave-12-per-clip-launch-quantise.md](devlog/wave-12-per-clip-launch-quantise.md). The engine's launch
+resolver **already** preferred a per-clip `LaunchQuantisation`, so the wave added only five `ProjectSession`
+seams (`setClipLaunchQuantisation` / `getClipLaunchQuantisation` / `clearClipLaunchQuantisation` /
+`clipInheritsGlobalLaunchQuantisation` + the **`resolveEffectiveLaunchQType`** bridge that lets
+`--selftest-session` assert precedence through the *real* resolver, not a mirror), a `SessionView` "Launch
+quantise" submenu (inline dispatch like the W11 launcher submenus — no new callback, no `ClipSlotComponent`
+change), and a `perClipLaunchQ` leg on `--selftest-session` (**no new gate — floor stays 26**). New CLAUDE.md
+gotcha: the engine method is spelled **`usesGlobalLaunchQuatisation`** (verbatim typo, missing the `n`) and is
+**inverted** (`false` ENABLES the override); const readers never dirty the tree (unlike the FOLLOWACTIONS
+footgun). Built orchestrator-serial after a **5-reader source-verification swarm** froze the spec; a
+**6-dimension adversarial QC** returned **ship / 0 defects** (incl. confirming the change is fully undoable via
+the engine's UndoManager binding).
+
+## What a prior wave did — W11 (frontier Wave 1: launcher expressiveness)
+
+**W11** — the FIRST wave of the frontier build program — summarised in the intro blockquote
 above and recorded in full in
 [devlog/wave-11-launcher-expressiveness.md](devlog/wave-11-launcher-expressiveness.md): per-clip **follow
 actions** + **loop-toggle** + **launch modes** (Trigger/Gate/Toggle), built to a frozen source-verified spec by
@@ -305,13 +328,15 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **▶ NEXT: frontier program Wave 2 — per-clip launch quantise** (a clip-level launch-Q override vs the global
-   Q). Small/low-risk, headless-provable, **extends `--selftest-session`** (no new gate). Then Wave 3 (grid clip
-   primitives: duplicate → move/copy), Wave 4 (MIDI quantise + groove), Wave 5 (scene lifecycle), Wave 6 (the
-   owed W05 QC-debt hardening), Wave 7 (performance recording) … — full ordered program + the critic's corrections
-   in `docs/frontier-program.local.md`. **W11 follow-ups (documented):** immediate-launch for Gate (instant
-   click-hold under any quant); a disk save→reload leg for `--selftest-launchmode`; Random/weighted/group
-   follow-actions (v2). **W10 follow-ups (documented, not built):**
+1. **✅ DONE: frontier Wave 2 (W12) — per-clip launch quantise** (committed local `03f6efd`, not pushed). **▶ NEXT:
+   frontier program Wave 3 — grid clip primitives (duplicate → move/copy)** (a serial `ProjectSession` sub-spine +
+   `--selftest-duplicate` / `--selftest-slotmove`; headless-provable). Then Wave 4 (MIDI quantise + groove), Wave 5
+   (scene lifecycle), Wave 6 (the owed W05 QC-debt hardening, interleavable as the main.cpp-only slot), Wave 7
+   (performance recording) … — full ordered program + the critic's corrections in
+   `docs/frontier-program.local.md`. **W12 follow-ups (documented):** a save→reload round-trip leg for
+   `--selftest-session`; a curated launch-Q submenu subset (a Fable call). **W11 follow-ups (documented):**
+   immediate-launch for Gate (instant click-hold under any quant); a disk save→reload leg for
+   `--selftest-launchmode`; Random/weighted/group follow-actions (v2). **W10 follow-ups (documented, not built):**
    (a) **whole-scene "Send to Arrangement"** — send every filled clip in a scene to its track, aligned at one
    start (the natural next extension; deferred by the single-clip scope choice); (b) **send-as-loop** — the copy
    is normalized to a one-shot (the conventional default); a sent loop *staying* a tempo-locked loop is a one-line

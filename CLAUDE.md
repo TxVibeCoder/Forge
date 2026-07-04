@@ -62,7 +62,7 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-SIX gates as of W11): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-SIX gates as of W12; W12 added none, extending `--selftest-session`): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
@@ -106,6 +106,16 @@ conflict, surface it.
   duration). `Clip::getFollowActions()` also **lazily creates** the FOLLOWACTIONS child — a const reader must
   guard on `state.getChildWithName(IDs::FOLLOWACTIONS).isValid()` before calling it, or a pure read dirties the
   edit.
+- **The per-clip launch-quantise engine seam is a verbatim TYPO + INVERTED (W12).** The method is spelled
+  `Clip::setUsesGlobalLaunchQuatisation(bool)` / `usesGlobalLaunchQuatisation()` — **"Quatisation", missing the
+  `n`** — auto-correcting to "Quantisation" fails to compile / silently fails to override. Semantics are
+  **inverted**: `setUsesGlobalLaunchQuatisation(false)` **ENABLES** the per-clip override (the clip's own
+  `getLaunchQuantisation()->type`); `true` inherits the Edit-global. To set an override write **both** the flag
+  (false) **and** the type — the resolver gates on the flag first, so a type-only write is a silent no-op. Unlike
+  FOLLOWACTIONS, `Clip::getLaunchQuantisation()` builds over the clip's **existing** state node (not
+  `getOrCreateChildWithName`) and its ctor only `referTo`s, so a const read does **not** dirty the edit — but a
+  const inherit-check should still read only the flag and never call `getLaunchQuantisation()` (a needless
+  C++-member build).
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

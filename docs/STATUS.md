@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-02 (latest: **W11 — frontier program Wave 1: launcher
+*Living status document. Last updated 2026-07-03 (latest: **W12 — frontier program Wave 2: per-clip launch quantise override** (local, unpushed); prior: **W11 — frontier program Wave 1: launcher
 expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
 10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
 new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine
@@ -626,7 +626,27 @@ file-disjoint agent (Role B) + a 5-dimension adversarial QC. Full record:
   Gate quantise quick-click **documented** (immediate under free-trigger quant; immediate-launch is a follow-up).
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**; the FOLLOWACTIONS
   auto-plant footgun banked in CLAUDE.md. **Committed + PUSHED to `origin/main`** (`5c3738e` code + `0f9d5cc`
-  docs, sanitize-clean). Next: frontier Wave 2 (per-clip launch quantise).
+  docs, sanitize-clean).
+
+### W12 — frontier program Wave 2: per-clip launch quantise override — SHIPPED (local)  (baseline `2a366e9`)
+A filled Session slot can carry its **own** launch quantisation (a 1/16 hat fill vs a 1-bar bass) instead of only
+the Edit-global launch quant. The engine's launch resolver already preferred a per-clip `LaunchQuantisation`, so
+the wave added only the seams + UI + proof. Full record:
+[devlog/wave-12-per-clip-launch-quantise.md](devlog/wave-12-per-clip-launch-quantise.md).
+- **Seams** (`ProjectSession`): `setClipLaunchQuantisation` / `getClipLaunchQuantisation` /
+  `clearClipLaunchQuantisation` / `clipInheritsGlobalLaunchQuantisation`, plus **`resolveEffectiveLaunchQType`** —
+  a bridge into the file-local resolver so the gate asserts precedence through the *real* launch path, not a
+  mirror. Engine seam `setUsesGlobalLaunchQuatisation` (verbatim typo, inverted: `false` enables the override);
+  const readers never dirty the tree.
+- **UI**: a "Launch quantise" submenu in `SessionView::handleSlotRightClicked` (Global-inherit + 23 `LaunchQType`
+  values), dispatched inline like the W11 launcher submenus — no new callback, no `ClipSlotComponent` change.
+- **Proof**: a `perClipLaunchQ` leg on **`--selftest-session`** (set an override distinct from global → assert the
+  real resolver returns it → revert to inherit). **No new gate — floor stays 26.**
+- **QC (6 dimensions):** override-semantics / R1-const-read / undo / menu / persistence / regression all **REFUTED
+  clean** — verdict **ship, 0 defects** (the change is fully undoable via the engine's UndoManager binding).
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**. **Committed LOCALLY**
+  (`03f6efd` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 3 (grid clip
+  primitives: duplicate → move/copy).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
