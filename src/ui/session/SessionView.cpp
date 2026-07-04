@@ -462,6 +462,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
            idModeTrigger = 300, idModeGate, idModeToggle,
            idLaunchQInherit = 400, idLaunchQBase = 401 };   // W2: 401.. = one per LaunchQType (enum order)
+    enum { idDuplicate = 50, idMoveToNext };   // W3 structural slot ops (in the free 9..99 gap)
 
     // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
     // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
@@ -489,6 +490,8 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idEdit,        "Edit clip");            // launch-free edit path (mirrors double-click, without launching)
         menu.addItem (idSendArrange, "Send to Arrangement");  // W5: copy this clip onto the track's Arrange timeline (one-directional)
         menu.addItem (idDelete,      "Delete clip");          // W07: empty the slot (filled-only); undoable via W05 global Undo
+        menu.addItem (idDuplicate,   "Duplicate clip");       // W3: copy to the first empty slot below (auto-grow)
+        menu.addItem (idMoveToNext,  "Move to next slot");    // W3: move to the first empty slot below (auto-grow)
 
         // W1 launcher expressiveness: per-clip follow action / loop / launch mode.
         PopupMenu followMenu;
@@ -597,6 +600,30 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                         safeThis->rebuild();
                                     }
                                     break;
+                                case idDuplicate:
+                                    // W3: copy the clip to the first empty slot below (auto-grow a row if
+                                    // none). Occupancy changes -> rebuild() (mirrors idDelete).
+                                    if (safeThis->session.duplicateSlotClip (trackIdx, sceneIdx) >= 0)
+                                    {
+                                        if (safeThis->onEditMutated != nullptr)
+                                            safeThis->onEditMutated();
+                                        safeThis->rebuild();
+                                    }
+                                    break;
+                                case idMoveToNext:
+                                {
+                                    // W3: MOVE = duplicate to the auto-grow target, then clear the source —
+                                    // both in ONE undo transaction (single trailing onEditMutated seals; no
+                                    // beginNewTransaction between the halves).
+                                    const int dst = safeThis->session.duplicateSlotClip (trackIdx, sceneIdx);
+                                    if (dst >= 0 && safeThis->session.clearSlot (trackIdx, sceneIdx))
+                                    {
+                                        if (safeThis->onEditMutated != nullptr)
+                                            safeThis->onEditMutated();
+                                        safeThis->rebuild();
+                                    }
+                                    break;
+                                }
                                 case idSendArrange:
                                     // W5: hand off to the shell, which owns the seam + the Arrange rebuild
                                     // + the seal/save (the source slot is untouched, so no grid rebuild).
@@ -714,6 +741,30 @@ bool SessionView::keyPressed (const KeyPress& key)
     if (key.isKeyCode (KeyPress::rightKey))  { setFocus (focusTrack + 1, focusScene); return true; }
     if (key.isKeyCode (KeyPress::upKey))     { setFocus (focusTrack, focusScene - 1); return true; }
     if (key.isKeyCode (KeyPress::downKey))   { setFocus (focusTrack, focusScene + 1); return true; }
+
+    // W3 duplicate/move on the FOCUSED filled slot. Ctrl+D = MOVE to the first empty slot below (the baked
+    // default); Ctrl+Shift+D = COPY (keep the source). Auto-grows a row when none is empty below; focus
+    // follows the clip to its (possibly grown) row. getKeyCode() (not getTextCharacter) is reliable with a
+    // modifier held; accept either case. Consume even on an empty slot.
+    if (key.getModifiers().isCommandDown()
+        && (key.getKeyCode() == 'D' || key.getKeyCode() == 'd'))
+    {
+        if (session.isSlotFilled (focusTrack, focusScene))
+        {
+            const bool copy = key.getModifiers().isShiftDown();
+            const int  dst  = session.duplicateSlotClip (focusTrack, focusScene);
+            if (dst >= 0)
+            {
+                if (! copy)
+                    session.clearSlot (focusTrack, focusScene);   // MOVE half — same transaction (one seal below)
+                if (onEditMutated != nullptr)
+                    onEditMutated();
+                rebuild();
+                setFocus (focusTrack, dst);
+            }
+        }
+        return true;
+    }
 
     // Ctrl+Enter on the focused empty slot of a MIDI-armed track begins a slot record (design §3).
     // MUST come BEFORE the plain-returnKey handler below so the modifier combo is consumed first.

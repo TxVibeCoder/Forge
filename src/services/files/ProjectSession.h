@@ -105,6 +105,27 @@ public:
         is already empty. */
     bool clearSlot (int trackIndex, int sceneIndex);
 
+    /** DUPLICATE the clip in slot (trackIndex, srcScene) into the first EMPTY slot BELOW it on the SAME
+        track — auto-growing one new row (ensureScenes + ensureNumberOfSlots, OFF the user undo stack) when
+        none is empty below. A COPY (source stays filled); the clone carries the source's launcher metadata
+        (follow-action / launch-mode / launch-Q) and the engine re-imposes slot normalization. Only the clip
+        insert rides the UndoManager, so one Ctrl+Z removes just the duplicate; fire onEditMutated() + a grid
+        rebuild after. Returns the destination scene index, or -1 (logged) on no edit / empty source / failed
+        insert. */
+    int duplicateSlotClip (int trackIndex, int srcScene);
+
+    /** COPY the clip in (srcTrack, srcScene) into (dstTrack, dstScene), materialising the destination slot
+        on demand. A FILLED destination is replaced (the engine auto-removes the existing clip; removal + add
+        both ride the UndoManager). The source is untouched. Returns false (logged, no-op) on no edit / empty
+        source / src==dst / an unresolved-or-failed insert. */
+    bool copySlotClip (int srcTrack, int srcScene, int dstTrack, int dstScene);
+
+    /** MOVE = copySlotClip(...) THEN clearSlot(srcTrack, srcScene) with NO beginNewTransaction between, so
+        both halves land in ONE undo transaction (one Ctrl+Z reverses the whole move). The copy runs first;
+        the source is cleared only after it lands (a failed copy leaves the source intact). Returns true on
+        success. */
+    bool moveSlotClip (int srcTrack, int srcScene, int dstTrack, int dstScene);
+
     /** Copies the clip in slot (trackIndex, sceneIndex) onto the SAME track's LINEAR (Arrange)
         timeline — the explicit, one-directional "Send to Arrangement" bridge (W5). The copy is
         APPENDED after that track's existing arrange content (track->getTotalRange().getEnd(), == 0

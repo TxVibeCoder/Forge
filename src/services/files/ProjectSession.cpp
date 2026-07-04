@@ -447,6 +447,41 @@ namespace
                                                        : std::nullopt);
     }
 
+    // Clone srcClip's state into targetSlot via the engine's own slot-paste idiom (W3). The ONLY engine
+    // insert in the duplicate/move/copy path — the public seams compose it + getClipSlot + the grow calls.
+    //  - createCopy() is PARENTLESS (satisfies te::insertClipWithState's !state.getParent() assert) — never
+    //    pass the live src->state.
+    //  - Re-ID BEFORE insert: the single-arg insertClipWithState does NOT mint a new itemID, and a raw copy
+    //    carries the source itemID -> a duplicate ID in the same Edit. Stamp a fresh one (like te::split).
+    //  - insertClipWithState(ClipOwner&, ValueTree) into a ClipSlot (a) auto-removes any existing target clip
+    //    (baked replace-on-filled) and (b) RE-IMPOSES slot normalization. So NO manual normalization here
+    //    (that is the Arrange-only sendSlotToArrangement concern) and NO launcher-metadata strip — the target
+    //    IS a launcher slot, so a faithful duplicate keeps its FOLLOWACTIONS / forgeLaunchMode / launch-Q.
+    te::Clip* cloneClipIntoSlot (te::Edit& e, te::Clip& srcClip, te::ClipSlot& targetSlot)
+    {
+        // Capture the source's one-shot state BEFORE the insert. The engine's ClipSlot normalization
+        // (tracktion_ClipOwner.cpp:372-381) RE-IMPOSES a full-length loop on any freshly-inserted clip that
+        // reads !isLooping() — so a duplicated ONE-SHOT would silently come back LOOPING (a W11 launcher-state
+        // regression, QC-caught) unless we re-assert disableLooping() after the insert.
+        const bool wasOneShot = ! srcClip.isLooping();
+
+        auto newState = srcClip.state.createCopy();
+        e.createNewItemID().writeID (newState, nullptr);   // fresh id BEFORE insert (single-arg does not re-ID)
+
+        // Stop any live launch on a filled target so no LaunchHandle dangles across the engine's internal
+        // removeFromParent (which, unlike clearSlot, does NOT stop the handle first).
+        stopClipInSlot (&targetSlot, e);
+
+        auto* clip = te::insertClipWithState (targetSlot, newState);   // ClipSlot IS-A ClipOwner
+
+        // Re-assert the one-shot state the engine's slot-normalization just stripped. disableLooping() is the
+        // correct inverse — NEVER setLoopRangeBeats({}), which re-asserts auto-tempo (the W5/W10 gotcha).
+        if (clip != nullptr && wasOneShot)
+            clip->disableLooping();
+
+        return clip;
+    }
+
     // Sheet-00 default scene names for the first 8 rows; rows 9-16 stay unnamed (the UI shows
     // the row number for an empty name). Used only to seed a newly-created, still-unnamed scene.
     const juce::StringArray& defaultSceneNames()
@@ -662,6 +697,92 @@ bool ProjectSession::clearSlot (int trackIndex, int sceneIndex)
 
     edit->markAsChanged();
     return true;
+}
+
+bool ProjectSession::copySlotClip (int srcTrack, int srcScene, int dstTrack, int dstScene)
+{
+    if (edit == nullptr)
+        return false;
+
+    if (srcTrack == dstTrack && srcScene == dstScene)
+        return false;   // self-copy is a no-op
+
+    // Source must be filled — check BEFORE the grow so an empty source can't grow the grid.
+    {
+        auto* s0 = getClipSlot (srcTrack, srcScene);
+        if (s0 == nullptr || s0->getClip() == nullptr)
+        {
+            FORGE_LOG_WARN ("copySlotClip: source slot " + juce::String (srcTrack) + "," + juce::String (srcScene) + " is empty");
+            return false;
+        }
+    }
+
+    // Materialise the destination slot on demand. The grow stays OFF the user undo stack (ensureScenes
+    // self-inhibits + clears history) and runs BEFORE the undoable insert, so one Ctrl+Z removes only the
+    // clip. Mirrors createMidiClipInSlot's grow pair.
+    auto* dstTrk = EngineHelpers::getOrInsertAudioTrackAt (*edit, dstTrack);
+    if (dstTrk == nullptr)
+    {
+        FORGE_LOG_ERROR ("copySlotClip: destination track " + juce::String (dstTrack) + " unresolved");
+        return false;
+    }
+
+    ensureScenes (dstScene + 1);
+    dstTrk->getClipSlotList().ensureNumberOfSlots (dstScene + 1);
+
+    // Re-resolve BOTH slots AFTER the grow (a grow can rebuild slot objects — never hold a clip across it, R1).
+    auto* dstSlot = getClipSlot (dstTrack, dstScene);
+    auto* srcSlot = getClipSlot (srcTrack, srcScene);
+    auto* srcClip = (srcSlot != nullptr) ? srcSlot->getClip() : nullptr;
+
+    if (dstSlot == nullptr || srcClip == nullptr)
+    {
+        FORGE_LOG_ERROR ("copySlotClip: slot unresolved after grid growth (src or dst)");
+        return false;
+    }
+
+    if (cloneClipIntoSlot (*edit, *srcClip, *dstSlot) == nullptr)
+    {
+        FORGE_LOG_ERROR ("copySlotClip: insert into destination slot "
+                         + juce::String (dstTrack) + "," + juce::String (dstScene) + " failed");
+        return false;
+    }
+
+    edit->markAsChanged();
+    return true;
+}
+
+int ProjectSession::duplicateSlotClip (int trackIndex, int srcScene)
+{
+    if (edit == nullptr)
+        return -1;
+
+    auto* srcSlot = getClipSlot (trackIndex, srcScene);
+    if (srcSlot == nullptr || srcSlot->getClip() == nullptr)
+    {
+        FORGE_LOG_WARN ("duplicateSlotClip: slot " + juce::String (trackIndex) + "," + juce::String (srcScene) + " has nothing to duplicate");
+        return -1;
+    }
+
+    // Target = the first EMPTY slot below the source on the same track; else a freshly-grown new last row.
+    int target = -1;
+    for (int s = srcScene + 1; s < getNumScenes(); ++s)
+        if (! isSlotFilled (trackIndex, s)) { target = s; break; }
+    if (target < 0)
+        target = getNumScenes();
+
+    return copySlotClip (trackIndex, srcScene, trackIndex, target) ? target : -1;
+}
+
+bool ProjectSession::moveSlotClip (int srcTrack, int srcScene, int dstTrack, int dstScene)
+{
+    // Copy FIRST; clear the source only once the copy lands (a failed copy leaves the source intact). NO
+    // beginNewTransaction between the halves, so one Ctrl+Z reverses the whole move — the shell seals the
+    // transaction after the gesture via onEditMutated().
+    if (! copySlotClip (srcTrack, srcScene, dstTrack, dstScene))
+        return false;
+
+    return clearSlot (srcTrack, srcScene);
 }
 
 te::AudioTrack* ProjectSession::appendAudioTrack (const juce::String& name)

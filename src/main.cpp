@@ -52,7 +52,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -828,6 +828,16 @@ public:
         {
             // Wave 1: per-clip launch-mode seam. Synchronous; one callAsync yield suffices.
             MessageManager::callAsync ([this] { runLaunchModeSelftest(); });
+        }
+        else if (mode == SelfTest::duplicate)
+        {
+            // Wave 3: duplicate-slot-clip seam. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runDuplicateSelftest(); });
+        }
+        else if (mode == SelfTest::slotmove)
+        {
+            // Wave 3: move/copy-slot-clip seams. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runSlotMoveSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -3742,6 +3752,217 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-duplicate (W3): the duplicateSlotClip seam — copy a slot clip to the first empty slot below
+    // (auto-growing a row when none is empty), source untouched, content faithful, undoable. Proves state +
+    // occupancy + note-count identity + the grow branch + undo, matching the W07/W10 headless conventions.
+    void runDuplicateSelftest()
+    {
+        bool clipCreated = false, dupToEmptyBelow = false, sourceStillFilled = false,
+             contentIdentical = false, grewWhenFull = false, sourceOneShot = false, oneShotPreserved = false,
+             undoRemovedDup = false, undoLeftSourceIntact = false, emptySourceNoop = false;
+        int  seededNotes = 0, dupNotes = 0, dstScene = -1,
+             scenesBeforeGrow = 0, growDst = -1, scenesAfterGrow = 0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            // Seed a known 4-note pattern into (0,0).
+            if (auto mc = session.createMidiClipInSlot (0, 0, "DUP"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 4; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats ((double) i),
+                                 te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+                seededNotes = seq.getNumNotes();
+            }
+
+            // Make the source a ONE-SHOT so the duplicate exercises the launcher-state round-trip: the engine
+            // re-loops a freshly-inserted non-looping clip unless cloneClipIntoSlot re-asserts disableLooping.
+            session.setSlotClipLooping (0, 0, false);
+            sourceOneShot = ! session.isSlotClipLooping (0, 0);
+
+            // (2) Duplicate into the first empty slot below (scene 1); the source stays filled.
+            dstScene          = session.duplicateSlotClip (0, 0);
+            dupToEmptyBelow   = (dstScene == 1) && session.isSlotFilled (0, 1);
+            sourceStillFilled = session.isSlotFilled (0, 0);
+            oneShotPreserved  = ! session.isSlotClipLooping (0, 1);   // the dup must stay a one-shot, not re-loop
+
+            // (3) Content identity: the duplicate carries the 4 notes (the sequence rode the state clone).
+            if (auto* slot = session.getClipSlot (0, 1))
+                if (auto* c = slot->getClip())
+                    if (auto* dmc = dynamic_cast<te::MidiClip*> (c))
+                        dupNotes = dmc->getSequence().getNumNotes();
+            contentIdentical = (dupNotes == 4);
+
+            // (4) Undo removes JUST the duplicate; the source stays intact. Duplicate (0,0) again -> (0,2)
+            // (the next empty below, no grow), seal the gesture, then undo it.
+            um.beginNewTransaction();
+            const int undoDst = session.duplicateSlotClip (0, 0);
+            ed->undo();
+            undoRemovedDup       = (undoDst == 2) && ! session.isSlotFilled (0, 2);
+            undoLeftSourceIntact = session.isSlotFilled (0, 0);
+
+            // (5) Grow-past-last: fill every remaining scene on track 0, then a duplicate must grow a new row.
+            for (int s = 1; s < session.getNumScenes(); ++s)
+                if (! session.isSlotFilled (0, s))
+                    session.createMidiClipInSlot (0, s, "FILL");
+            scenesBeforeGrow = session.getNumScenes();
+            growDst          = session.duplicateSlotClip (0, 0);
+            scenesAfterGrow  = session.getNumScenes();
+            grewWhenFull     = (growDst == scenesBeforeGrow)
+                               && (scenesAfterGrow == scenesBeforeGrow + 1)
+                               && session.isSlotFilled (0, growDst);
+
+            // (6) Empty source -> no-op (-1). Track 3, slot 0 is empty.
+            emptySourceNoop = (session.duplicateSlotClip (3, 0) == -1);
+        }
+
+        const bool pass = clipCreated && seededNotes == 4 && dupToEmptyBelow && sourceStillFilled
+                          && contentIdentical && sourceOneShot && oneShotPreserved
+                          && undoRemovedDup && undoLeftSourceIntact
+                          && grewWhenFull && emptySourceNoop;
+
+        String report;
+        report << "mode=duplicate" << newLine
+               << "clipCreated="          << (clipCreated ? 1 : 0) << newLine
+               << "seededNotes="          << seededNotes << newLine
+               << "dupToEmptyBelow="      << (dupToEmptyBelow ? 1 : 0) << newLine
+               << "sourceStillFilled="    << (sourceStillFilled ? 1 : 0) << newLine
+               << "contentIdentical="     << (contentIdentical ? 1 : 0) << newLine
+               << "dupNotes="             << dupNotes << newLine
+               << "sourceOneShot="        << (sourceOneShot ? 1 : 0) << newLine
+               << "oneShotPreserved="     << (oneShotPreserved ? 1 : 0) << newLine
+               << "undoRemovedDup="       << (undoRemovedDup ? 1 : 0) << newLine
+               << "undoLeftSourceIntact=" << (undoLeftSourceIntact ? 1 : 0) << newLine
+               << "grewWhenFull="         << (grewWhenFull ? 1 : 0) << newLine
+               << "growDst="              << growDst << newLine
+               << "scenesBeforeGrow="     << scenesBeforeGrow << newLine
+               << "scenesAfterGrow="      << scenesAfterGrow << newLine
+               << "emptySourceNoop="      << (emptySourceNoop ? 1 : 0) << newLine
+               << "result="               << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="              << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write duplicate selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Duplicate selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-slotmove (W3): the copySlotClip / moveSlotClip seams. COPY keeps the source; MOVE empties it;
+    // a filled destination is replaced (one clip, not stacked); a MOVE is ONE undo transaction (Ctrl+Z restores
+    // the source AND empties the dest); an empty source is a no-op. Cross-track, note-count faithful.
+    void runSlotMoveSelftest()
+    {
+        bool clipCreated = false, copyKeepsSource = false, copyDestFilled = false, copyNotes = false,
+             moveEmptiesSource = false, moveDestFilled = false, moveNotes = false,
+             replaceOneClip = false, replaceNotes = false,
+             moveUndoRestoredSource = false, moveUndoEmptiedDest = false, emptyMoveNoop = false;
+        int  seededNotes = 0, copyDestNotes = 0, moveDestNotes = 0, replaceDestNotes = 0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            auto noteCount = [this] (int t, int s) -> int
+            {
+                if (auto* slot = session.getClipSlot (t, s))
+                    if (auto* c = slot->getClip())
+                        if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+                            return mc->getSequence().getNumNotes();
+                return -1;
+            };
+
+            // Seed a known 4-note pattern into (0,0).
+            if (auto mc = session.createMidiClipInSlot (0, 0, "MOV"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 4; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats ((double) i),
+                                 te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+                seededNotes = seq.getNumNotes();
+            }
+
+            // (2) COPY (0,0) -> (1,0): source stays filled, dest filled, dest carries the 4 notes.
+            const bool copied = session.copySlotClip (0, 0, 1, 0);
+            copyKeepsSource = copied && session.isSlotFilled (0, 0);
+            copyDestFilled  = session.isSlotFilled (1, 0);
+            copyDestNotes   = noteCount (1, 0);
+            copyNotes       = (copyDestNotes == 4);
+
+            // (3) MOVE (0,0) -> (2,0): source empties, dest filled with the notes.
+            const bool moved = session.moveSlotClip (0, 0, 2, 0);
+            moveEmptiesSource = moved && ! session.isSlotFilled (0, 0);
+            moveDestFilled    = session.isSlotFilled (2, 0);
+            moveDestNotes     = noteCount (2, 0);
+            moveNotes         = (moveDestNotes == 4);
+
+            // (4) REPLACE-on-filled: (1,0) already holds a clip -> copy (2,0) over it -> still ONE clip.
+            const bool replaced = session.copySlotClip (2, 0, 1, 0);
+            replaceDestNotes = noteCount (1, 0);
+            replaceNotes     = (replaceDestNotes == 4);
+            replaceOneClip   = replaced && session.isSlotFilled (1, 0);
+
+            // (5) MOVE atomic undo: one Ctrl+Z reverses BOTH halves. Dest (2,1) is an existing-track empty
+            // slot, so no grow / track-insert perturbs the single transaction.
+            um.beginNewTransaction();
+            const bool moved2 = session.moveSlotClip (1, 0, 2, 1);
+            ed->undo();
+            moveUndoRestoredSource = moved2 && session.isSlotFilled (1, 0);
+            moveUndoEmptiedDest    = ! session.isSlotFilled (2, 1);
+
+            // (6) Empty source -> no-op false, and no destination slot is created.
+            emptyMoveNoop = ! session.moveSlotClip (4, 0, 5, 0) && ! session.isSlotFilled (5, 0);
+        }
+
+        const bool pass = clipCreated && seededNotes == 4
+                          && copyKeepsSource && copyDestFilled && copyNotes
+                          && moveEmptiesSource && moveDestFilled && moveNotes
+                          && replaceOneClip && replaceNotes
+                          && moveUndoRestoredSource && moveUndoEmptiedDest && emptyMoveNoop;
+
+        String report;
+        report << "mode=slotmove" << newLine
+               << "clipCreated="            << (clipCreated ? 1 : 0) << newLine
+               << "seededNotes="            << seededNotes << newLine
+               << "copyKeepsSource="        << (copyKeepsSource ? 1 : 0) << newLine
+               << "copyDestFilled="         << (copyDestFilled ? 1 : 0) << newLine
+               << "copyNotes="              << (copyNotes ? 1 : 0) << newLine
+               << "moveEmptiesSource="      << (moveEmptiesSource ? 1 : 0) << newLine
+               << "moveDestFilled="         << (moveDestFilled ? 1 : 0) << newLine
+               << "moveNotes="              << (moveNotes ? 1 : 0) << newLine
+               << "replaceOneClip="         << (replaceOneClip ? 1 : 0) << newLine
+               << "replaceNotes="           << (replaceNotes ? 1 : 0) << newLine
+               << "moveUndoRestoredSource=" << (moveUndoRestoredSource ? 1 : 0) << newLine
+               << "moveUndoEmptiedDest="    << (moveUndoEmptiedDest ? 1 : 0) << newLine
+               << "emptyMoveNoop="          << (emptyMoveNoop ? 1 : 0) << newLine
+               << "result="                 << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="                << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write slot-move selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Slot-move selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-sendarrange (W5, the last hands-on wave): the Session -> Arrange "Send to" bridge. Seed a
     // MIDI clip with a known note count into slot (0,0), send it to the SAME track's linear timeline, then
     // assert the faithful, one-directional COPY: the source slot still holds its clip (a copy, not a move);
@@ -5328,6 +5549,8 @@ public:
                             : commandLine.contains ("--selftest-sendarrange")    ? "selftest-sendarrange"    // before bare --selftest (W5)
                             : commandLine.contains ("--selftest-followaction")   ? "selftest-followaction"   // before bare --selftest (W1)
                             : commandLine.contains ("--selftest-launchmode")     ? "selftest-launchmode"     // before bare --selftest (W1)
+                            : commandLine.contains ("--selftest-duplicate")      ? "selftest-duplicate"      // before bare --selftest (W3)
+                            : commandLine.contains ("--selftest-slotmove")       ? "selftest-slotmove"       // before bare --selftest (W3)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -5386,6 +5609,8 @@ public:
                         : commandLine.contains ("--selftest-sendarrange")    ? SelfTest::sendarrange    // before bare --selftest (W5)
                         : commandLine.contains ("--selftest-followaction")   ? SelfTest::followaction   // before bare --selftest (W1)
                         : commandLine.contains ("--selftest-launchmode")     ? SelfTest::launchmode     // before bare --selftest (W1)
+                        : commandLine.contains ("--selftest-duplicate")      ? SelfTest::duplicate      // before bare --selftest (W3)
+                        : commandLine.contains ("--selftest-slotmove")       ? SelfTest::slotmove       // before bare --selftest (W3)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 
