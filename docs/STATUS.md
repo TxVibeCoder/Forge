@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-03 (latest: **W13 — frontier program Wave 3: grid clip primitives (duplicate/move/copy)** (local, unpushed); prior: W12 — per-clip launch quantise, **W11 — frontier program Wave 1: launcher
+*Living status document. Last updated 2026-07-03 (latest: **W14 — frontier program Wave 4: MIDI quantise** (local, unpushed); prior: W13 grid clip primitives, W12 per-clip launch quantise, **W11 — frontier program Wave 1: launcher
 expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
 10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
 new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine
@@ -665,8 +665,26 @@ slot** (copy or move to the first empty slot below, auto-growing a row when full
   `cloneClipIntoSlot` now re-asserts `disableLooping()`, gate-guarded. Five dimensions refuted clean (the
   `ensureScenes` history-wipe is pre-W3 inherited; the real-UI MOVE is atomic).
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-EIGHT selftests PASS**. **Committed LOCALLY**
-  (`2f804a2` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 4 (MIDI quantise +
-  groove).
+  (`2f804a2` code + docs) — **not pushed**, held for the maintainer's OK.
+
+### W14 — frontier program Wave 4: MIDI quantise (piano-roll) — SHIPPED (local)  (baseline `2edf78a`)
+The piano-roll gains destructive MIDI quantise: press **`q`** to snap the selection (or the whole clip when
+nothing is selected) to the grid — note starts only, length preserved, one undoable step. Full record:
+[devlog/wave-14-midi-quantise.md](devlog/wave-14-midi-quantise.md).
+- **Seam** (NEW, header-only `src/engine/MidiEditHelpers.h`): `forge::midiedit::quantiseNoteStarts` over the
+  engine's `QuantisationType` (a LOCAL instance — never the clip's persistent playback quantise); `setProportion`
+  is the 0-100% strength (`roundBeatToNearest` folds it in — no hand-lerp); `setStartAndLength` preserves length.
+  No CMakeLists edit (header-only; `target_sources` is explicit `.cpp`-only). Corrected grid mapping:
+  `gridBeats 0.25 → "1/4"` (a fraction of a BEAT), NOT "1/16".
+- **UI**: `PianoRollView` 'q' (no modifier — Ctrl+Q Exit propagates) → `quantiseSelectionOrClip`; `layoutNotes`
+  keeps the selection. No raw `te::` quantise in the view.
+- **Gate** `--selftest-quantise` (floor **28 → 29**): snap-to-grid, length preserved, **50%-strength
+  interpolation** (0.1→0.05), undo revert.
+- **QC (6 dimensions) — ship:** one nit fixed (the Ctrl+Q swallow); grid math / length / stale-pointer safety /
+  single-transaction undo / no playback-quantise mutation all refuted clean.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-NINE selftests PASS**. **Committed LOCALLY**
+  (`52b6e66` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 5 (scene lifecycle:
+  rename → delete → reorder).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

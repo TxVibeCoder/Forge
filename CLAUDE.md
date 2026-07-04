@@ -62,13 +62,13 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-EIGHT gates as of W13): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-NINE gates as of W14): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
-  `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`;   (⚠ new gate names that CONTAIN an existing name must be
+  `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`, `--selftest-quantise`;   (⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`; verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
@@ -123,6 +123,12 @@ conflict, surface it.
   insert (capture `wasOneShot` before). Use `disableLooping()`, NOT `setLoopRangeBeats({})` (which re-asserts
   auto-tempo — the W5/W10 gotcha). A gate whose fixture clips are born looping will NOT catch this (adversarial
   QC did).
+- **The engine's quantise grid is a fraction of a BEAT, not a note-value (W14).** A `te::QuantisationType`
+  type-name like `"1/4"` means a quarter of a BEAT (`beatFraction == 0.25`), so a piano-roll grid of 0.25 beats
+  maps to `"1/4"` — NOT `"1/16"` (which is 0.0625). Map by matching the fraction value, never the note-name, or
+  notes snap 4× finer than the visible grid. `QuantisationType::roundBeatToNearest` already folds `setProportion`
+  (the 0-100% strength) into the result (`orig + proportion*(snapped-orig)`) — do NOT hand-lerp. Use a LOCAL
+  `QuantisationType`, never `clip.getQuantisation()` (the clip's persistent playback quantise).
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

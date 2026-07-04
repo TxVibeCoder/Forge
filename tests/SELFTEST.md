@@ -564,6 +564,23 @@ exercises copy, move, replace-on-filled, and MOVE atomic undo — cross-track, n
 
 > Verified 2026-07-03: **PASS**. `slotmove` vs `slotdelete` share only the `slot` prefix (neither contains the other) — collision-free; before bare `--selftest`; verify `mode=slotmove`. **Floor is now 28 gates.**
 
+## `Forge --selftest-quantise` (piano-roll MIDI quantise)
+
+The acceptance gate for **W14 — MIDI quantise** (design:
+[../docs/devlog/wave-14-midi-quantise.md](../docs/devlog/wave-14-midi-quantise.md)). Synchronous. Seeds 3
+off-grid notes (starts 0.1/1.1/2.1, distinct lengths) and drives `forge::midiedit::quantiseNoteStarts` directly.
+Proves the quantise math + interpolation + undo — NOT audible playback.
+
+| field | meaning | PASS |
+|---|---|---|
+| `seededNotes` | 3 notes seeded at off-grid starts | 3 |
+| `snappedToGrid` | quantise to the 0.25 grid at 100% snaps each start to its nearest multiple (0.1→0.0, 1.1→1.0, 2.1→2.0) within 1e-4 | 1 |
+| `lengthPreserved` | each note's length is unchanged (starts-only) | 1 |
+| `partialStrength` | a note at 0.1 quantised at 50% lands at ~0.05 (halfway — proves `setProportion` interpolation, not a full snap) | 1 |
+| `undoReverts` | one undo restores the pre-quantise start (the destructive rewrite rides the Edit UndoManager) | 1 |
+
+> Verified 2026-07-03: **PASS**. `quantise` is substring-collision-free; before bare `--selftest`; verify `mode=quantise`. **Floor is now 29 gates.** Grid mapping is a fraction of a BEAT (0.25 → "1/4", not "1/16"). Groove is a documented fast-follow (2 built-in swing templates on the same seam).
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

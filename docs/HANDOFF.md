@@ -1,21 +1,23 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W13 — frontier program
-> Wave 3: grid clip primitives (duplicate / move / copy)"** — the **THIRD** wave of the 10-wave **frontier build program**
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W14 — frontier program
+> Wave 4: MIDI quantise (piano-roll)"** — the **FOURTH** wave of the 10-wave **frontier build program**
 > ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a discovery swarm produced after the
-> hands-on plan completed at W10 (Wave 1 = W11 launcher expressiveness; Wave 2 = W12 per-clip launch quantise). ⚠ **W05's owed adversarial-QC dimensions
+> hands-on plan completed at W10 (W11 launcher expressiveness · W12 per-clip launch quantise · W13 grid clip primitives). ⚠ **W05's owed adversarial-QC dimensions
 > remain PARTIALLY owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12 + W13 + a docs
-sanitization are committed LOCALLY (tip `2f804a2`; 5 commits ahead of `origin/main`) — NOT pushed, held for the
-maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-EIGHT selftests PASS** (W13 added
-`--selftest-duplicate` + `--selftest-slotmove`; floor 26 → 28).
-Shipped (W13 — frontier Wave 3): right-click a filled Session slot → **Duplicate clip** / **Move to next slot**
-(copy or move to the first empty slot below, auto-growing a row when full); **Ctrl+D** move / **Ctrl+Shift+D**
-copy on the focused slot. Cross-track copy/move seams (gate-exercised). Prior wave (W12 — frontier Wave 2):
+**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12–W14 + a docs
+sanitization are committed LOCALLY (tip `52b6e66`; 7 commits ahead of `origin/main`) — NOT pushed, held for the
+maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-NINE selftests PASS** (W14 added
+`--selftest-quantise`; floor 28 → 29).
+Shipped (W14 — frontier Wave 4): the piano-roll gains **MIDI quantise** — press **`q`** to snap the selection
+(or the whole clip) to the grid, starts-only, one undoable step, via a new header-only `MidiEditHelpers.h`
+(engine `QuantisationType`, 50%-strength interpolation proven). Prior wave (W13 — frontier Wave 3): right-click
+a filled Session slot → **Duplicate clip** / **Move to next slot**; **Ctrl+D** move / **Ctrl+Shift+D** copy.
+Before that (W12 — frontier Wave 2):
 right-click a filled Session slot → **Launch quantise** → *Global (inherit)* or
 any of the 23 launch-Q values; the clip snaps on its own grid via new `ProjectSession` seams + a
 `resolveEffectiveLaunchQType` proof bridge (6-dimension adversarial QC: **ship**). Prior wave (frontier Wave 1 =
@@ -77,7 +79,21 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W13 (frontier Wave 3: grid clip primitives)
+## What the LATEST wave did — W14 (frontier Wave 4: MIDI quantise)
+
+**W14** gives the piano-roll **destructive MIDI quantise** — press **`q`** to snap the selection (or the whole
+clip when nothing is selected) to the grid; note starts only, length preserved, one undoable step. Full record →
+[devlog/wave-14-midi-quantise.md](devlog/wave-14-midi-quantise.md). A file-disjoint wave: a new header-only
+`src/engine/MidiEditHelpers.h` (`forge::midiedit::quantiseNoteStarts` over the engine's `QuantisationType` — a
+1:1 lift of its own unit test) + a `PianoRollView` 'q' trigger + the gate; NO ProjectSession touch, no CMakeLists
+edit. The 5-reader verify swarm corrected a baked grid-mapping error (`gridBeats 0.25 → "1/4"`, a fraction of a
+BEAT, NOT "1/16"). Gate **`--selftest-quantise`** (floor 28 → 29): snap-to-grid, length preserved, **50%-strength
+interpolation** (0.1→0.05), undo. **QC (6 dimensions) — ship:** one nit fixed (Ctrl+Q was swallowed by quantise —
+now guarded on `!isCommandDown`); grid math / length / stale-pointer safety / single-transaction undo / no
+playback-quantise mutation all refuted clean. Groove (2 built-in swing templates on the same seam) is a
+documented fast-follow.
+
+## What a prior wave did — W13 (frontier Wave 3: grid clip primitives)
 
 **W13** adds **slot→slot clip primitives** — right-click a filled slot → **Duplicate clip** / **Move to next
 slot** (copy or move to the first empty slot below, auto-growing a row when the column is full); **Ctrl+D** /
@@ -346,11 +362,12 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **✅ DONE: frontier Waves 2–3 (W12–W13)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
-   (`2f804a2`), committed local, not pushed. **▶ NEXT: frontier program Wave 4 — MIDI quantise + groove** (a
-   disjoint `PianoRollView` + a new header-only `MidiEditHelpers.h`; gate `--selftest-quantise`; the engine's own
-   unit test does the identical destructive quantise → near-zero engine risk). Then Wave 5
-   (scene lifecycle), Wave 6 (the owed W05 QC-debt hardening, interleavable as the main.cpp-only slot), Wave 7
+1. **✅ DONE: frontier Waves 2–4 (W12–W14)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
+   (`2f804a2`) + MIDI quantise (`52b6e66`), committed local, not pushed. **▶ NEXT: frontier program Wave 5 —
+   Session scene lifecycle (rename → delete → reorder)** (a serial `ProjectSession` sub-spine + a disjoint
+   `SceneColumnComponent`; strict dependency chain; ⚠ its scene-row PopupMenu is contested with W7's whole-scene
+   send — W5 ships the scaffold, W7 appends one item). Then Wave 6 (the owed W05 QC-debt hardening, interleavable
+   as the main.cpp-only slot), Wave 7
    (performance recording) … — full ordered program + the critic's corrections in
    `docs/frontier-program.local.md`. **W12 follow-ups (documented):** a save→reload round-trip leg for
    `--selftest-session`; a curated launch-Q submenu subset (a Fable call). **W11 follow-ups (documented):**
