@@ -185,6 +185,12 @@ private:
 
     void notifyMutated();
 
+    /** Quantises note STARTS to the grid (gridBeats) at 100%: the selection, or the whole clip when the
+        selection is empty. Preserves each note's length; one undoable step; non-structural (layoutNotes,
+        NOT rebuildNotes — keeps the selection). Bound to the 'q' key; routes through the MidiEditHelpers
+        seam so no raw te::QuantisationType call lives in the view. */
+    void quantiseSelectionOrClip();
+
     //==============================================================================
     TimelineView& timeline;                 // shared horizontal axis (not owned)
 

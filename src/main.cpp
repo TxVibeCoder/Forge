@@ -21,6 +21,7 @@
 #include "engine/PluginHost.h"
 #include "engine/Metronome.h"
 #include "engine/MidiLearn.h"
+#include "engine/MidiEditHelpers.h"
 #include "engine/ForgeUIBehaviour.h"
 #include "engine/LaunchpadDriver.h"
 #include "engine/ControlSurfaceHost.h"
@@ -52,7 +53,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -838,6 +839,11 @@ public:
         {
             // Wave 3: move/copy-slot-clip seams. Synchronous; one callAsync yield suffices.
             MessageManager::callAsync ([this] { runSlotMoveSelftest(); });
+        }
+        else if (mode == SelfTest::quantise)
+        {
+            // Wave 4: MIDI quantise seam. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runQuantiseSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -3963,6 +3969,109 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-quantise (W4): the MIDI-quantise seam (forge::midiedit::quantiseNoteStarts). Seeds off-grid
+    // notes, snaps them to the 1/16-note grid (gridBeats 0.25 -> engine "1/4"), and proves snap-to-grid,
+    // length preserved (starts-only), partial-strength interpolation (50% -> halfway), and undo. Does NOT
+    // prove audible playback.
+    void runQuantiseSelftest()
+    {
+        bool clipCreated = false, snappedToGrid = false, lengthPreserved = false,
+             partialStrength = false, undoReverts = false;
+        int seededNotes = 0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            auto allNotes = [] (te::MidiNote&) { return true; };
+
+            // Main leg: 3 off-grid notes (0.1/1.1/2.1) with distinct lengths (0.4/0.9/0.6).
+            if (auto mc = session.createMidiClipInSlot (0, 0, "QNT"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                const double starts[3]  = { 0.1, 1.1, 2.1 };
+                const double lengths[3] = { 0.4, 0.9, 0.6 };
+                for (int i = 0; i < 3; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats (starts[i]),
+                                 te::BeatDuration::fromBeats (lengths[i]), 100, 0, &um);
+                seededNotes = seq.getNumNotes();
+
+                // Hold the (start-sorted) note pointers + their lengths BEFORE quantise.
+                juce::Array<te::MidiNote*> notes (seq.getNotes());
+                double lenBefore[3] = { 0.0, 0.0, 0.0 };
+                for (int i = 0; i < jmin (3, notes.size()); ++i)
+                    lenBefore[i] = notes[i]->getLengthBeats().inBeats();
+
+                forge::midiedit::quantiseNoteStarts (*mc, 0.25, 1.0, false, allNotes, &um);
+
+                const double eps = 1.0e-4;
+                const double want[3] = { 0.0, 1.0, 2.0 };
+                snappedToGrid   = (notes.size() == 3);
+                lengthPreserved = (notes.size() == 3);
+                for (int i = 0; i < jmin (3, notes.size()); ++i)
+                {
+                    snappedToGrid   = snappedToGrid   && std::abs (notes[i]->getStartBeat().inBeats()   - want[i])      < eps;
+                    lengthPreserved = lengthPreserved && std::abs (notes[i]->getLengthBeats().inBeats() - lenBefore[i]) < eps;
+                }
+            }
+
+            // Partial-strength leg: one note at 0.1, quantise 0.25 @ 50% -> ~0.05 (halfway; proves interpolation).
+            if (auto mc2 = session.createMidiClipInSlot (1, 0, "QNT2"))
+            {
+                auto& seq2 = mc2->getSequence();
+                um.beginNewTransaction();
+                seq2.addNote (60, te::BeatPosition::fromBeats (0.1), te::BeatDuration::fromBeats (0.5), 100, 0, &um);
+                forge::midiedit::quantiseNoteStarts (*mc2, 0.25, 0.5, false, allNotes, &um);
+                if (auto* n = seq2.getNotes().getFirst())
+                    partialStrength = std::abs (n->getStartBeat().inBeats() - 0.05) < 1.0e-4;
+            }
+
+            // Undo leg: quantise a known off-grid note in its own transaction, undo, assert start restored.
+            if (auto mc3 = session.createMidiClipInSlot (2, 0, "QNT3"))
+            {
+                auto& seq3 = mc3->getSequence();
+                um.beginNewTransaction();
+                seq3.addNote (60, te::BeatPosition::fromBeats (0.1), te::BeatDuration::fromBeats (0.5), 100, 0, &um);
+                um.beginNewTransaction();   // seal the seed; the quantise is its own transaction
+                forge::midiedit::quantiseNoteStarts (*mc3, 0.25, 1.0, false, allNotes, &um);
+                const bool snapped  = (seq3.getNotes().getFirst() != nullptr)
+                                      && std::abs (seq3.getNotes().getFirst()->getStartBeat().inBeats() - 0.0) < 1.0e-4;
+                ed->undo();
+                const bool reverted = (seq3.getNotes().getFirst() != nullptr)
+                                      && std::abs (seq3.getNotes().getFirst()->getStartBeat().inBeats() - 0.1) < 1.0e-4;
+                undoReverts = snapped && reverted;
+            }
+        }
+
+        const bool pass = clipCreated && seededNotes == 3 && snappedToGrid
+                          && lengthPreserved && partialStrength && undoReverts;
+
+        String report;
+        report << "mode=quantise" << newLine
+               << "clipCreated="     << (clipCreated ? 1 : 0) << newLine
+               << "seededNotes="     << seededNotes << newLine
+               << "snappedToGrid="   << (snappedToGrid ? 1 : 0) << newLine
+               << "lengthPreserved=" << (lengthPreserved ? 1 : 0) << newLine
+               << "partialStrength=" << (partialStrength ? 1 : 0) << newLine
+               << "undoReverts="     << (undoReverts ? 1 : 0) << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write quantise selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Quantise selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-sendarrange (W5, the last hands-on wave): the Session -> Arrange "Send to" bridge. Seed a
     // MIDI clip with a known note count into slot (0,0), send it to the SAME track's linear timeline, then
     // assert the faithful, one-directional COPY: the source slot still holds its clip (a copy, not a move);
@@ -5551,6 +5660,7 @@ public:
                             : commandLine.contains ("--selftest-launchmode")     ? "selftest-launchmode"     // before bare --selftest (W1)
                             : commandLine.contains ("--selftest-duplicate")      ? "selftest-duplicate"      // before bare --selftest (W3)
                             : commandLine.contains ("--selftest-slotmove")       ? "selftest-slotmove"       // before bare --selftest (W3)
+                            : commandLine.contains ("--selftest-quantise")       ? "selftest-quantise"       // before bare --selftest (W4)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -5611,6 +5721,7 @@ public:
                         : commandLine.contains ("--selftest-launchmode")     ? SelfTest::launchmode     // before bare --selftest (W1)
                         : commandLine.contains ("--selftest-duplicate")      ? SelfTest::duplicate      // before bare --selftest (W3)
                         : commandLine.contains ("--selftest-slotmove")       ? SelfTest::slotmove       // before bare --selftest (W3)
+                        : commandLine.contains ("--selftest-quantise")       ? SelfTest::quantise       // before bare --selftest (W4)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

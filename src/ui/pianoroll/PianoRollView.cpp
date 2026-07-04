@@ -2,6 +2,7 @@
 #include "ui/pianoroll/MidiNoteComponent.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "core/Log.h"
+#include "engine/MidiEditHelpers.h"   // W4: forge::midiedit::quantiseNoteStarts
 
 #include <algorithm>   // std::find for the selection set
 
@@ -435,6 +436,31 @@ void PianoRollView::commitMoveSelection (te::MidiNote& dragged, double beatDelta
     notifyMutated();
 }
 
+void PianoRollView::quantiseSelectionOrClip()
+{
+    if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Cannot quantise: no MIDI clip is bound to the piano roll");
+        return;
+    }
+
+    // Selection if any, else the whole clip; 100% strength (the plain "snap to grid" action — the helper
+    // accepts 0..1 for a future strength control). Non-structural: layoutNotes() (NOT rebuildNotes, which
+    // clears the selection) repositions each component from its note's new start. One undoable step.
+    const bool selectedOnly = ! selection.empty();
+    auto* undo = &clip->edit.getUndoManager();
+
+    const int moved = forge::midiedit::quantiseNoteStarts (
+        *clip, gridBeats, /*strength*/ 1.0, selectedOnly,
+        [this] (te::MidiNote& n) { return isSelected (n); }, undo);
+
+    juce::ignoreUnused (moved);
+
+    layoutNotes();
+    velocityLane.repaint();
+    notifyMutated();
+}
+
 void PianoRollView::setNoteVelocity (te::MidiNote& note, int velocity)
 {
     if (clip == nullptr)
@@ -547,6 +573,15 @@ bool PianoRollView::keyPressed (const juce::KeyPress& key)
             pasteClipboard();
             return true;
         }
+    }
+
+    // Q (no modifier) -> quantise note starts to the grid: the selection, or the whole clip when nothing is
+    // selected. Guard on !isCommandDown so Ctrl+Q (File > Exit) / Cmd+Q propagate instead of being swallowed
+    // here — isKeyCode ignores modifiers, so a bare-'Q' test also matches Ctrl+Q (QC-caught).
+    if (! key.getModifiers().isCommandDown() && (key.isKeyCode ('Q') || key.isKeyCode ('q')))
+    {
+        quantiseSelectionOrClip();
+        return true;
     }
 
     return false;
