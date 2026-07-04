@@ -601,7 +601,7 @@ Arrange stay separate, nothing auto-mirrors). Single-CLI wave (a tight spine acr
   non-looping · undo round-trip) + a **wave leg** (import a sine WAV → send → non-looping, non-auto-tempo
   WaveAudioClip whose source survived the copy) — both fixes proven headlessly.
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-FOUR selftests PASS**; the 10-state screenshot
-  matrix renders. After W10 the hands-on plan is **complete**; the Waveform feature-mining backlog is the next
+  matrix renders. After W10 the hands-on plan is **complete**; the frontier build program is the next
   planning source. **Committed + PUSHED to `origin/main`** (`40eccaf` code + `ea3c7a3` docs, sanitize-clean).
 
 ### W11 — frontier program Wave 1: launcher expressiveness — SHIPPED (PUSHED)  (baseline `90449ce`)

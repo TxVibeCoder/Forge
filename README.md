@@ -37,7 +37,7 @@ headless self-tests PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/
 - **Recording** — the verified Tracktion recipe; **verified end-to-end on real hardware**
   (`--selftest-record` captures a real take). Output-only startup; the capture input opens
   lazily on first arm.
-- **MIDI** — MIDI clips on any track, **born audible** via a default **4OSC** synth at the head
+- **MIDI** — MIDI clips on any track, **born audible** via the engine's built-in **4OSC** synth at the head
   of the chain; a **piano-roll** editor (draw / move / resize / delete, **velocity lane**,
   **multi-select**, **copy/paste**). Draw a clip and hear it. **Record MIDI straight into a Session
   slot** — arm a track, then **Ctrl+Enter** (or right-click ▸ "Record into slot") on an empty pad

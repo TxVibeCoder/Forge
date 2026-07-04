@@ -21,7 +21,7 @@ controller.** The linear arrangement timeline is a *secondary* view, not the pri
   Session, then arrange / bounce linearly) but it is the **secondary** view behind the Session grid.
 
 > **History:** Forge was built arrangement-first through ~10 waves (Phases 0–4 + a MIDI MVP + piano-roll
-> polish). That work is **not wasted** — clips, the 4OSC instrument, the piano-roll editor, the mixer, and
+> polish). That work is **not wasted** — clips, the engine's 4OSC instrument, the piano-roll editor, the mixer, and
 > plugin hosting are all building blocks that now live *inside* slots and scenes. What changes is the
 > **primary surface and identity**, and the addition of a **control-surface layer**.
 
@@ -89,7 +89,7 @@ hardware. The `mockups/09` sheet is a **hardware-mapping reference**, not an app
 
 ## What's reused from the arrangement-first work
 
-Clips (audio + MIDI), the **4OSC** instrument seam + `ensureDefaultInstrument`, the **piano-roll** editor
+Clips (audio + MIDI), the engine's **4OSC** instrument seam + `ensureDefaultInstrument`, the **piano-roll** editor
 (velocity / multi-select / copy-paste), the **mixer** (strips / inserts / meters / master), **plugin
 hosting**, project save/load, export, `ForgeLookAndFeel`. The **Arrange** timeline becomes the secondary
 view (compose in Session → arrange / bounce linearly).

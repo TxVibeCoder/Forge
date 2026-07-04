@@ -148,5 +148,5 @@ Synchronous (one `callAsync` yield). 26 assertions across two legs, all green:
 - **Runtime audio** could not be sampled headlessly; audibility is proven by the `playSlotClips` state assertion,
   not by rendering the arrangement to non-zero samples. (Same class as the standing W09 render-leg follow-up.)
 
-*After W10 the hands-on plan is complete. Next planning source: the Waveform feature-mining backlog
-([waveform-feature-mining.md](waveform-feature-mining.md)).*
+*After W10 the hands-on plan is complete. Next planning source: the frontier build program
+(`docs/frontier-program.local.md`).*

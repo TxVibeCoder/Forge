@@ -31,6 +31,6 @@ forge.log*
 # The committed record of a wave is its consolidation devlog, not these prompt files.
 wave-*-cli-prompts/
 
-# Third-party reference PDFs (e.g. the Waveform User Guide mined in docs/devlog/waveform-feature-mining.md).
-# Copyrighted — never commit to this public repo; keep them local. The mining NOTES are fine (facts only).
+# Third-party reference PDFs (e.g. copyrighted vendor manuals used for research).
+# Copyrighted — never commit to this public repo; keep them local.
 *.pdf

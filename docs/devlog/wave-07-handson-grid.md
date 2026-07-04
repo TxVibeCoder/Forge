@@ -1,7 +1,7 @@
 # W07 — the hands-on wave, part 2: Session-grid interactions
 
 > Wave 2 of the maintainer's first-hands-on plan ([[forge-handson-wave-plan]]). Baseline **`aa45ad7`**
-> (W06 + the Waveform backlog). Delivered **delete clip · + Track · + Scene (dynamic scene count) · real
+> (W06 + a feature-backlog draft). Delivered **delete clip · + Track · + Scene (dynamic scene count) · real
 > file drag-drop** (Session pads + Arrange lanes). Built the W06 way: source-verify → one serial spine
 > agent (the four session-grid features, all colliding on `src/ui/session/*`) + one parallel agent (the
 > disjoint Arrange drop) → orchestrator seams + gates + build → adversarial QC → fixes.

@@ -129,9 +129,9 @@ A long, multi-phase session. The arc:
    *proposed* the shared `main.cpp`/CMake wiring) → orchestrator consolidation (wiring + the new gate +
    the build) → clean build (0 warnings) → **17-gate floor** → a **4-dimension adversarial QC**
    (per-finding skeptics, default-refute) → 2 fixes. Full record: [devlog/wave-06-handson.md](devlog/wave-06-handson.md).
-4. **Waveform feature-mining backlog** (`758dbb1`): a candidate-feature list mined from the Waveform User
-   Guide (Tracktion's own DAW on the same engine) → [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md).
-   The guide PDF is copyrighted → `.gitignore`d (`*.pdf`), never committed.
+4. **Feature-backlog draft** (`758dbb1`): a candidate-feature list was drafted to feed planning, then **removed**
+   from the repo for public-repo hygiene (it was a derivative index of a copyrighted third-party manual; the
+   ideas remain in git history). Copyrighted reference PDFs stay `.gitignore`d (`*.pdf`), never committed.
 
 **Wave 1 shipped:**
 - **View buttons → top-left** (`ui/ControlBar.cpp`) and **Browser → a `juce::Path` folder icon** (the
@@ -336,9 +336,9 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    dedicated adversarial pass.
 4. **Later hands-on waves.** Wave 5 (deferred) = the explicit Session → Arrangement "Send to" bridge (the real
    answer to the "Session clip doesn't appear in Arrange" note).
-4. **Candidate-feature source.** [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md) — a
-   ranked backlog mined from the Waveform guide (launcher expressiveness / follow-actions / performance
-   recording top the list, all engine-native). Feeds planning; open design calls flagged in the doc.
+4. **Planning source.** The active backlog is the **frontier build program** (`docs/frontier-program.local.md` /
+   [[forge-frontier-program]]) — the discovery swarm's file-disjoint plan for Pillar 1 + "The gap". (A prior
+   third-party-guide feature-mining note was removed for public-repo hygiene; its top pick shipped as W11.)
 5. **Deferred/parked (unchanged).** Ableton Link (vendoring decision); aux-send/return live-sync;
    plugin-param automation lanes; comping; live short-term LUFS meter (needs an engine fork); macOS build;
    and — parked until hardware exists — the Launchpad byte-mapping smoke test, physical-CC MIDI-learn, and
@@ -636,7 +636,6 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/waveform-feature-mining.md](devlog/waveform-feature-mining.md) — **candidate-feature backlog** mined from the Waveform User Guide (Tracktion's own DAW on the same engine); UX/nav/workflow-first, page-referenced, ranked by fit. Feeds DIRECTION/STATUS planning. (The guide PDF is copyrighted → `.gitignore`d, never committed.)
 - [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD (this session)**.
 - [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (QC partially owed)**.
 - [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md) / [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md) — the W04 UX waves (same session).
