@@ -460,7 +460,8 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     // W1 launcher-expressiveness ids in distinct high ranges (follow-action is a contiguous range indexing
     // kFollowActions; loop + the launch modes are single ids). No overlap with the small set above.
     enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
-           idModeTrigger = 300, idModeGate, idModeToggle };
+           idModeTrigger = 300, idModeGate, idModeToggle,
+           idLaunchQInherit = 400, idLaunchQBase = 401 };   // W2: 401.. = one per LaunchQType (enum order)
 
     // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
     // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
@@ -508,6 +509,23 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         modeMenu.addItem (idModeToggle,  "Toggle",  true, currentMode == LaunchMode::Toggle);
         menu.addSubMenu ("Launch mode", modeMenu);
 
+        // W2 per-clip launch-quantise: "Global (inherit)" + one item per LaunchQType. Labels come from the
+        // SAME te::getLaunchQTypeChoices() the global TransportBar combo uses; the ticked item keys off the
+        // real has-override test (clipInheritsGlobalLaunchQuantisation), not a value compare.
+        PopupMenu launchQMenu;
+        const auto launchQChoices  = te::getLaunchQTypeChoices();
+        const bool inheritsGlobalQ = session.clipInheritsGlobalLaunchQuantisation (trackIdx, sceneIdx);
+        const auto globalQ         = session.getGlobalLaunchQuantisation();
+        const auto clipQ           = session.getClipLaunchQuantisation (trackIdx, sceneIdx);
+        launchQMenu.addItem (idLaunchQInherit,
+                             "Global (inherit - " + launchQChoices[(int) globalQ] + ")",
+                             true, inheritsGlobalQ);
+        launchQMenu.addSeparator();
+        for (int i = 0; i < launchQChoices.size(); ++i)
+            launchQMenu.addItem (idLaunchQBase + i, launchQChoices[i], true,
+                                 ! inheritsGlobalQ && static_cast<te::LaunchQType> (i) == clipQ);
+        menu.addSubMenu ("Launch quantise", launchQMenu);
+
         menu.addSeparator();
     }
 
@@ -537,6 +555,24 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                 if (fa != te::FollowAction::none)   // default duration: after 1 loop
                                     safeThis->session.setFollowActionDuration (trackIdx, sceneIdx,
                                         te::Clip::FollowActionDurationType::loops, 1.0);
+                                if (safeThis->onEditMutated != nullptr)
+                                    safeThis->onEditMutated();
+                                return;
+                            }
+
+                            // W2 per-clip launch-quantise: "Global (inherit)" reverts to global; a type item overrides.
+                            if (result == idLaunchQInherit)
+                            {
+                                safeThis->session.clearClipLaunchQuantisation (trackIdx, sceneIdx);
+                                if (safeThis->onEditMutated != nullptr)
+                                    safeThis->onEditMutated();
+                                return;
+                            }
+                            if (result >= idLaunchQBase
+                                && result < idLaunchQBase + te::getLaunchQTypeChoices().size())
+                            {
+                                safeThis->session.setClipLaunchQuantisation (trackIdx, sceneIdx,
+                                    static_cast<te::LaunchQType> (result - idLaunchQBase));
                                 if (safeThis->onEditMutated != nullptr)
                                     safeThis->onEditMutated();
                                 return;

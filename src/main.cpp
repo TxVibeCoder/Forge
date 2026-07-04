@@ -2303,11 +2303,32 @@ private:
         const bool launchQBar  = session.getGlobalLaunchQuantisation() == te::LaunchQType::bar;
         const bool launchQRoundTrip = launchQNone && launchQBar;
 
+        // Per-clip launch-Q override (Wave 2). Global is 'bar' here (restored just above). Drive the clip's
+        // OWN override to a DISTINCT value (none) and prove the REAL resolver honours it over the differing
+        // global, then revert — precedence proven through resolveEffectiveLaunchQType (which delegates into
+        // the exact file-local resolver launchSlot feeds), not a re-derived mirror.
+        const bool pcqInheritsInitially    = session.clipInheritsGlobalLaunchQuantisation (0, 0);
+        const bool pcqResolverGlobalBefore = session.resolveEffectiveLaunchQType (0, 0)
+                                                 == session.getGlobalLaunchQuantisation();          // == bar
+        session.setClipLaunchQuantisation (0, 0, te::LaunchQType::none);
+        const bool pcqGetReflects  = session.getClipLaunchQuantisation (0, 0) == te::LaunchQType::none;
+        const bool pcqInheritFlips = ! session.clipInheritsGlobalLaunchQuantisation (0, 0);         // now overriding
+        const bool pcqResolverOverride = session.resolveEffectiveLaunchQType (0, 0) == te::LaunchQType::none
+                                             && session.getGlobalLaunchQuantisation() == te::LaunchQType::bar;
+        session.clearClipLaunchQuantisation (0, 0);
+        const bool pcqRevertInherits      = session.clipInheritsGlobalLaunchQuantisation (0, 0);
+        const bool pcqResolverGlobalAfter = session.resolveEffectiveLaunchQType (0, 0)
+                                                == session.getGlobalLaunchQuantisation();           // back to bar
+        const bool perClipLaunchQ = pcqInheritsInitially && pcqResolverGlobalBefore
+                                  && pcqGetReflects && pcqInheritFlips && pcqResolverOverride
+                                  && pcqRevertInherits && pcqResolverGlobalAfter;
+
         // PASS proves the launch PATH end-to-end: a born-audible clip created in a slot, launched,
         // with the transport rolling AND the clip's launch handle actually in the playing state.
         const bool pass = ssClipCreated && slotHasClip && hasLaunchHandle
                           && transportPlaying && clipPlaying
                           && launchQRoundTrip
+                          && perClipLaunchQ
                           && session.getNumScenes() >= 16;
 
         String report;
@@ -2320,6 +2341,7 @@ private:
                << "transportPlaying=" << (transportPlaying ? 1 : 0) << newLine
                << "clipPlaying="      << (clipPlaying ? 1 : 0) << newLine
                << "launchQRoundTrip=" << (launchQRoundTrip ? 1 : 0) << newLine
+               << "perClipLaunchQ="   << (perClipLaunchQ ? 1 : 0) << newLine
                << "result="           << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
 

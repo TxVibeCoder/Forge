@@ -221,6 +221,30 @@ public:
         pre-roll toggles the pending launch OFF rather than re-queuing it. */
     bool isSlotActive (int trackIndex, int sceneIndex) const;
 
+    /** Sets clip (trackIndex, sceneIndex)'s per-clip launch quantisation, ACTIVATING the override:
+        calls setUsesGlobalLaunchQuatisation(false) (engine typo verbatim; the flag is INVERTED — false
+        enables the clip's own Q) THEN writes the type. The resolver gates on the flag first, so BOTH are
+        required. markAsChanged. No-op (logged) if the slot has no clip. */
+    void setClipLaunchQuantisation (int trackIndex, int sceneIndex, te::LaunchQType t);
+
+    /** The clip's OWN launch-quantisation type while it overrides; the GLOBAL type when the clip inherits
+        (or no clip / no edit). Pair with clipInheritsGlobalLaunchQuantisation() to tell which. Const. */
+    te::LaunchQType getClipLaunchQuantisation (int trackIndex, int sceneIndex) const;
+
+    /** Reverts clip (trackIndex, sceneIndex) to the Edit-global launch quantisation
+        (setUsesGlobalLaunchQuatisation(true)); the stored clip type is left intact for a later re-enable.
+        markAsChanged. No-op (logged) if the slot has no clip. */
+    void clearClipLaunchQuantisation (int trackIndex, int sceneIndex);
+
+    /** True if the clip inherits the Edit-global launch quantisation (NO per-clip override active). True
+        for no clip / no edit (the engine default). Const, non-mutating (a pure in-memory flag read). */
+    bool clipInheritsGlobalLaunchQuantisation (int trackIndex, int sceneIndex) const;
+
+    /** The launch-Q type the REAL launch path would use for slot (trackIndex, sceneIndex): delegates into
+        the same file-local getLaunchQuantisation(te::Clip&) resolver launchSlot feeds, so --selftest-session
+        can assert override precedence through the resolver, not a mirror. Const. */
+    te::LaunchQType resolveEffectiveLaunchQType (int trackIndex, int sceneIndex) const;
+
     //==============================================================================
     // Session MIDI-record seam (W7). Message-thread only.
     //

@@ -949,6 +949,99 @@ bool ProjectSession::isSlotActive (int trackIndex, int sceneIndex) const
     return false;
 }
 
+void ProjectSession::setClipLaunchQuantisation (int trackIndex, int sceneIndex, te::LaunchQType t)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("setClipLaunchQuantisation: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    // BOTH writes are load-bearing: setUsesGlobalLaunchQuatisation(false) makes the resolver prefer the
+    // clip's OWN LaunchQuantisation (it gates on the flag first); the type write sets what that override
+    // snaps to. The engine spells it "Quatisation" (a verbatim engine typo) and INVERTS it — false ENABLES
+    // the override. getLaunchQuantisation() returns the clip's own object (non-null on Midi/Audio/Step
+    // clips); the null-guard is belt-and-suspenders.
+    clip->setUsesGlobalLaunchQuatisation (false);
+    if (auto* lq = clip->getLaunchQuantisation())
+        lq->type = t;
+    edit->markAsChanged();
+}
+
+te::LaunchQType ProjectSession::getClipLaunchQuantisation (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return te::LaunchQType::bar;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    // Report the clip's own type only while it overrides; otherwise report the effective (global) type,
+    // so a caller that just wants "what type" still gets a sensible value.
+    if (clip == nullptr || clip->usesGlobalLaunchQuatisation())
+        return getGlobalLaunchQuantisation();
+
+    if (auto* lq = clip->getLaunchQuantisation())
+        return lq->type.get();
+
+    return getGlobalLaunchQuantisation();
+}
+
+void ProjectSession::clearClipLaunchQuantisation (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("clearClipLaunchQuantisation: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " has no clip");
+        return;
+    }
+
+    clip->setUsesGlobalLaunchQuatisation (true);   // revert to global; the stored clip type is left intact
+    edit->markAsChanged();
+}
+
+bool ProjectSession::clipInheritsGlobalLaunchQuantisation (int trackIndex, int sceneIndex) const
+{
+    if (edit == nullptr)
+        return true;
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+        return true;
+
+    // Pure in-memory read of the useClipLaunchQuantisation CachedValue — no tree write, and deliberately
+    // NOT getLaunchQuantisation() (which would needlessly build the clip's C++ LaunchQuantisation member).
+    // Engine method "Quatisation" is a verbatim typo; the flag is inverted (true == inherits global).
+    return clip->usesGlobalLaunchQuatisation();
+}
+
+te::LaunchQType ProjectSession::resolveEffectiveLaunchQType (int trackIndex, int sceneIndex) const
+{
+    // Delegates into the file-local getLaunchQuantisation(te::Clip&) resolver defined earlier in this TU —
+    // the EXACT function launchSlot's launch path feeds — so --selftest-session proves override precedence
+    // through the real code path, not a re-derived mirror.
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+    auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+
+    if (clip == nullptr)
+        return getGlobalLaunchQuantisation();
+
+    return getLaunchQuantisation (*clip).type.get();
+}
+
 //==============================================================================
 // Session MIDI-record seam (W7). Message-thread only.
 //
