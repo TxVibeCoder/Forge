@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-03 (latest: **W12 — frontier program Wave 2: per-clip launch quantise override** (local, unpushed); prior: **W11 — frontier program Wave 1: launcher
+*Living status document. Last updated 2026-07-03 (latest: **W13 — frontier program Wave 3: grid clip primitives (duplicate/move/copy)** (local, unpushed); prior: W12 — per-clip launch quantise, **W11 — frontier program Wave 1: launcher
 expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
 10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
 new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine
@@ -645,8 +645,28 @@ the wave added only the seams + UI + proof. Full record:
 - **QC (6 dimensions):** override-semantics / R1-const-read / undo / menu / persistence / regression all **REFUTED
   clean** — verdict **ship, 0 defects** (the change is fully undoable via the engine's UndoManager binding).
 - **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**. **Committed LOCALLY**
-  (`03f6efd` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 3 (grid clip
-  primitives: duplicate → move/copy).
+  (`03f6efd` code + docs) — **not pushed**, held for the maintainer's OK.
+
+### W13 — frontier program Wave 3: grid clip primitives (duplicate → move/copy) — SHIPPED (local)  (baseline `c32b8f1`)
+Slot→slot clip movement on the Session grid: right-click a filled slot → **Duplicate clip** / **Move to next
+slot** (copy or move to the first empty slot below, auto-growing a row when full); **Ctrl+D** move /
+**Ctrl+Shift+D** copy on the focused slot. Full record:
+[devlog/wave-13-grid-clip-primitives.md](devlog/wave-13-grid-clip-primitives.md).
+- **Seams** (`ProjectSession`): `copySlotClip` / `duplicateSlotClip` / `moveSlotClip` over one file-local
+  `cloneClipIntoSlot` helper (`state.createCopy()` → fresh `EditItemID` → `te::insertClipWithState`).
+  Replace-on-filled + slot normalization are engine-automatic; MOVE = copy-then-`clearSlot` in ONE undo
+  transaction; the launcher metadata (follow-action / launch-mode / launch-Q) rides the clone.
+- **UI**: two menu items + a `SessionView::keyPressed` Ctrl+D / Ctrl+Shift+D branch (the keyboard path lives in
+  SessionView, not ClipSlotComponent). Same-track-below in the UI; the seams are cross-track (gate-exercised).
+- **Gates** `--selftest-duplicate` + `--selftest-slotmove` (floor **26 → 28**): auto-grow, note-count identity,
+  one-shot preservation, replace-on-filled, MOVE atomic undo, empty-source no-op.
+- **QC (6 dimensions) — fix-then-ship:** the adversarial pass caught a MAJOR the verify swarm missed — the engine
+  re-loops a freshly-inserted non-looping clip, so a duplicated **one-shot** came back looping (a W11 regression);
+  `cloneClipIntoSlot` now re-asserts `disableLooping()`, gate-guarded. Five dimensions refuted clean (the
+  `ensureScenes` history-wipe is pre-W3 inherited; the real-UI MOVE is atomic).
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-EIGHT selftests PASS**. **Committed LOCALLY**
+  (`2f804a2` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 4 (MIDI quantise +
+  groove).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).

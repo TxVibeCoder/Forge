@@ -1,19 +1,22 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W12 — frontier program
-> Wave 2: per-clip launch quantise override"** — the **SECOND** wave of the 10-wave **frontier build program**
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W13 — frontier program
+> Wave 3: grid clip primitives (duplicate / move / copy)"** — the **THIRD** wave of the 10-wave **frontier build program**
 > ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a discovery swarm produced after the
-> hands-on plan completed at W10 (frontier Wave 1 = W11 launcher expressiveness). ⚠ **W05's owed adversarial-QC dimensions
+> hands-on plan completed at W10 (Wave 1 = W11 launcher expressiveness; Wave 2 = W12 per-clip launch quantise). ⚠ **W05's owed adversarial-QC dimensions
 > remain PARTIALLY owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12 (per-clip launch
-quantise) + a docs sanitization are committed LOCALLY (`03f6efd` code; tip ahead of `origin/main`) — NOT pushed,
-held for the maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-SIX selftests PASS**
-(W12 added no gate — it extended `--selftest-session` with a `perClipLaunchQ` leg).
-Shipped (W12 — frontier Wave 2): right-click a filled Session slot → **Launch quantise** → *Global (inherit)* or
+**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12 + W13 + a docs
+sanitization are committed LOCALLY (tip `2f804a2`; 5 commits ahead of `origin/main`) — NOT pushed, held for the
+maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-EIGHT selftests PASS** (W13 added
+`--selftest-duplicate` + `--selftest-slotmove`; floor 26 → 28).
+Shipped (W13 — frontier Wave 3): right-click a filled Session slot → **Duplicate clip** / **Move to next slot**
+(copy or move to the first empty slot below, auto-growing a row when full); **Ctrl+D** move / **Ctrl+Shift+D**
+copy on the focused slot. Cross-track copy/move seams (gate-exercised). Prior wave (W12 — frontier Wave 2):
+right-click a filled Session slot → **Launch quantise** → *Global (inherit)* or
 any of the 23 launch-Q values; the clip snaps on its own grid via new `ProjectSession` seams + a
 `resolveEffectiveLaunchQType` proof bridge (6-dimension adversarial QC: **ship**). Prior wave (frontier Wave 1 =
 W11 — the maintainer-flagged **#1 gap**, DIRECTION's identity core): right-click a filled
@@ -74,7 +77,22 @@ connect" goal, **not an MVP gate**: the grid is fully playable with mouse + keyb
 
 ---
 
-## What the LATEST wave did — W12 (frontier Wave 2: per-clip launch quantise)
+## What the LATEST wave did — W13 (frontier Wave 3: grid clip primitives)
+
+**W13** adds **slot→slot clip primitives** — right-click a filled slot → **Duplicate clip** / **Move to next
+slot** (copy or move to the first empty slot below, auto-growing a row when the column is full); **Ctrl+D** /
+**Ctrl+Shift+D** on the focused slot. Full record →
+[devlog/wave-13-grid-clip-primitives.md](devlog/wave-13-grid-clip-primitives.md). Three `ProjectSession` seams
+(`copySlotClip` / `duplicateSlotClip` / `moveSlotClip`) compose one file-local `cloneClipIntoSlot` helper
+(`state.createCopy()` → fresh `EditItemID` → `te::insertClipWithState`); replace-on-filled + slot normalization
+are engine-automatic, MOVE = copy-then-`clearSlot` in ONE undo transaction. Gates **`--selftest-duplicate`** +
+**`--selftest-slotmove`** (floor 26 → 28). **QC (6 dimensions) — fix-then-ship:** the adversarial pass caught a
+MAJOR the verify swarm missed — the engine **re-loops** a freshly-inserted non-looping clip, so a duplicated
+**one-shot** came back looping (a W11 regression); `cloneClipIntoSlot` now re-asserts `disableLooping()` and a
+new gate leg guards it. The other five dimensions refuted clean (incl. the `ensureScenes` history-wipe being a
+pre-W3 inherited behaviour, and the real-UI MOVE being atomic).
+
+## What a prior wave did — W12 (frontier Wave 2: per-clip launch quantise)
 
 **W12** adds a **per-clip launch-quantise override**: a filled Session slot can snap on its own grid (a 1/16 hat
 fill vs a 1-bar bass) instead of only the Edit-global launch quant. Right-click a filled slot → **Launch
@@ -328,9 +346,10 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **✅ DONE: frontier Wave 2 (W12) — per-clip launch quantise** (committed local `03f6efd`, not pushed). **▶ NEXT:
-   frontier program Wave 3 — grid clip primitives (duplicate → move/copy)** (a serial `ProjectSession` sub-spine +
-   `--selftest-duplicate` / `--selftest-slotmove`; headless-provable). Then Wave 4 (MIDI quantise + groove), Wave 5
+1. **✅ DONE: frontier Waves 2–3 (W12–W13)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
+   (`2f804a2`), committed local, not pushed. **▶ NEXT: frontier program Wave 4 — MIDI quantise + groove** (a
+   disjoint `PianoRollView` + a new header-only `MidiEditHelpers.h`; gate `--selftest-quantise`; the engine's own
+   unit test does the identical destructive quantise → near-zero engine risk). Then Wave 5
    (scene lifecycle), Wave 6 (the owed W05 QC-debt hardening, interleavable as the main.cpp-only slot), Wave 7
    (performance recording) … — full ordered program + the critic's corrections in
    `docs/frontier-program.local.md`. **W12 follow-ups (documented):** a save→reload round-trip leg for

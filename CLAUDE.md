@@ -62,13 +62,13 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-SIX gates as of W12; W12 added none, extending `--selftest-session`): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — TWENTY-EIGHT gates as of W13): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
-  `--selftest-followaction`, `--selftest-launchmode`;   (⚠ new gate names that CONTAIN an existing name must be
+  `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`;   (⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`; verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
@@ -116,6 +116,13 @@ conflict, surface it.
   `getOrCreateChildWithName`) and its ctor only `referTo`s, so a const read does **not** dirty the edit — but a
   const inherit-check should still read only the flag and never call `getLaunchQuantisation()` (a needless
   C++-member build).
+- **Inserting a clip into a ClipSlot RE-LOOPS a one-shot (W13).** `te::insertClipWithState(clipSlot, state)`
+  re-imposes slot normalization (`tracktion_ClipOwner.cpp:372-381`): it sets a full-length loop on any
+  freshly-inserted clip that reads `!isLooping()`. So duplicating / moving / copying a **one-shot** slot clip
+  silently brings it back **looping** unless you re-assert `disableLooping()` on the returned clip AFTER the
+  insert (capture `wasOneShot` before). Use `disableLooping()`, NOT `setLoopRangeBeats({})` (which re-asserts
+  auto-tempo — the W5/W10 gotcha). A gate whose fixture clips are born looping will NOT catch this (adversarial
+  QC did).
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

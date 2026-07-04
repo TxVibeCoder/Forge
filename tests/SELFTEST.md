@@ -531,6 +531,39 @@ proven-adjacent by the launch path in `--selftest-session`; this gate never fake
 > written-and-reloaded `.tracktionedit` (disk persistence is guaranteed by the engine's whole-tree serializer;
 > the gate currently proves the in-memory `createCopy`).
 
+## `Forge --selftest-duplicate` (grid clip duplicate → auto-grow)
+
+The acceptance gate for **W13 — grid clip primitives** (design:
+[../docs/devlog/wave-13-grid-clip-primitives.md](../docs/devlog/wave-13-grid-clip-primitives.md)). Synchronous.
+Seeds a 4-note MIDI clip into (0,0), makes it a one-shot, then exercises `duplicateSlotClip`. Proves the seam +
+auto-grow + content + one-shot fidelity + undo — NOT that the copy audibly plays.
+
+| field | meaning | PASS |
+|---|---|---|
+| `dupToEmptyBelow` / `sourceStillFilled` | the duplicate lands in the first empty slot below (scene 1); the source stays filled (a copy, not a move) | 1 / 1 |
+| `contentIdentical` (`dupNotes`) | the duplicate carries the source's 4 notes (the sequence rode the state clone) | 1 (4) |
+| `sourceOneShot` / `oneShotPreserved` | a one-shot source stays one-shot — the engine re-loops a non-looping clip unless `cloneClipIntoSlot` re-asserts `disableLooping()` (QC-caught) | 1 / 1 |
+| `undoRemovedDup` / `undoLeftSourceIntact` | one undo removes just the duplicate; the source is intact | 1 / 1 |
+| `grewWhenFull` | with no empty slot below, a duplicate grows a new scene row (`growDst == oldNumScenes`, count +1) | 1 |
+| `emptySourceNoop` | duplicating an empty slot is a no-op (returns -1) | 1 |
+
+> Verified 2026-07-03: **PASS**. Collision-free (`duplicate` shares no substring with any gate); before bare `--selftest`; verify `mode=duplicate`.
+
+## `Forge --selftest-slotmove` (grid clip move / copy / replace)
+
+The acceptance gate for the **W13 `copySlotClip` / `moveSlotClip` seams**. Synchronous. Seeds a 4-note clip and
+exercises copy, move, replace-on-filled, and MOVE atomic undo — cross-track, note-count faithful.
+
+| field | meaning | PASS |
+|---|---|---|
+| `copyKeepsSource` / `copyDestFilled` / `copyNotes` | COPY (0,0)→(1,0) leaves the source filled, fills the dest with the 4 notes | 1 / 1 / 1 |
+| `moveEmptiesSource` / `moveDestFilled` / `moveNotes` | MOVE (0,0)→(2,0) empties the source, fills the dest with the notes | 1 / 1 / 1 |
+| `replaceOneClip` / `replaceNotes` | copying onto a FILLED dest replaces it (one clip; the engine auto-removes the old) | 1 / 1 |
+| `moveUndoRestoredSource` / `moveUndoEmptiedDest` | one Ctrl+Z reverses BOTH halves of a MOVE — the source restored AND the dest emptied (the atomic-transaction proof) | 1 / 1 |
+| `emptyMoveNoop` | moving an empty source is a no-op (false; no dest created) | 1 |
+
+> Verified 2026-07-03: **PASS**. `slotmove` vs `slotdelete` share only the `slot` prefix (neither contains the other) — collision-free; before bare `--selftest`; verify `mode=slotmove`. **Floor is now 28 gates.**
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC
