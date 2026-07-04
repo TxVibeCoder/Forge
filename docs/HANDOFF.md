@@ -9,10 +9,10 @@
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W11 are PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean). **W12–W14 + a docs
-sanitization are committed LOCALLY (tip `52b6e66`; 7 commits ahead of `origin/main`) — NOT pushed, held for the
-maintainer's OK.** Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-NINE selftests PASS** (W14 added
-`--selftest-quantise`; floor 28 → 29).
+**`main`**. **W07–W14 are PUSHED to `origin/main`** (through `9f5cc62`, sanitize-clean; local `main` ==
+`origin/main`). This session pushed the docs sanitization (`2a366e9`) + W12 per-clip launch quantise + W13 grid
+clip primitives + W14 MIDI quantise. Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-NINE selftests
+PASS** (W14 added `--selftest-quantise`; floor 28 → 29).
 Shipped (W14 — frontier Wave 4): the piano-roll gains **MIDI quantise** — press **`q`** to snap the selection
 (or the whole clip) to the grid, starts-only, one undoable step, via a new header-only `MidiEditHelpers.h`
 (engine `QuantisationType`, 50%-strength interpolation proven). Prior wave (W13 — frontier Wave 3): right-click
@@ -363,7 +363,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
 1. **✅ DONE: frontier Waves 2–4 (W12–W14)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
-   (`2f804a2`) + MIDI quantise (`52b6e66`), committed local, not pushed. **▶ NEXT: frontier program Wave 5 —
+   (`2f804a2`) + MIDI quantise (`52b6e66`), **PUSHED to `origin/main`** (tip `9f5cc62`). **▶ NEXT: frontier program Wave 5 —
    Session scene lifecycle (rename → delete → reorder)** (a serial `ProjectSession` sub-spine + a disjoint
    `SceneColumnComponent`; strict dependency chain; ⚠ its scene-row PopupMenu is contested with W7's whole-scene
    send — W5 ships the scaffold, W7 appends one item). Then Wave 6 (the owed W05 QC-debt hardening, interleavable
@@ -613,11 +613,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED to `origin/main`.** W07 (`fc0fdbe`), W08 (`0ad7abc`), W09 (`573170c`),
-  W10 (`40eccaf` code + `ea3c7a3` docs), and W11 (`5c3738e` code + `0f9d5cc` docs, tip `0f9d5cc`) are on
-  **`origin/main`** — the sanitize scan ran clean before each push (only placeholder `C:\Users\…` / `<user>`
-  forms in doc text — no real machine paths / identity leaks). Local `main` == `origin/main`.
-  Local `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
+- **Latest work is committed + PUSHED to `origin/main`.** W07–W11 (through `0f9d5cc`) plus this session's stack —
+  the docs sanitization (`2a366e9`), W12 per-clip launch quantise (`03f6efd`/`c32b8f1`), W13 grid clip primitives
+  (`2f804a2`/`2edf78a`), and W14 MIDI quantise (`52b6e66`/`9f5cc62`, tip `9f5cc62`) — are all on **`origin/main`**;
+  the sanitize scan ran clean before the push (the `C:\Users\USER` / `REDACTED` / `REDACTED` real-identity scan
+  returned zero hits). Local `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is

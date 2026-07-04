@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-03 (latest: **W14 — frontier program Wave 4: MIDI quantise** (local, unpushed); prior: W13 grid clip primitives, W12 per-clip launch quantise, **W11 — frontier program Wave 1: launcher
+*Living status document. Last updated 2026-07-03 (latest: **W14 — frontier program Wave 4: MIDI quantise** (pushed to origin/main); prior: W13 grid clip primitives, W12 per-clip launch quantise, **W11 — frontier program Wave 1: launcher
 expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
 10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
 new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine
@@ -644,8 +644,8 @@ the wave added only the seams + UI + proof. Full record:
   real resolver returns it → revert to inherit). **No new gate — floor stays 26.**
 - **QC (6 dimensions):** override-semantics / R1-const-read / undo / menu / persistence / regression all **REFUTED
   clean** — verdict **ship, 0 defects** (the change is fully undoable via the engine's UndoManager binding).
-- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**. **Committed LOCALLY**
-  (`03f6efd` code + docs) — **not pushed**, held for the maintainer's OK.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-SIX selftests PASS**. **PUSHED to `origin/main`**
+  (`03f6efd` code + `c32b8f1` docs, in the W12–W14 stack through `9f5cc62`).
 
 ### W13 — frontier program Wave 3: grid clip primitives (duplicate → move/copy) — SHIPPED (local)  (baseline `c32b8f1`)
 Slot→slot clip movement on the Session grid: right-click a filled slot → **Duplicate clip** / **Move to next
@@ -664,8 +664,8 @@ slot** (copy or move to the first empty slot below, auto-growing a row when full
   re-loops a freshly-inserted non-looping clip, so a duplicated **one-shot** came back looping (a W11 regression);
   `cloneClipIntoSlot` now re-asserts `disableLooping()`, gate-guarded. Five dimensions refuted clean (the
   `ensureScenes` history-wipe is pre-W3 inherited; the real-UI MOVE is atomic).
-- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-EIGHT selftests PASS**. **Committed LOCALLY**
-  (`2f804a2` code + docs) — **not pushed**, held for the maintainer's OK.
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-EIGHT selftests PASS**. **PUSHED to `origin/main`**
+  (`2f804a2` code + `2edf78a` docs, in the W12–W14 stack through `9f5cc62`).
 
 ### W14 — frontier program Wave 4: MIDI quantise (piano-roll) — SHIPPED (local)  (baseline `2edf78a`)
 The piano-roll gains destructive MIDI quantise: press **`q`** to snap the selection (or the whole clip when
@@ -682,9 +682,8 @@ nothing is selected) to the grid — note starts only, length preserved, one und
   interpolation** (0.1→0.05), undo revert.
 - **QC (6 dimensions) — ship:** one nit fixed (the Ctrl+Q swallow); grid math / length / stale-pointer safety /
   single-transaction undo / no playback-quantise mutation all refuted clean.
-- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-NINE selftests PASS**. **Committed LOCALLY**
-  (`52b6e66` code + docs) — **not pushed**, held for the maintainer's OK. Next: frontier Wave 5 (scene lifecycle:
-  rename → delete → reorder).
+- **Verified:** clean MSVC Debug build (0 warnings); **all TWENTY-NINE selftests PASS**. **PUSHED to `origin/main`**
+  (`52b6e66` code + `9f5cc62` docs). Next: frontier Wave 5 (scene lifecycle: rename → delete → reorder).
 
 ### Verified by `--selftest` (current)
 `mode=playback`: device open · `importedClip=1` · `numClipComponents=1` · **result=PASS** (`playing=1`).
