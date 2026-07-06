@@ -6,8 +6,8 @@
 > **frontier build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ **Frontier
 > Wave 7 is now COMPLETE** (all three items: capture core [W17] + whole-scene-send + send-as-loop [W18]).
 > W18's 4-dimension adversarial QC swarm found **zero confirmed defects** (unlike W17, which caught and fixed
-> one) — a clean pass, no fix-then-reverify cycle needed. **Built + gated + committed** (`b-TBD`, see git log
-> for the actual hash — **NOT YET PUSHED**, awaiting the maintainer's go-ahead).
+> one) — a clean pass, no fix-then-reverify cycle needed. **Built + gated + committed** (`4df11e1`) — **NOT YET
+> PUSHED**, awaiting the maintainer's go-ahead.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
 **`main`**. **W07–W16 are PUSHED to `origin/main`** (tip `96b1037`, sanitize-clean; local `main` ==
