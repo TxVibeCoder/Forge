@@ -139,8 +139,15 @@ public:
     /** W5 "Send to Arrangement": a filled slot's clip should be copied onto its own track's linear
         (Arrange) timeline. The SHELL owns the multi-surface op (SessionView can't reach ArrangeView):
         it calls ProjectSession::sendSlotToArrangement, then rebuilds the Arrange lanes + seals/saves.
-        (trackIdx, sceneIdx) identify the source slot; null => no-op. */
-    std::function<void (int trackIdx, int sceneIdx)> onSendToArrangement;
+        (trackIdx, sceneIdx) identify the source slot; `keepAsLoop` (Wave 7 fast-follow) requests the
+        "as loop" variant (offered only when the source is actually looping) instead of the default
+        one-shot normalize. Null => no-op. */
+    std::function<void (int trackIdx, int sceneIdx, bool keepAsLoop)> onSendToArrangement;
+
+    /** Wave 7 fast-follow: a scene's "Send scene to Arrangement" row-menu item was chosen — send every
+        filled clip in that scene to its own track, aligned at one shared start. The shell wires this to
+        ProjectSession::sendSceneToArrangement, then rebuilds Arrange + seals/saves. Null => no-op. */
+    std::function<void (int sceneIndex)> onSceneSentToArrangement;
 
 private:
     void timerCallback() override;

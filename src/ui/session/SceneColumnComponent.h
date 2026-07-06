@@ -23,13 +23,16 @@
     "Rename…") opens an inline TextEditor over the name — Return / focus-loss commits (firing
     onSceneRenamed; blank is allowed, the row falls back to its number on the next rebuild),
     Escape cancels. Right-click opens the row's PopupMenu (Stop scene / Rename… / Delete scene /
-    Move up / Move down — the moves disable at the grid edges); the old bare right-click-stop
-    became the menu's first item. Editor + menu are neutral chrome (panel/raised/text tones) —
-    no new accent.
+    Move up / Move down / Send scene to Arrangement — the moves disable at the grid edges); the
+    old bare right-click-stop became the menu's first item. The "Send scene to Arrangement" item
+    (Wave 7 fast-follow) was APPENDED to this same menu, never a competing rewrite — the frontier
+    program critic flagged this exact file as a two-wave collision point. Editor + menu are
+    neutral chrome (panel/raised/text tones) — no new accent.
 
     All engine ops route up through null-guarded std::function seams (onSceneLaunched,
-    onSceneStopped, onSceneRenamed, onSceneDeleted, onSceneMovedUp, onSceneMovedDown, onStopAll,
-    onAddScene); this component NEVER touches the te:: model directly.
+    onSceneStopped, onSceneRenamed, onSceneDeleted, onSceneMovedUp, onSceneMovedDown,
+    onSceneSentToArrangement, onStopAll, onAddScene); this component NEVER touches the te:: model
+    directly.
 
     Message-thread only.
 */
@@ -112,6 +115,12 @@ public:
     /** W5 reorder: the row menu's "Move down" was chosen (never offered on the last row) → the
         owner moves the scene to sceneIndex + 1, in lockstep, and rebuilds. */
     std::function<void (int sceneIndex)> onSceneMovedDown;
+
+    /** Wave 7 fast-follow: the row menu's "Send scene to Arrangement" was chosen → the owner sends
+        every filled clip in this scene to its own track's linear Arrangement, aligned at one shared
+        start beat, in one undo transaction. Appended to the existing W15 PopupMenu (never a
+        competing rewrite — the frontier program critic's territory finding #1). */
+    std::function<void (int sceneIndex)> onSceneSentToArrangement;
 
     /** The MASTER "stop all" ■ was clicked → stop every launched clip in the grid. */
     std::function<void()> onStopAll;

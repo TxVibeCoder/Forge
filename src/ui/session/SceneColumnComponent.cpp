@@ -35,7 +35,7 @@ public:
 
         // Name the gestures in one tooltip — the row (SettableTooltipClient) covers the
         // name area and the ▶ button carries the same text (W5: the bare right-click-stop
-        // became the context menu's first item).
+        // became the context menu's first item; Wave 7 appended "Send scene to Arrangement").
         const String tip = "Launch " + name
                          + String::fromUTF8 (" \xe2\x80\x94 double-click to rename, right-click for options");
         setTooltip (tip);
@@ -121,6 +121,8 @@ public:
         menu.addItem (menuDelete,   "Delete scene");
         menu.addItem (menuMoveUp,   "Move up",   sceneIndex > 0);
         menu.addItem (menuMoveDown, "Move down", sceneIndex < numRows - 1);
+        menu.addSeparator();
+        menu.addItem (menuSendArrange, "Send scene to Arrangement");   // Wave 7 fast-follow — APPENDED, not a new menu
 
         Component::SafePointer<SceneRow> safeThis (this);
         menu.showMenuAsync (PopupMenu::Options().withTargetScreenArea (
@@ -138,11 +140,12 @@ public:
                                 }
 
                                 const int idx = self->sceneIndex;
-                                const auto cb = result == menuStop     ? self->onStopped
-                                              : result == menuDelete   ? self->onDelete
-                                              : result == menuMoveUp   ? self->onMoveUp
-                                              : result == menuMoveDown ? self->onMoveDown
-                                                                       : std::function<void (int)>();
+                                const auto cb = result == menuStop        ? self->onStopped
+                                              : result == menuDelete      ? self->onDelete
+                                              : result == menuMoveUp      ? self->onMoveUp
+                                              : result == menuMoveDown    ? self->onMoveDown
+                                              : result == menuSendArrange ? self->onSentToArrangement
+                                                                          : std::function<void (int)>();
                                 if (cb != nullptr)
                                     cb (idx);   // may destroy the row (rebuild) — touch nothing after
                             });
@@ -222,6 +225,7 @@ public:
 
     std::function<void (int sceneIndex)> onLaunched, onStopped;
     std::function<void (int sceneIndex)> onDelete, onMoveUp, onMoveDown;             // W5 menu
+    std::function<void (int sceneIndex)> onSentToArrangement;                        // Wave 7 fast-follow
     std::function<void (int sceneIndex, const String& newName)> onRename;            // W5 editor
 
 private:
@@ -283,11 +287,12 @@ private:
     static constexpr int launchBtnW = 26;   // ▶ button width (sheet 00: 26×22)
 
     // Context-menu item ids (0 = dismissed, so ids start at 1).
-    static constexpr int menuStop     = 1;
-    static constexpr int menuRename   = 2;
-    static constexpr int menuDelete   = 3;
-    static constexpr int menuMoveUp   = 4;
-    static constexpr int menuMoveDown = 5;
+    static constexpr int menuStop        = 1;
+    static constexpr int menuRename      = 2;
+    static constexpr int menuDelete      = 3;
+    static constexpr int menuMoveUp      = 4;
+    static constexpr int menuMoveDown    = 5;
+    static constexpr int menuSendArrange = 6;   // Wave 7 fast-follow
 
     const int sceneIndex;
     const int numRows;      // total rows this build — Move up/down disable at the edges
@@ -366,6 +371,7 @@ void SceneColumnComponent::rebuildRows (const StringArray& names, int numScenes)
         row->onDelete   = [this] (int sceneIndex) { if (onSceneDeleted)   onSceneDeleted   (sceneIndex); };
         row->onMoveUp   = [this] (int sceneIndex) { if (onSceneMovedUp)   onSceneMovedUp   (sceneIndex); };
         row->onMoveDown = [this] (int sceneIndex) { if (onSceneMovedDown) onSceneMovedDown (sceneIndex); };
+        row->onSentToArrangement = [this] (int sceneIndex) { if (onSceneSentToArrangement) onSceneSentToArrangement (sceneIndex); };
         addAndMakeVisible (row);
     }
 

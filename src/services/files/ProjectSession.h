@@ -182,8 +182,27 @@ public:
         caller should seal the transaction and fire the Arrange refresh (arrangeView.rebuild() —
         ArrangeView has no clip-add listener) afterwards. markAsChanged on success. Returns the new
         arrange clip, or nullptr (logged) if there is no edit / the slot is empty / the track can't be
-        resolved / the insert failed. */
-    te::Clip* sendSlotToArrangement (int trackIndex, int sceneIndex);
+        resolved / the insert failed.
+
+        `keepAsLoop` (Wave 7 fast-follow, default false — every existing caller is unchanged): when true
+        and the source is looping, the sent copy KEEPS its loop range + auto-tempo instead of being
+        normalized to a one-shot — "Send to Arrangement (as loop)". The UI offers this as a second menu
+        item shown only when the source is actually looping. */
+    te::Clip* sendSlotToArrangement (int trackIndex, int sceneIndex, bool keepAsLoop = false);
+
+    /** Sends every FILLED slot in scene `sceneIndex` onto its own track's linear Arrangement — the
+        whole-scene counterpart of sendSlotToArrangement (Wave 7 fast-follow). All copies land at ONE
+        SHARED start beat: the MAX of the current append point (track->getTotalRange().getEnd()) across
+        only the tracks that actually have a filled slot in this scene — so the scene's vertical (same-
+        instant) relationship is preserved and nothing overlaps any target track's existing content. Every
+        insert (one per filled track) lands in ONE undo transaction (no beginNewTransaction between them —
+        the caller brackets + seals, same discipline as performance capture's commit), so a single Ctrl+Z
+        removes every copy atomically. Each copy is normalized to a one-shot (matches sendSlotToArrangement's
+        default; the scene-level send has no loop-toggle variant). Source slots are untouched (a copy, not a
+        move). Returns the number of clips sent (0 if the scene has no filled slots / no edit / an
+        out-of-range index — logged only on a genuine per-clip insert failure, not on the ordinary "nothing
+        filled" case). */
+    int sendSceneToArrangement (int sceneIndex);
 
     //==============================================================================
     // Performance capture (Wave 7) — the REAL Session -> Arrange bridge. Records which clips launched,

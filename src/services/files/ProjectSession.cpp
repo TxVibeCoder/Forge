@@ -139,7 +139,7 @@ te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange 
     return clip;
 }
 
-te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
+te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex, bool keepAsLoop)
 {
     if (edit == nullptr || trackIndex < 0 || sceneIndex < 0)
         return nullptr;
@@ -182,9 +182,10 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
     const te::ClipPosition destPos { { appendAt, appendAt + srcPos.getLength() }, srcPos.getOffset() };
 
     // Faithful copy at the append point via the shared clone helper (Wave 7 factored it out of here so
-    // performance capture can reuse the identical clone/normalize/strip path). keepAsLoop=false — a sent
-    // clip is a plain linear one-shot (matches a direct Arrange import).
-    auto* newClip = insertClipCopyOnTimeline (*track, *src, destPos, /*keepAsLoop*/ false);
+    // performance capture can reuse the identical clone/normalize/strip path). keepAsLoop defaults false —
+    // a sent clip is a plain linear one-shot (matches a direct Arrange import) — but the caller may ask to
+    // keep the source's loop (the "Send to Arrangement (as loop)" fast-follow).
+    auto* newClip = insertClipCopyOnTimeline (*track, *src, destPos, keepAsLoop);
 
     if (newClip == nullptr)
     {
@@ -194,6 +195,68 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
 
     edit->markAsChanged();
     return newClip;
+}
+
+//==============================================================================
+int ProjectSession::sendSceneToArrangement (int sceneIndex)
+{
+    if (edit == nullptr || sceneIndex < 0)
+        return 0;
+
+    auto tracks = te::getAudioTracks (*edit);
+
+    // Pass 1: collect every (track, clip) with a FILLED slot in this scene, and the SHARED start = the
+    // MAX current append point across only THOSE tracks (a track with nothing to send in this scene is
+    // excluded from the max — nothing is being placed there, so its existing content can't dictate the
+    // start). Clip pointers are resolved fresh right here and used immediately below in the SAME
+    // function call — never cached across a tick/poll (R1 is about ACROSS-CALL caching; a same-call
+    // local is the same discipline every other seam in this file already uses).
+    struct Item { int trackIndex; te::Clip* src; };
+    std::vector<Item> items;
+    te::TimePosition sharedStart;   // default-constructed = 0
+
+    for (int t = 0; t < tracks.size(); ++t)
+    {
+        auto* slot = getClipSlot (t, sceneIndex);
+        auto* src  = (slot != nullptr) ? slot->getClip() : nullptr;
+
+        if (src == nullptr)
+            continue;
+
+        items.push_back ({ t, src });
+
+        const auto append = tracks[t]->getTotalRange().getEnd();
+        if (append > sharedStart)
+            sharedStart = append;
+    }
+
+    if (items.empty())
+    {
+        FORGE_LOG_WARN ("Send scene to arrangement: scene " + juce::String (sceneIndex) + " has no filled slots — nothing to send");
+        return 0;
+    }
+
+    // Pass 2: insert every copy at the SAME sharedStart (preserving each clip's own length/offset), one
+    // clone per filled track, all in ONE undo transaction (no beginNewTransaction between them — mirrors
+    // performance capture's multi-clip commit; the caller brackets + seals the whole gesture).
+    int sent = 0;
+
+    for (const auto& item : items)
+    {
+        auto* track        = tracks[item.trackIndex];
+        const auto srcPos   = item.src->getPosition();
+        const te::ClipPosition destPos { { sharedStart, sharedStart + srcPos.getLength() }, srcPos.getOffset() };
+
+        if (insertClipCopyOnTimeline (*track, *item.src, destPos, /*keepAsLoop*/ false) != nullptr)
+            ++sent;
+        else
+            FORGE_LOG_ERROR ("Send scene to arrangement: failed to insert the copy for track " + juce::String (item.trackIndex));
+    }
+
+    if (sent > 0)
+        edit->markAsChanged();
+
+    return sent;
 }
 
 //==============================================================================

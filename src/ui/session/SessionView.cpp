@@ -226,6 +226,11 @@ void SessionView::wireScenes()
     scenes->onSceneDeleted   = [this] (int s) { if (session.deleteScene (s))     afterSceneMutation(); };
     scenes->onSceneMovedUp   = [this] (int s) { if (session.moveScene (s, s - 1)) afterSceneMutation(); };
     scenes->onSceneMovedDown = [this] (int s) { if (session.moveScene (s, s + 1)) afterSceneMutation(); };
+
+    // Wave 7 fast-follow: "Send scene to Arrangement" needs arrangeView.rebuild(), which SessionView
+    // can't reach — forward to the shell via SessionView's own public seam (same discipline as the
+    // single-slot onSendToArrangement below).
+    scenes->onSceneSentToArrangement = [this] (int s) { if (onSceneSentToArrangement != nullptr) onSceneSentToArrangement (s); };
 }
 
 void SessionView::afterSceneMutation()
@@ -490,7 +495,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
            idModeTrigger = 300, idModeGate, idModeToggle,
            idLaunchQInherit = 400, idLaunchQBase = 401 };   // W2: 401.. = one per LaunchQType (enum order)
-    enum { idDuplicate = 50, idMoveToNext };   // W3 structural slot ops (in the free 9..99 gap)
+    enum { idDuplicate = 50, idMoveToNext, idSendArrangeLoop };   // W3/Wave-7 structural slot ops (9..99 gap)
 
     // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
     // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
@@ -517,6 +522,8 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idStop,   "Stop");
         menu.addItem (idEdit,        "Edit clip");            // launch-free edit path (mirrors double-click, without launching)
         menu.addItem (idSendArrange, "Send to Arrangement");  // W5: copy this clip onto the track's Arrange timeline (one-directional)
+        if (session.isSlotClipLooping (trackIdx, sceneIdx))   // Wave 7 fast-follow: only offered when the source IS looping
+            menu.addItem (idSendArrangeLoop, "Send to Arrangement (as loop)");
         menu.addItem (idDelete,      "Delete clip");          // W07: empty the slot (filled-only); undoable via W05 global Undo
         menu.addItem (idDuplicate,   "Duplicate clip");       // W3: copy to the first empty slot below (auto-grow)
         menu.addItem (idMoveToNext,  "Move to next slot");    // W3: move to the first empty slot below (auto-grow)
@@ -653,10 +660,12 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                     break;
                                 }
                                 case idSendArrange:
-                                    // W5: hand off to the shell, which owns the seam + the Arrange rebuild
-                                    // + the seal/save (the source slot is untouched, so no grid rebuild).
+                                case idSendArrangeLoop:
+                                    // W5 (+ the Wave 7 as-loop fast-follow): hand off to the shell, which
+                                    // owns the seam + the Arrange rebuild + the seal/save (the source slot
+                                    // is untouched, so no grid rebuild).
                                     if (safeThis->onSendToArrangement != nullptr)
-                                        safeThis->onSendToArrangement (trackIdx, sceneIdx);
+                                        safeThis->onSendToArrangement (trackIdx, sceneIdx, result == idSendArrangeLoop);
                                     break;
                                 case idRecordSlot:
                                     if (safeThis->onSlotRecord != nullptr)

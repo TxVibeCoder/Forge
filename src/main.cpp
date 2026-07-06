@@ -53,7 +53,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -437,13 +437,14 @@ public:
             reconcileDrawerClip();   // a slot "Delete clip" may have detached the clip the drawer is editing
         };
 
-        // W5 "Send to Arrangement": the one-directional Session -> Arrange bridge. The seam copies the
-        // slot clip onto its OWN track's linear timeline (append-at-end); the source slot is untouched
-        // (a copy, not a move), so no grid rebuild is needed — but ArrangeView has no clip-add listener,
-        // so we MUST rebuild its lanes for the new clip to appear. Seal + save like every mutation.
-        sessionView.onSendToArrangement = [this] (int trackIdx, int sceneIdx)
+        // W5 "Send to Arrangement" (+ the Wave 7 as-loop fast-follow): the one-directional Session ->
+        // Arrange bridge. The seam copies the slot clip onto its OWN track's linear timeline
+        // (append-at-end); the source slot is untouched (a copy, not a move), so no grid rebuild is
+        // needed — but ArrangeView has no clip-add listener, so we MUST rebuild its lanes for the new
+        // clip to appear. Seal + save like every mutation.
+        sessionView.onSendToArrangement = [this] (int trackIdx, int sceneIdx, bool keepAsLoop)
         {
-            if (session.sendSlotToArrangement (trackIdx, sceneIdx) == nullptr)
+            if (session.sendSlotToArrangement (trackIdx, sceneIdx, keepAsLoop) == nullptr)
                 return;   // empty slot / failure — already logged by the seam
 
             sealUndoTransaction();
@@ -451,7 +452,24 @@ public:
                 FORGE_LOG_ERROR ("Failed to save project — I/O error");
 
             arrangeView.rebuild();   // the new linear clip is invisible until the lanes re-enumerate getClips()
-            setStatusMessage ("Sent clip to Arrangement");
+            setStatusMessage (keepAsLoop ? "Sent clip to Arrangement (as loop)" : "Sent clip to Arrangement");
+        };
+
+        // Wave 7 fast-follow: "Send scene to Arrangement" — every filled clip in the scene, aligned at
+        // one shared start, all in one undo transaction (sendSceneToArrangement brackets the inserts;
+        // seal AFTER the seam call, mirroring the single-slot handler above).
+        sessionView.onSceneSentToArrangement = [this] (int sceneIndex)
+        {
+            const int n = session.sendSceneToArrangement (sceneIndex);
+            if (n <= 0)
+                return;   // no filled slots / failure — already logged by the seam
+
+            sealUndoTransaction();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
+
+            arrangeView.rebuild();
+            setStatusMessage ("Sent " + juce::String (n) + " clip" + (n == 1 ? "" : "s") + " to Arrangement");
         };
 
         // Session focus follows to the channel tray (W04b): SessionView announces focus-TRACK
@@ -866,6 +884,12 @@ public:
             // Needs real graph time, so it pumps blockUntilSyncPointChange internally (not a callAsync
             // one-shot); dispatched on the loop so the engine is up.
             MessageManager::callAsync ([this] { runCaptureSelftest(); });
+        }
+        else if (mode == SelfTest::scenesend)
+        {
+            // Wave 7 fast-follow: whole-scene "Send to Arrangement" — shared-start alignment across
+            // filled-slot tracks. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runSceneSendSelftest(); });
         }
         else if (mode == SelfTest::screenshot)
         {
@@ -4407,6 +4431,10 @@ private:
              waveNotLooping = false, waveNoAutoTempo = false, waveSourceMatches = false;
         juce::File waveFile;
 
+        // Send-as-loop leg (track 2, Wave 7 fast-follow) — the keepAsLoop=true overload.
+        bool loopClipCreated = false, loopToggled = false, loopSent = false, loopCopyIsLooping = false,
+             loopControlSent = false, loopControlNotLooping = false;
+
         // W16 (owed W05 debt, dimension 6) — see the render-audibility leg below.
         bool  renderAttempted = false;
         float renderPeak = -1.0f;
@@ -4553,6 +4581,29 @@ private:
                                             == slotWave->getSourceFileReference().getFile()
                                         && slotWave->getSourceFileReference().getFile() != juce::File();
             }
+
+            // Send-as-loop leg (track 2, Wave 7 fast-follow): a LOOPING slot clip sent with
+            // keepAsLoop=true must KEEP its loop (unlike every leg above, which normalizes to a
+            // one-shot). A second send of the SAME slot with the DEFAULT (keepAsLoop=false) must still
+            // normalize — proving the flag genuinely toggles per-call behaviour, not persistent state.
+            if (session.createMidiClipInSlot (2, 0, "LOOPSRC") != nullptr)
+            {
+                loopClipCreated = true;
+                session.setSlotClipLooping (2, 0, true);
+                loopToggled = session.isSlotClipLooping (2, 0);
+            }
+
+            um.beginNewTransaction();
+            auto* loopCopy = session.sendSlotToArrangement (2, 0, /*keepAsLoop*/ true);
+            loopSent = loopCopy != nullptr;
+            if (auto* mc = dynamic_cast<te::MidiClip*> (loopCopy))
+                loopCopyIsLooping = mc->isLooping();
+
+            um.beginNewTransaction();
+            auto* loopControlCopy = session.sendSlotToArrangement (2, 0);   // default false
+            loopControlSent = loopControlCopy != nullptr;
+            if (auto* mc = dynamic_cast<te::MidiClip*> (loopControlCopy))
+                loopControlNotLooping = ! mc->isLooping();
         }
 
         const bool pass = clipCreated && notesSeeded && sent && sourceIntact && arrangeClipAppeared
@@ -4560,6 +4611,8 @@ private:
                           && arrangeAudible && secondAppended && undoRemovedCopy && sourceIntactAfterUndo
                           && waveImported && waveSent && waveIsAudioClip && waveNotLooping
                           && waveNoAutoTempo && waveSourceMatches
+                          && loopClipCreated && loopToggled && loopSent && loopCopyIsLooping
+                          && loopControlSent && loopControlNotLooping
                           && renderAudible != "FAIL";   // SKIP is honest + non-blocking; only proven silence fails
 
         String report;
@@ -4589,6 +4642,12 @@ private:
                << "waveNotLooping="        << (waveNotLooping ? 1 : 0) << newLine
                << "waveNoAutoTempo="       << (waveNoAutoTempo ? 1 : 0) << newLine
                << "waveSourceMatches="     << (waveSourceMatches ? 1 : 0) << newLine
+               << "loopClipCreated="       << (loopClipCreated ? 1 : 0) << newLine
+               << "loopToggled="           << (loopToggled ? 1 : 0) << newLine
+               << "loopSent="              << (loopSent ? 1 : 0) << newLine
+               << "loopCopyIsLooping="     << (loopCopyIsLooping ? 1 : 0) << newLine
+               << "loopControlSent="       << (loopControlSent ? 1 : 0) << newLine
+               << "loopControlNotLooping=" << (loopControlNotLooping ? 1 : 0) << newLine
                << "renderAttempted="       << (renderAttempted ? 1 : 0) << newLine
                << "renderPeak="            << renderPeak << newLine
                << "renderAudible="         << renderAudible << newLine
@@ -4776,6 +4835,134 @@ private:
             FORGE_LOG_ERROR ("Failed to write capture selftest report to: " + reportFile.getFullPathName());
 
         FORGE_LOG_INFO ("Capture selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-scenesend (W7 fast-follow): whole-scene "Send to Arrangement" — every filled clip in a
+    // scene, sent to its own track, ALL aligned at one SHARED start (the max append point across only the
+    // filled-slot tracks), in one undo transaction. Synchronous. Fixture: seed slots (0,2) and (1,2) with
+    // different-length MIDI clips, then send an UNRELATED clip on track 0 first (slot (0,0)) via the
+    // existing single-slot seam so track 0's arrange append point is pushed forward — track 1's stays at 0.
+    // This makes the "shared start" assertion meaningful: without the fix, track 1's copy would land at ITS
+    // OWN (zero) append point instead of matching track 0's.
+    void runSceneSendSelftest()
+    {
+        bool clip0Created = false, clip1Created = false, preSeedSent = false, sent2 = false,
+             sharedStartMatches = false, sharedStartNonZero = false, sourceIntact0 = false,
+             sourceIntact1 = false, undoRemovedBoth = false, emptySceneNoop = false;
+        int  sentCount = 0, clipsBefore0 = -1, clipsBefore1 = -1, clipsAfter0 = -1, clipsAfter1 = -1,
+             clipsAfterUndo0 = -1, clipsAfterUndo1 = -1;
+        double start0 = -1.0, start1 = -1.0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (8);
+
+            // Seed the two scene-2 slots with DIFFERENT-length clips (0,2)=4 notes, (1,2)=2 notes — proves
+            // each copy preserves its OWN length, not a shared one.
+            if (auto mc0 = session.createMidiClipInSlot (0, 2, "SCENE0"))
+            {
+                clip0Created = true;
+                auto& seq = mc0->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 4; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats ((double) i), te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+            }
+            if (auto mc1 = session.createMidiClipInSlot (1, 2, "SCENE1"))   // auto-creates track 1 (getOrInsertAudioTrackAt)
+            {
+                clip1Created = true;
+                auto& seq = mc1->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 2; ++i)
+                    seq.addNote (48 + i, te::BeatPosition::fromBeats ((double) i), te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+            }
+
+            // Pre-seed an UNRELATED clip on track 0's arrangement so its append point is non-zero while
+            // track 1's stays at 0 — the fixture that makes "shared start" a real assertion, not a vacuous one.
+            session.createMidiClipInSlot (0, 0, "PRESEED");
+            um.beginNewTransaction();
+            preSeedSent = session.sendSlotToArrangement (0, 0) != nullptr;
+
+            const auto arrangeCount = [ed] (int t) -> int
+            {
+                auto tracks = te::getAudioTracks (*ed);
+                return t < tracks.size() ? tracks[t]->getClips().size() : -1;
+            };
+            const auto lastClipStart = [ed] (int t) -> double
+            {
+                auto tracks = te::getAudioTracks (*ed);
+                if (t >= tracks.size() || tracks[t]->getClips().isEmpty())
+                    return -1.0;
+                return tracks[t]->getClips().getLast()->getPosition().getStart().inSeconds();
+            };
+
+            clipsBefore0 = arrangeCount (0);   // 1: the pre-seed send
+            clipsBefore1 = arrangeCount (1);   // 0: track 1 has no arrange content yet
+
+            um.beginNewTransaction();
+            sentCount = session.sendSceneToArrangement (2);
+            sent2 = sentCount == 2;
+
+            clipsAfter0 = arrangeCount (0);
+            clipsAfter1 = arrangeCount (1);
+            start0 = lastClipStart (0);
+            start1 = lastClipStart (1);
+
+            sharedStartMatches = std::abs (start0 - start1) < 0.001;
+            sharedStartNonZero = start0 > 0.001 && start1 > 0.001;   // NOT each track's own (0 for track 1)
+
+            sourceIntact0 = session.isSlotFilled (0, 2);   // copies, not moves
+            sourceIntact1 = session.isSlotFilled (1, 2);
+
+            // One undo removes BOTH copies atomically (sendSceneToArrangement brackets all inserts into the
+            // single transaction this runner opened just above).
+            ed->undo();
+            clipsAfterUndo0 = arrangeCount (0);
+            clipsAfterUndo1 = arrangeCount (1);
+            undoRemovedBoth = clipsAfterUndo0 == clipsBefore0 && clipsAfterUndo1 == clipsBefore1;
+
+            // Empty-scene no-op: scene 5 has nothing filled anywhere.
+            emptySceneNoop = session.sendSceneToArrangement (5) == 0;
+        }
+
+        const bool pass = clip0Created && clip1Created && preSeedSent && sent2 && sharedStartMatches
+                          && sharedStartNonZero && sourceIntact0 && sourceIntact1 && undoRemovedBoth
+                          && emptySceneNoop;
+
+        String report;
+        report << "mode=scenesend" << newLine
+               << "clip0Created="        << (clip0Created ? 1 : 0) << newLine
+               << "clip1Created="        << (clip1Created ? 1 : 0) << newLine
+               << "preSeedSent="         << (preSeedSent ? 1 : 0) << newLine
+               << "clipsBefore0="        << clipsBefore0 << newLine
+               << "clipsBefore1="        << clipsBefore1 << newLine
+               << "sentCount="           << sentCount << newLine
+               << "sent2="               << (sent2 ? 1 : 0) << newLine
+               << "clipsAfter0="         << clipsAfter0 << newLine
+               << "clipsAfter1="         << clipsAfter1 << newLine
+               << "start0="              << String (start0, 3) << newLine
+               << "start1="              << String (start1, 3) << newLine
+               << "sharedStartMatches="  << (sharedStartMatches ? 1 : 0) << newLine
+               << "sharedStartNonZero="  << (sharedStartNonZero ? 1 : 0) << newLine
+               << "sourceIntact0="       << (sourceIntact0 ? 1 : 0) << newLine
+               << "sourceIntact1="       << (sourceIntact1 ? 1 : 0) << newLine
+               << "clipsAfterUndo0="     << clipsAfterUndo0 << newLine
+               << "clipsAfterUndo1="     << clipsAfterUndo1 << newLine
+               << "undoRemovedBoth="     << (undoRemovedBoth ? 1 : 0) << newLine
+               << "emptySceneNoop="      << (emptySceneNoop ? 1 : 0) << newLine
+               << "result="              << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="             << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write scene-send selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Scene-send selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
@@ -6405,6 +6592,7 @@ public:
                             : commandLine.contains ("--selftest-scenerename")    ? "selftest-scenerename"    // before -scene (substring! W15)
                             : commandLine.contains ("--selftest-scenedelete")    ? "selftest-scenedelete"    // before -scene (substring! W15)
                             : commandLine.contains ("--selftest-scenereorder")   ? "selftest-scenereorder"   // before -scene (substring! W15)
+                            : commandLine.contains ("--selftest-scenesend")      ? "selftest-scenesend"      // before -scene (substring! W17)
                             : commandLine.contains ("--selftest-scene")          ? "selftest-scene"          // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-demo")           ? "selftest-demo"           // before bare --selftest (W09)
@@ -6470,6 +6658,7 @@ public:
                         : commandLine.contains ("--selftest-scenerename")    ? SelfTest::scenerename    // before -scene (substring! W15)
                         : commandLine.contains ("--selftest-scenedelete")    ? SelfTest::scenedelete    // before -scene (substring! W15)
                         : commandLine.contains ("--selftest-scenereorder")   ? SelfTest::scenereorder   // before -scene (substring! W15)
+                        : commandLine.contains ("--selftest-scenesend")      ? SelfTest::scenesend      // before -scene (substring! W17)
                         : commandLine.contains ("--selftest-scene")          ? SelfTest::scene          // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-demo")           ? SelfTest::demo           // before bare --selftest (W09)

@@ -578,6 +578,50 @@ helper (already used by `--selftest-record`).
 > 2026-07-06 (W16): the new render-audibility leg reads `renderAudible=PASS` (`renderPeak≈0.39`), floor
 > unchanged at 32 (this wave extends 4 existing gates, adds zero new gate names).
 
+### W17 addition (Wave 7 fast-follow — send-as-loop)
+
+`sendSlotToArrangement` gained a `keepAsLoop` parameter (default `false` — every prior caller is unchanged). A
+**loop leg** (track 2): seeds a MIDI clip in slot (2,0), toggles it looping (`setSlotClipLooping`), sends it
+with `keepAsLoop=true`, then sends the SAME slot again with the default (`false`) — proving the flag genuinely
+toggles per-call behaviour rather than being persistent state.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `loopClipCreated` / `loopToggled` | the fixture clip exists and is looping before the send | 1 / 1 |
+| `loopSent` / `loopCopyIsLooping` | `keepAsLoop=true` sends a copy that IS STILL looping (not normalized) | 1 / 1 |
+| `loopControlSent` / `loopControlNotLooping` | a second send of the SAME slot with the default `false` DOES normalize to one-shot | 1 / 1 |
+
+> No new gate name — extends the existing `--selftest-sendarrange` gate, contributing 0 to the floor bump on
+> its own; see `--selftest-scenesend` below for the one NEW gate this wave adds (the source of the 33→34 bump).
+
+## `Forge --selftest-scenesend` (whole-scene "Send to Arrangement", Wave 7 fast-follow)
+
+The acceptance gate for whole-scene send: every FILLED slot in a scene is sent to its own track's linear
+Arrangement, all aligned at **ONE SHARED start beat** (the max append point across only the tracks that
+actually have a filled slot in that scene), in **one undo transaction**. Synchronous. Fixture: seeds
+different-length MIDI clips in slots (0,2) (4 notes) and (1,2) (2 notes), then PRE-SEEDS track 0's arrangement
+with an unrelated send (via the existing single-slot seam) so track 0's append point is pushed forward while
+track 1's stays at 0 — making the "shared start" assertion meaningful (without the fix, track 1's copy would
+land at its OWN zero append point instead of matching track 0's).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clip0Created` / `clip1Created` | both scene-2 fixture clips exist | 1 / 1 |
+| `preSeedSent` | the unrelated track-0 pre-seed send succeeded | 1 |
+| `sentCount` / `sent2` | `sendSceneToArrangement(2)` sends exactly 2 clips (one per filled track) | 2 / 1 |
+| `start0` / `start1` | the two new clips' start times | equal to each other, both > 0 |
+| `sharedStartMatches` | both land at the SAME beat (not each track's own append point) | 1 |
+| `sharedStartNonZero` | the shared start is track 0's pushed-forward point, not 0 (proves the max, not a fallback) | 1 |
+| `sourceIntact0` / `sourceIntact1` | both source slots stay filled — a copy, not a move | 1 / 1 |
+| `undoRemovedBoth` | ONE `ed->undo()` removes BOTH copies atomically (one transaction, not two) | 1 |
+| `emptySceneNoop` | sending a scene with nothing filled anywhere returns 0 (logged, non-fatal) | 1 |
+
+> `-scenesend` CONTAINS `-scene` → placed **before** `--selftest-scene` (longest-first, alongside
+> `-scenerename`/`-scenedelete`/`-scenereorder`) in both ladders; verify `mode=scenesend`. **Floor is now 34
+> gates.** Adversarially QC'd alongside the capture-core wave's swarm — see
+> [devlog/wave-17-performance-capture.md](../docs/devlog/wave-17-performance-capture.md) for the fast-follow
+> addendum.
+
 ## `Forge --selftest-followaction` (per-clip follow actions + loop toggle)
 
 The acceptance gate for **W11 — launcher expressiveness** (design:
