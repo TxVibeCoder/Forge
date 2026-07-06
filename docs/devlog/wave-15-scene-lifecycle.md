@@ -1,6 +1,7 @@
 # W15 — frontier Wave 5: Session scene lifecycle (rename → delete → reorder)
 
-> Frontier build program, Wave 5. Baseline **`09c4928`**. Adds three gates (`--selftest-scenerename`,
+> Frontier build program, Wave 5. Baseline **`6ca11cd`** (was `09c4928` before this session's history rewrite;
+> see HANDOFF). Adds three gates (`--selftest-scenerename`,
 > `--selftest-scenedelete`, `--selftest-scenereorder`) → floor **29 → 32**. A serial spine (ProjectSession
 > seams + main.cpp gates + SessionView wiring, orchestrator-owned) + ONE file-disjoint UI agent
 > (`SceneColumnComponent`, built on the Fable model — design authority). Every engine seam was source-verified

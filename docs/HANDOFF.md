@@ -11,10 +11,12 @@
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W14 are PUSHED to `origin/main`** (through `9f5cc62`, sanitize-clean). **W15 is committed
-LOCALLY only — NOT pushed** (holding for maintainer OK); baseline was `09c4928`. Last build **clean** (MSVC
+**`main`**. **W07–W15 are PUSHED to `origin/main`** (tip `9cc7f04`, sanitize-clean; local `main` ==
+`origin/main`). W15 built on `6ca11cd`. Last build **clean** (MSVC
 Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W15 added `--selftest-scenerename` /
-`--selftest-scenedelete` / `--selftest-scenereorder`; floor 29 → 32).
+`--selftest-scenedelete` / `--selftest-scenereorder`; floor 29 → 32). ⚠ **History was rewritten this session**
+(`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed —
+all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
 Shipped (W15 — frontier Wave 5): the Session scene grid becomes an editable set-list — **double-click a scene
 name to rename** (blank falls back to the number); right-click a scene row → a **PopupMenu** (`Stop scene /
 Rename… / Delete scene / Move up / Move down`) replacing the bare right-click-stop. All three (rename / delete /
@@ -373,9 +375,9 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **✅ DONE: frontier Waves 2–5 (W12–W15)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
-   (`2f804a2`) + MIDI quantise (`52b6e66`), all **PUSHED to `origin/main`** (tip `9f5cc62`); **W15 Session scene
-   lifecycle (rename → delete → reorder) is committed LOCALLY, holding for push OK.** W15 shipped the scene-row
+1. **✅ DONE: frontier Waves 2–5 (W12–W15)** — per-clip launch quantise + grid clip primitives + MIDI quantise +
+   **W15 Session scene lifecycle (rename → delete → reorder)**, all **PUSHED to `origin/main`** (tip `9cc7f04`).
+   W15 shipped the scene-row
    PopupMenu scaffold (`Stop / Rename… / Delete / Move up / Move down`) that W7's whole-scene send will APPEND one
    item to (never a competing rewrite — the critic's territory finding #1). **▶ NEXT: frontier program Wave 6 —
    the owed W05 QC-debt hardening** (assert-only, `main.cpp`-only — the maximally-clean collision-free wave;
@@ -629,11 +631,13 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest PUSHED work is on `origin/main` through `9f5cc62`; W15 is committed LOCALLY only (holding for push OK).**
-  Pushed: W07–W11 (through `0f9d5cc`), the docs sanitization (`2a366e9`), W12 per-clip launch quantise
-  (`03f6efd`/`c32b8f1`), W13 grid clip primitives (`2f804a2`/`2edf78a`), and W14 MIDI quantise
-  (`52b6e66`/`9f5cc62`, tip `9f5cc62`). The sanitize scan (the real-identity denylist — see CLAUDE.md
-  §Public-repo hygiene) ran clean before each push. Prior pushed history: W08 (`0ad7abc`), W07
+- **Latest PUSHED work is on `origin/main` at tip `9cc7f04` (W15); local `main` == `origin/main`.**
+  Pushed: W07–W11, the docs sanitization, W12 per-clip launch quantise, W13 grid clip primitives, W14 MIDI
+  quantise, and W15 scene lifecycle (`9cc7f04`). ⚠ **History was rewritten + force-pushed this session** to scrub
+  a real-identity leak from an earlier HANDOFF commit's prose (`git-filter-repo` → `python -m git_filter_repo`,
+  which drops `origin` — re-added before pushing); the old `09c4928` became `6ca11cd`, and hashes below it are
+  unchanged. The sanitize scan (the real-identity denylist — see CLAUDE.md §Public-repo hygiene; a 3-lens
+  audit before the W15 push) ran clean. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
