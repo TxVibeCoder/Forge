@@ -10,8 +10,8 @@
 > — not fixed (out of scope, a maintainer call), but documented + monitored.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W15 are PUSHED to `origin/main`** (tip `9cc7f04`, sanitize-clean). **W16 is committed LOCALLY
-only — NOT pushed** (holding for maintainer OK); baseline was `20500c1`. Last build **clean** (MSVC
+**`main`**. **W07–W16 are PUSHED to `origin/main`** (tip `96b1037`, sanitize-clean; local `main` ==
+`origin/main`). W16 built on `20500c1`. Last build **clean** (MSVC
 Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W16 adds ZERO new gate names — all 6 dimensions extend
 4 existing gates: `--selftest-undo`, `--selftest-midi`, `--selftest-popout`, `--selftest-sendarrange`; floor
 stays 32). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from
@@ -390,10 +390,10 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
 1. **✅ DONE: frontier Waves 2–6 (W12–W16)** — per-clip launch quantise + grid clip primitives + MIDI quantise +
-   Session scene lifecycle, all **PUSHED to `origin/main`** (tip `9cc7f04`); **W16 (owed W05 QC-debt discharge)
-   is committed LOCALLY, holding for push OK.** W16 discharges the last standing W05 debt (undo-correctness +
-   shell-integration) and surfaced a confirmed, unfixed engine defect (redo wiped by `FourOscPlugin`'s
-   mod-matrix flush — see the CLAUDE.md gotcha; a maintainer decision, not fixed this wave).
+   Session scene lifecycle + **W16 (owed W05 QC-debt discharge)**, all **PUSHED to `origin/main`** (tip
+   `96b1037`). W16 discharges the last standing W05 debt (undo-correctness + shell-integration) and surfaced a
+   confirmed, unfixed engine defect (redo wiped by `FourOscPlugin`'s mod-matrix flush — see the CLAUDE.md
+   gotcha; a maintainer decision, not fixed this wave).
    **▶ NEXT: frontier program Wave 7 — performance recording** (the real Session→Arrange bridge: capture which
    clips launched, when, and for how long, onto each track's timeline; then whole-scene-send and send-as-loop
    ride the same region, appending one item to W15's scene-row PopupMenu — never a competing rewrite, per the
@@ -647,14 +647,14 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest PUSHED work is on `origin/main` at tip `9cc7f04` (W15); W16 is committed LOCALLY only, holding for
-  push OK — local `main` is 1 commit ahead of `origin/main`.**
+- **Latest PUSHED work is on `origin/main` at tip `96b1037` (W16); local `main` == `origin/main`.**
   Pushed: W07–W11, the docs sanitization, W12 per-clip launch quantise, W13 grid clip primitives, W14 MIDI
-  quantise, and W15 scene lifecycle (`9cc7f04`). ⚠ **History was rewritten + force-pushed in a prior session** to scrub
+  quantise, W15 scene lifecycle (`9cc7f04`), and W16 W05 QC-debt discharge (`96b1037`). ⚠ **History was rewritten
+  + force-pushed in a prior session** to scrub
   a real-identity leak from an earlier HANDOFF commit's prose (`git-filter-repo` → `python -m git_filter_repo`,
   which drops `origin` — re-added before pushing); the old `09c4928` became `6ca11cd`, and hashes below it are
   unchanged. The sanitize scan (the real-identity denylist — see CLAUDE.md §Public-repo hygiene; a 3-lens
-  audit before the W15 push) ran clean. Prior pushed history: W08 (`0ad7abc`), W07
+  audit before both the W15 and W16 pushes) ran clean. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is
