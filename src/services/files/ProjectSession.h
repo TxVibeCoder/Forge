@@ -11,6 +11,9 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <map>
+#include <utility>
+#include <vector>
 
 namespace te = tracktion;
 
@@ -20,7 +23,7 @@ namespace te = tracktion;
     selftest gate is unchanged. Repeat/retrigger is deferred to v2. */
 enum class LaunchMode { Trigger = 0, Gate = 1, Toggle = 2 };
 
-class ProjectSession
+class ProjectSession : private juce::Timer
 {
 public:
     explicit ProjectSession (te::Engine&);
@@ -181,6 +184,52 @@ public:
         arrange clip, or nullptr (logged) if there is no edit / the slot is empty / the track can't be
         resolved / the insert failed. */
     te::Clip* sendSlotToArrangement (int trackIndex, int sceneIndex);
+
+    //==============================================================================
+    // Performance capture (Wave 7) — the REAL Session -> Arrange bridge. Records which clips launched,
+    // WHEN, and for how long during a live performance, and stamps them onto each track's linear timeline
+    // at their absolute captured Edit beat. Unlike sendSlotToArrangement (a single static clip appended at
+    // the end), this preserves the TIMING of a performance.
+    //
+    // Mechanism (load-bearing): LaunchHandle::getPlayedRange() is a SINGLE current span (Edit beats,
+    // audio-write / message-read), not a history buffer — it reads [startBeat, startBeat+duration] while a
+    // clip plays and nullopt once it stops. So capture SAMPLES-AND-ACCUMULATES on the message thread: an
+    // owned ~30 Hz Timer polls every filled slot each tick, opening a span on a fresh play, growing it, and
+    // SEALING it on each launch->stop transition (or when the launch startBeat jumps = a re-launch between
+    // ticks — a changed start means a new play GIVEN Forge only ever calls LaunchHandle::play(), never
+    // nudge()/setLooping()/playSynced(), none of which Forge wires today; any of those would also mutate
+    // startBeat mid-play and this heuristic would need revisiting alongside them — QC-flagged, not a live bug).
+    // R1-safe: cells are (track,scene) INDICES, re-resolved via the const getClipSlot each tick; NO
+    // te::LaunchHandle*/Clip* is ever cached ACROSS ticks. Each span also carries the te::EditItemID of the
+    // clip that was ACTUALLY PLAYING when the span opened (captured then, never re-derived later) — commit
+    // resolves the source clip by that IDENTITY (te::findClipForID), never by re-reading "whatever occupies
+    // this cell now", so clearing/replacing a clip in a cell mid-capture-session can't stamp the replacement
+    // clip's content at the original clip's captured beat (QC-caught + fixed). Message-thread only.
+
+    /** Arms performance capture: clears prior history and starts the message-thread sampler. Does NOT
+        start the transport — the user launches clips/scenes as usual and capture accumulates whatever
+        plays while armed. Idempotent. No-op if no edit. */
+    void startPerformanceCapture();
+
+    /** Disarms capture. Seals any still-open spans first. When `commit`, STAMPS one one-shot clip per
+        captured span onto its track's linear timeline at the span's ABSOLUTE captured Edit beat (via the
+        same clone/normalize path sendSlotToArrangement uses). All inserts land with NO intervening
+        beginNewTransaction, so the CALLER brackets them into one undo transaction (the shell does — one
+        Ctrl+Z removes the whole take). markAsChanged on a non-empty commit. Returns the number of clips
+        stamped (0 if nothing captured, !commit, or no edit). */
+    int  stopPerformanceCapture (bool commit);
+
+    /** True while performance capture is armed. Const. */
+    bool isPerformanceCaptureArmed() const;
+
+    /** Count of captured spans so far (sealed + currently open). Const — for the gate + a HUD readout. */
+    int  getCapturedSpanCount() const;
+
+    /** Samples every filled slot's LaunchHandle::getPlayedRange ONCE and accumulates. Called by the owned
+        Timer in production; exposed so a headless gate can pump it deterministically in lockstep with the
+        audio graph (blockUntilSyncPointChange). No-op if not armed / no edit. Message-thread only; R1-safe;
+        never logs (poll path). */
+    void performanceCaptureTick();
 
     /** Appends a new EMPTY audio track at the END of the track list (te::insertNewAudioTrack at
         getEndOfTracks). LOAD-BEARING: the end-append keeps every existing absolute track index stable
@@ -433,6 +482,35 @@ private:
     te::Engine& engine;
     std::unique_ptr<te::Edit> edit;
     juce::File editFile;
+
+    // ── Performance capture (Wave 7) ──────────────────────────────────────────────────────────────
+    // Owned message-thread sampler + the accumulation state. timerCallback() delegates to
+    // performanceCaptureTick(). Keyed by (track,scene); an OpenSpan is the currently-growing play, sealed
+    // into capturedSpans (Edit-beat ranges) on a stop / re-launch. NO engine pointers are cached (R1).
+    void timerCallback() override;
+
+    // clipID is captured at OPEN time from the clip actually playing then (NOT re-resolved at seal/commit
+    // time) — a clip can be cleared and replaced in the same cell mid-capture-session; resolving "whatever
+    // occupies this cell now" at commit would stamp the REPLACEMENT clip's content at the ORIGINAL span's
+    // captured beat (QC-caught). commit resolves the clip by IDENTITY (te::findClipForID), never by cell
+    // index, so a since-moved-or-untouched clip is found correctly and a since-DELETED clip degrades to a
+    // logged skip (same graceful-degrade posture as an empty slot).
+    struct CaptureSpan { int track, scene; te::BeatRange range; te::EditItemID clipID; };
+    struct OpenSpan    { double startBeat, endBeat; te::EditItemID clipID; };   // currently-growing, Edit beats
+
+    bool capturing = false;
+    std::map<std::pair<int,int>, OpenSpan> openSpans;   // per active cell
+    std::vector<CaptureSpan>               capturedSpans;
+
+    void sealCaptureSpan (int track, int scene, const OpenSpan&);   // push a CaptureSpan (guards tiny/neg len)
+
+    // Clone helper factored out of sendSlotToArrangement (BEHAVIOUR-PRESERVING — the existing
+    // --selftest-sendarrange stays byte-identical): clones `src`'s state onto `track` at `destPos`,
+    // normalizes to a one-shot (unless keepAsLoop), flips playSlotClips false (audible in Arrange), and
+    // strips launcher-only metadata (follow-action / launch-mode). Returns the new clip, or nullptr on a
+    // failed insert. Does NOT markAsChanged (callers do). Message-thread only.
+    te::Clip* insertClipCopyOnTimeline (te::AudioTrack& track, te::Clip& src,
+                                        te::ClipPosition destPos, bool keepAsLoop);
 
     // The single active record slot (W7). {-1,-1} == none. Set by recordArmSlot, cleared by
     // commitSlotRecord / recordDisarmSlot. Tracks which cell beginSlotRecord may roll for.

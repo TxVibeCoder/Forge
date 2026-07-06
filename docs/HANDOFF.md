@@ -1,22 +1,40 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W16 — frontier program
-> Wave 6: W05 QC debt discharge (undo + popout + lifetime hardening)"** — the **SIXTH** wave of the 10-wave
-> **frontier build program**
-> ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ **W05's owed adversarial-QC debt is now
-> DISCHARGED** — undo-correctness (shell-hooks, record-gate) and shell-integration (popout refresh + key-routing)
-> are all gated headlessly. Building this wave **uncovered a confirmed, pre-existing engine defect** (see below)
-> — not fixed (out of scope, a maintainer call), but documented + monitored.
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W17 — frontier program
+> Wave 7 (capture core): performance recording"** — the **SEVENTH** wave of the 10-wave **frontier build
+> program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ Delivers DIRECTION.md's literal
+> promise — "compose in Session, then arrange linearly" — via a new **Global "Capture"** transport toggle that
+> records which clips launch, when, and for how long, then stamps them onto each track's Arrangement at their
+> captured beat. **Scoped to the capture core only this session** (the maintainer's explicit call); the two
+> fast-follows (whole-scene-send, send-as-loop) are queued as a clean follow-up on the same seam. **Built +
+> gated + adversarially QC'd; NOT YET COMMITTED** (awaiting the maintainer's go-ahead).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
 **`main`**. **W07–W16 are PUSHED to `origin/main`** (tip `96b1037`, sanitize-clean; local `main` ==
-`origin/main`). W16 built on `20500c1`. Last build **clean** (MSVC
-Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W16 adds ZERO new gate names — all 6 dimensions extend
-4 existing gates: `--selftest-undo`, `--selftest-midi`, `--selftest-popout`, `--selftest-sendarrange`; floor
-stays 32). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from
-an earlier commit's HANDOFF prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the old
-`09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+`origin/main` as of that tip). W17 (this session) is built on top of `96b1037` in the **working tree, not yet
+committed**. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-THREE selftests PASS** (W17 adds ONE
+new gate, `--selftest-capture`; floor **32 → 33**). ⚠ **History was rewritten in a prior session**
+(`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed —
+all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+Shipped (W17 — frontier Wave 7, capture core): a new `ProjectSession` performance-capture subsystem
+(`startPerformanceCapture` / `stopPerformanceCapture` / `performanceCaptureTick`, an owned ~30 Hz message-thread
+`juce::Timer`) samples `LaunchHandle::getPlayedRange()` — a SINGLE current span, not a history buffer — to
+accumulate one sealed span per launch→stop transition, then stamps a one-shot clip per span onto the
+Arrangement at its **absolute captured Edit beat** (not append-at-end, which is what distinguishes this from
+W10's `sendSlotToArrangement`). The W10 clone/normalize/audibility-flip/metadata-strip body was factored,
+behaviour-preservingly, into a shared `insertClipCopyOnTimeline` helper — `--selftest-sendarrange` stays
+byte-identical (confirmed by independent QC). A new **"Capture"** button joins the transport bar (distinct from
+**Rec**, the MIDI-into-slot take path); `TransportBar::resized()` was rewritten to flex the whole 7-button+2-combo
+strip proportionally so nothing starves at the 760 px window minimum (QC hand-verified the arithmetic).
+**A 4-dimension adversarial QC swarm caught one confirmed defect, fixed before ship**: commit was resolving
+each span's source clip by **cell index** (`getClipSlot(track,scene)->getClip()`) rather than by **identity** —
+so clearing a clip from a slot mid-capture-session and dropping a *different* clip into the same cell would
+silently stamp the replacement clip's content at the original clip's captured beat. Fixed via a captured
+`te::EditItemID` (taken at span-OPEN time, never re-derived) resolved at commit through `te::findClipForID` (an
+edit-wide lookup, so a since-moved clip still resolves; a genuinely deleted one degrades to a logged skip,
+never a silent wrong-content stamp). Full record →
+[devlog/wave-17-performance-capture.md](devlog/wave-17-performance-capture.md).
 Shipped (W16 — frontier Wave 6): six dimensions, each proving the shell's **real** entry point
 (`doUndo()`/`doRedo()`, the popout's actual `keyPressed` forward chain) rather than the `ed->undo()` bypass
 every pre-existing gate used. **Building it surfaced a confirmed, severe engine defect**:
@@ -394,11 +412,21 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    `96b1037`). W16 discharges the last standing W05 debt (undo-correctness + shell-integration) and surfaced a
    confirmed, unfixed engine defect (redo wiped by `FourOscPlugin`'s mod-matrix flush — see the CLAUDE.md
    gotcha; a maintainer decision, not fixed this wave).
-   **▶ NEXT: frontier program Wave 7 — performance recording** (the real Session→Arrange bridge: capture which
-   clips launched, when, and for how long, onto each track's timeline; then whole-scene-send and send-as-loop
-   ride the same region, appending one item to W15's scene-row PopupMenu — never a competing rewrite, per the
-   critic's territory finding #1). Then Wave 8 (Session mixer polish) … — full ordered program + the critic's
-   corrections in `docs/frontier-program.local.md`. **W16 follow-ups (documented):** the `FourOscPlugin`
+   **✅ DONE: frontier Wave 7, capture core (W17)** — performance capture (the real Session→Arrange bridge):
+   a Global "Capture" toggle records which clips launched, when, and for how long, then stamps them onto each
+   track's Arrangement at the captured beat, all in one undo transaction. **Built + gated (33/33 PASS) +
+   adversarially QC'd (one confirmed identity-vs-cell-index defect found and fixed) in the working tree — NOT
+   YET COMMITTED**, per the maintainer's scope call to land the capture core before the two fast-follows.
+   **▶ NEXT: the Wave 7 fast-follows** — whole-scene-send (send every filled clip in a scene to its track,
+   aligned at one shared start, via the same `insertClipCopyOnTimeline` seam W17 built) and send-as-loop (a
+   `keepAsLoop=true` overload of the same helper); whole-scene-send's `SceneColumnComponent` menu item must be
+   **appended** to W15's existing scene-row PopupMenu, never a competing rewrite, per the critic's territory
+   finding #1. Then Wave 8 (Session mixer polish) … — full ordered program + the critic's corrections in
+   `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render audibility leg for
+   `--selftest-capture` (parked, same class as the W09/W10 render-leg follow-up); the reseal heuristic's
+   dependency on `LaunchHandle::nudge`/`setLooping`/`playSynced` staying uncalled (see the new CLAUDE.md
+   gotcha — revisit if a future wave wires per-clip handle-level looping). **W16 follow-ups (documented):** the
+   `FourOscPlugin`
    redo-wipe defect itself (fix requires patching vendored `libs/tracktion_engine` — explicitly a maintainer
    call, see the gotcha). **W15 follow-ups (documented):** a save→reload round-trip leg for the scene
    gates; drag-to-reorder (parked — no headless mouse-drag driver); scene colour / multi-select. **A benign W15
@@ -474,6 +502,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sendarrange # Session→Arrange copy: fidelity + audibility + one-shot + undo (W10) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-followaction # per-clip follow-actions + loop-toggle (footgun defeated) (W11) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-launchmode  # per-clip launch mode Trigger/Gate/Toggle state+persist (W11) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-capture  # performance capture: accumulate + commit at absolute beat + identity-resolve + undo (W17) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -734,7 +763,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD (this session)**.
+- [devlog/wave-17-performance-capture.md](devlog/wave-17-performance-capture.md) — **W17: frontier Wave 7 capture core — performance recording (this session)**.
+- [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD**.
 - [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (QC partially owed)**.
 - [devlog/wave-04b-ux.md](devlog/wave-04b-ux.md) / [devlog/wave-04a-ux.md](devlog/wave-04a-ux.md) — the W04 UX waves (same session).
 - [devlog/wave-03-features.md](devlog/wave-03-features.md) — W03: automation · MIDI-clock out · async LUFS · live refresh (same session).

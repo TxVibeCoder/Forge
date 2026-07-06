@@ -11,6 +11,7 @@ ProjectSession::ProjectSession (te::Engine& e)
 
 void ProjectSession::newProject (const juce::File& f)
 {
+    stopPerformanceCapture (false);   // abandon any in-flight capture across an edit swap (Wave 7)
     editFile = f;
     const auto parentDir = f.getParentDirectory();
 
@@ -35,6 +36,7 @@ void ProjectSession::newProject (const juce::File& f)
 
 bool ProjectSession::openProject (const juce::File& f)
 {
+    stopPerformanceCapture (false);   // abandon any in-flight capture across an edit swap (Wave 7)
     auto loaded = te::loadEditFromFile (engine, f);
 
     if (loaded == nullptr)
@@ -179,13 +181,10 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
     const auto srcPos   = src->getPosition();
     const te::ClipPosition destPos { { appendAt, appendAt + srcPos.getLength() }, srcPos.getOffset() };
 
-    // Faithful copy via the engine's own duplication idiom (mirrors te::split): clone the source state
-    // (carries wave source / loop / gain OR the MIDI sequence), and the multi-arg insertClipWithState
-    // re-IDs + repositions it. deleteExistingClips=false: append, don't replace. A createCopy() is
-    // parentless, so there's no duplicate-ID / re-parent-live-tree assertion (engine gotcha).
-    auto* newClip = track->insertClipWithState (src->state.createCopy(), src->getName(), src->type,
-                                                destPos, /*deleteExistingClips*/ false,
-                                                /*allowSpottingAdjustment*/ false);
+    // Faithful copy at the append point via the shared clone helper (Wave 7 factored it out of here so
+    // performance capture can reuse the identical clone/normalize/strip path). keepAsLoop=false — a sent
+    // clip is a plain linear one-shot (matches a direct Arrange import).
+    auto* newClip = insertClipCopyOnTimeline (*track, *src, destPos, /*keepAsLoop*/ false);
 
     if (newClip == nullptr)
     {
@@ -193,30 +192,50 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
         return nullptr;
     }
 
-    // Normalize the copy to a plain linear one-shot. A clip placed in a ClipSlot is force-set by the engine
-    // to auto-tempo + a full-length loop range; state.createCopy() carries that onto the timeline. Left
-    // as-is, the arrange clip would RE-TILE its content the instant the user drags its right edge longer
-    // (a QC-confirmed latent bug), and an audio copy would time-warp on a tempo change — neither is what
-    // "Send to Arrangement" should produce. disableLooping() clears the loop while PRESERVING the clip's
-    // visible region (it recomputes the position); setAutoTempo(false) makes a sent audio one-shot behave
-    // like a direct Arrange import. (NB: setLoopRangeBeats({}) is deliberately NOT used — it re-asserts
-    // setAutoTempo(true), so it would undo the normalization.)
-    if (auto* acb = dynamic_cast<te::AudioClipBase*> (newClip))
+    edit->markAsChanged();
+    return newClip;
+}
+
+//==============================================================================
+te::Clip* ProjectSession::insertClipCopyOnTimeline (te::AudioTrack& track, te::Clip& src,
+                                                    te::ClipPosition destPos, bool keepAsLoop)
+{
+    // Faithful copy via the engine's own duplication idiom (mirrors te::split): clone the source state
+    // (carries wave source / loop / gain OR the MIDI sequence), and the multi-arg insertClipWithState
+    // re-IDs + repositions it. deleteExistingClips=false: append, don't replace. A createCopy() is
+    // parentless, so there's no duplicate-ID / re-parent-live-tree assertion (engine gotcha).
+    auto* newClip = track.insertClipWithState (src.state.createCopy(), src.getName(), src.type,
+                                               destPos, /*deleteExistingClips*/ false,
+                                               /*allowSpottingAdjustment*/ false);
+
+    if (newClip == nullptr)
+        return nullptr;
+
+    // Normalize the copy to a plain linear one-shot (unless the caller wants a loop kept). A clip placed in
+    // a ClipSlot is force-set by the engine to auto-tempo + a full-length loop range; state.createCopy()
+    // carries that onto the timeline. Left as-is, the arrange clip would RE-TILE its content the instant the
+    // user drags its right edge longer (a QC-confirmed latent bug), and an audio copy would time-warp on a
+    // tempo change. disableLooping() clears the loop while PRESERVING the clip's visible region;
+    // setAutoTempo(false) makes a sent audio one-shot behave like a direct import. (NB: setLoopRangeBeats({})
+    // is deliberately NOT used — it re-asserts setAutoTempo(true), so it would undo the normalization.)
+    if (! keepAsLoop)
     {
-        acb->disableLooping();
-        acb->setAutoTempo (false);
-    }
-    else if (auto* mc = dynamic_cast<te::MidiClip*> (newClip))
-    {
-        mc->disableLooping();
+        if (auto* acb = dynamic_cast<te::AudioClipBase*> (newClip))
+        {
+            acb->disableLooping();
+            acb->setAutoTempo (false);
+        }
+        else if (auto* mc = dynamic_cast<te::MidiClip*> (newClip))
+        {
+            mc->disableLooping();
+        }
     }
 
     // Make the copy AUDIBLE in Arrange playback. A track latches playSlotClips=true when any of its slots
     // plays, and NOTHING in the engine's live path clears it — so the arranger output stays gated off
     // (playArranger = ! playSlotClips). Switch this track to arrange playback: the engine's defined
-    // Session -> Arrange handoff (it stops any still-playing slot on THIS track, harmless when none is),
-    // which is exactly what "Send to Arrangement" asks for.
-    track->playSlotClips = false;
+    // Session -> Arrange handoff (it stops any still-playing slot on THIS track, harmless when none is).
+    track.playSlotClips = false;
 
     // Strip launcher-only metadata: an Arrange clip is never launched, so a copied follow action / launch
     // mode is dead data (the engine's node-builder reads them only for ClipSlotList clips, never the arrange
@@ -225,8 +244,176 @@ te::Clip* ProjectSession::sendSlotToArrangement (int trackIndex, int sceneIndex)
     newClip->state.removeChild (newClip->state.getChildWithName (te::IDs::FOLLOWACTIONS), &edit->getUndoManager());
     newClip->state.removeProperty (juce::Identifier ("forgeLaunchMode"), &edit->getUndoManager());
 
-    edit->markAsChanged();
     return newClip;
+}
+
+//==============================================================================
+// Performance capture (Wave 7). See the header for the sample-and-accumulate rationale.
+void ProjectSession::startPerformanceCapture()
+{
+    if (edit == nullptr)
+        return;
+
+    capturedSpans.clear();
+    openSpans.clear();
+    capturing = true;
+    startTimerHz (30);   // message-thread sampler; getPlayedRange is read-only + message-safe
+    FORGE_LOG_INFO ("Performance capture armed");
+}
+
+void ProjectSession::timerCallback()
+{
+    performanceCaptureTick();
+}
+
+void ProjectSession::sealCaptureSpan (int track, int scene, const OpenSpan& open)
+{
+    // Guard a zero/negative-length span (a re-launch reseal caught on the same tick the span opened, or a
+    // clip that queued but never advanced a block): getPlayedRange only returns a value once at least one
+    // block has played, so a real span is > 0, but stay defensive.
+    if (open.endBeat - open.startBeat <= 1.0e-4)
+        return;
+
+    capturedSpans.push_back ({ track, scene,
+                               te::BeatRange (te::BeatPosition::fromBeats (open.startBeat),
+                                              te::BeatPosition::fromBeats (open.endBeat)),
+                               open.clipID });
+}
+
+void ProjectSession::performanceCaptureTick()
+{
+    if (! capturing || edit == nullptr)
+        return;
+
+    auto tracks = te::getAudioTracks (*edit);
+    const int numScenes = getNumScenes();
+
+    for (int t = 0; t < tracks.size(); ++t)
+        for (int s = 0; s < numScenes; ++s)
+        {
+            // R1: re-resolve the slot/clip/handle fresh every tick — never cache across ticks.
+            auto* slot = getClipSlot (t, s);
+            auto* clip = (slot != nullptr) ? slot->getClip() : nullptr;
+            auto  lh   = (clip != nullptr) ? clip->getLaunchHandle() : nullptr;
+
+            const std::optional<te::BeatRange> r = lh ? lh->getPlayedRange() : std::nullopt;
+
+            const auto key = std::make_pair (t, s);
+            auto it = openSpans.find (key);
+
+            if (r.has_value())
+            {
+                const double start = r->getStart().inBeats();
+                const double end   = r->getEnd().inBeats();
+
+                if (it == openSpans.end())
+                {
+                    // Fresh play: clip is guaranteed non-null here (r came from clip->getLaunchHandle()).
+                    // Capture ITS identity now — never re-derived from "whatever's in the cell" later.
+                    openSpans[key] = { start, end, clip->itemID };
+                }
+                else if (std::abs (it->second.startBeat - start) > 1.0e-4)
+                {
+                    // The launch startBeat jumped: a stop+relaunch happened between ticks (given Forge never
+                    // calls LaunchHandle::nudge/setLooping/playSynced, a changed start always means a new
+                    // play here — see the header note). Seal the OLD span with ITS OWN stored identity
+                    // (it->second.clipID — NOT the freshly-resolved `clip`, which may already be a
+                    // DIFFERENT clip if the slot's content changed inside this same tick gap), then open a
+                    // fresh span for the new play under the newly-resolved clip's identity.
+                    sealCaptureSpan (t, s, it->second);
+                    it->second = { start, end, clip->itemID };
+                }
+                else
+                {
+                    it->second.endBeat = end;   // same play, still growing; identity unchanged
+                }
+            }
+            else if (it != openSpans.end())
+            {
+                // Play -> stop transition: seal with the span's OWN stored identity (the clip may already
+                // be nullptr this tick if it was deleted the instant it stopped) and close the span.
+                sealCaptureSpan (t, s, it->second);
+                openSpans.erase (it);
+            }
+        }
+}
+
+int ProjectSession::stopPerformanceCapture (bool commit)
+{
+    stopTimer();
+    capturing = false;
+
+    if (edit == nullptr)
+    {
+        openSpans.clear();
+        capturedSpans.clear();
+        return 0;
+    }
+
+    // Seal any span still open (a clip still playing when capture stopped).
+    for (const auto& [key, open] : openSpans)
+        sealCaptureSpan (key.first, key.second, open);
+    openSpans.clear();
+
+    if (! commit || capturedSpans.empty())
+    {
+        capturedSpans.clear();
+        return 0;
+    }
+
+    // Stamp one one-shot clip per captured span at its ABSOLUTE captured Edit beat. Converts beats -> time
+    // (ClipPosition is in seconds) via the tempo sequence at commit. NO beginNewTransaction here — the
+    // caller brackets all inserts into ONE undo transaction (one Ctrl+Z removes the whole take).
+    int stamped = 0;
+    auto tracks = te::getAudioTracks (*edit);
+
+    for (const auto& span : capturedSpans)
+    {
+        if (span.track < 0 || span.track >= tracks.size())
+            continue;
+
+        auto* track = tracks[span.track];
+
+        // Resolve by IDENTITY, never by re-reading the cell: the cell may have been cleared and re-filled
+        // with a DIFFERENT clip since this span was captured (a live jam commonly swaps a slot's clip
+        // mid-performance) — resolving "whatever's in the cell now" would stamp the replacement clip's
+        // content at THIS span's captured beat (QC-caught). findClipForID walks the whole edit, so it still
+        // finds the original clip even if it has since moved to a different slot; only a genuine delete
+        // fails to resolve.
+        auto* src = te::findClipForID (*edit, span.clipID);
+
+        if (track == nullptr || src == nullptr)
+        {
+            FORGE_LOG_WARN ("Performance capture: captured clip for cell (" + juce::String (span.track) + ","
+                            + juce::String (span.scene) + ") no longer exists at commit — skipping its span");
+            continue;
+        }
+
+        const auto startTime = edit->tempoSequence.toTime (span.range.getStart());
+        const auto endTime   = edit->tempoSequence.toTime (span.range.getEnd());
+        const te::ClipPosition destPos { { startTime, endTime }, src->getPosition().getOffset() };
+
+        if (insertClipCopyOnTimeline (*track, *src, destPos, /*keepAsLoop*/ false) != nullptr)
+            ++stamped;
+    }
+
+    capturedSpans.clear();
+
+    if (stamped > 0)
+        edit->markAsChanged();
+
+    FORGE_LOG_INFO ("Performance capture committed " + juce::String (stamped) + " clip(s) to the arrangement");
+    return stamped;
+}
+
+bool ProjectSession::isPerformanceCaptureArmed() const
+{
+    return capturing;
+}
+
+int ProjectSession::getCapturedSpanCount() const
+{
+    return (int) capturedSpans.size() + (int) openSpans.size();
 }
 
 te::TransportControl* ProjectSession::getTransport() const

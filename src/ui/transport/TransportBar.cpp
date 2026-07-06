@@ -12,7 +12,8 @@ static constexpr int numCountInOptions = (int) (sizeof (countInOptions) / sizeof
 
 TransportBar::TransportBar()
 {
-    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton, &midiClockButton })
+    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton,
+                     &midiClockButton, &globalRecButton })
         addAndMakeVisible (b);
 
     recordButton.setColour (TextButton::buttonOnColourId, Colours::red);
@@ -20,6 +21,12 @@ TransportBar::TransportBar()
     metronomeButton.setColour (TextButton::buttonOnColourId, Colours::orange);
     midiClockButton.setColour (TextButton::buttonOnColourId, Colours::orange);
     midiClockButton.setTooltip ("Send MIDI clock to all outputs");
+
+    // Global performance-capture toggle (Wave 7). Record-family, so it speaks the record-red accent when
+    // armed (distinct from the orange sync toggles); armed means "stamp every clip I launch onto the
+    // Arrangement at the beat it fires." A DISTINCT control from Rec (MIDI-into-slot take).
+    globalRecButton.setColour (TextButton::buttonOnColourId, Colours::red);
+    globalRecButton.setTooltip ("Capture performance to Arrangement — records which clips launch, when, and for how long");
 
     playButton.onClick   = [this] { if (edit != nullptr) EngineHelpers::togglePlay (*edit); };
     stopButton.onClick   = [this] { if (transport != nullptr) transport->stop (false, false); };
@@ -47,6 +54,18 @@ TransportBar::TransportBar()
                                                    : midiClockButton.getToggleState();
         if (onMidiClockToggled)
             onMidiClockToggled (! current);
+
+        syncMetronomeControls();
+    };
+
+    // Global-capture toggle (Wave 7): ask engine truth (is capture armed?), request the inverse, reflect.
+    // Gated on a live Edit — the owner's seam records against the Edit. Toggling OFF commits the take.
+    globalRecButton.onClick = [this]
+    {
+        const bool current = (edit != nullptr && queryGlobalRecordArmed) ? queryGlobalRecordArmed()
+                                                                         : globalRecButton.getToggleState();
+        if (edit != nullptr && onGlobalRecordToggled)
+            onGlobalRecordToggled (! current);
 
         syncMetronomeControls();
     };
@@ -110,32 +129,34 @@ void TransportBar::resized()
 {
     auto r = getLocalBounds().reduced (4, 4);
 
-    for (auto* b : { &playButton, &stopButton, &recordButton, &loopButton, &metronomeButton, &midiClockButton })
+    // Seven buttons + two combos. At/above preferredWidth everything renders at its preferred size; below
+    // it (a user-shrunk window, ~760 px), the WHOLE strip shrinks proportionally with per-element floors so
+    // nothing ever collapses to 0 px — the W06 QC lesson (a starved control is unclickable), generalized
+    // from the two combos to the buttons the Wave-7 7th button now crowds.
+    juce::TextButton* buttons[] = { &playButton, &stopButton, &recordButton, &loopButton,
+                                    &metronomeButton, &midiClockButton, &globalRecButton };
+    constexpr int numButtons = (int) (sizeof (buttons) / sizeof (buttons[0]));
+
+    constexpr int gap = 4, btnPref = 64, countInPref = 120, launchPref = 110;
+    constexpr int btnFloor = 34, comboFloor = 40;
+
+    const int numGaps   = numButtons + 1;   // between each button, and before each combo
+    const int prefTotal = numButtons * btnPref + countInPref + launchPref + numGaps * gap;
+    const int avail     = jmax (0, r.getWidth());
+
+    const double scale = (avail >= prefTotal || prefTotal <= 0) ? 1.0 : (double) avail / (double) prefTotal;
+
+    const int btnW     = jmax (btnFloor,   roundToInt (btnPref     * scale));
+    const int countInW = jmax (comboFloor, roundToInt (countInPref * scale));
+    const int launchW  = jmax (comboFloor, roundToInt (launchPref  * scale));
+
+    for (auto* b : buttons)
     {
-        b->setBounds (r.removeFromLeft (64));
-        r.removeFromLeft (4);
+        b->setBounds (r.removeFromLeft (jmin (btnW, r.getWidth())));
+        r.removeFromLeft (gap);
     }
 
-    // The count-in + launch-quant combos SHARE the trailing space. QC caught that launch-quant, being
-    // last in a naive removeFromLeft chain, was starved to 0 px (unclickable) across the ~760–848 px
-    // window band while count-in ate everything first. Split proportionally instead: both reach their
-    // preferred width once there's room, and below that they shrink TOGETHER so neither ever vanishes.
-    const int gap = 4, countInPref = 120, launchPref = 110;
-    const int avail = jmax (0, r.getWidth());
-    int countInW, launchW;
-    if (avail >= countInPref + gap + launchPref)
-    {
-        countInW = countInPref;
-        launchW  = launchPref;
-    }
-    else
-    {
-        const int forCombos = jmax (0, avail - gap);
-        countInW = forCombos * countInPref / (countInPref + launchPref);
-        launchW  = forCombos - countInW;
-    }
-
-    countInBox.setBounds (r.removeFromLeft (countInW));
+    countInBox.setBounds (r.removeFromLeft (jmin (countInW, r.getWidth())));
     r.removeFromLeft (gap);
     launchQuantBox.setBounds (r.removeFromLeft (jmin (launchW, r.getWidth())));
 }
@@ -179,6 +200,11 @@ void TransportBar::syncMetronomeControls()
     const bool clockOn = queryMidiClockEnabled ? queryMidiClockEnabled()
                                                : midiClockButton.getToggleState();
     midiClockButton.setToggleState (clockOn, dontSendNotification);
+
+    // Global performance-capture armed state (Wave 7) — Edit-scoped engine truth via the query seam.
+    const bool captureOn = (edit != nullptr && queryGlobalRecordArmed) ? queryGlobalRecordArmed()
+                                                                       : globalRecButton.getToggleState();
+    globalRecButton.setToggleState (captureOn, dontSendNotification);
 
     const int bars = (edit != nullptr && queryCountInBars) ? queryCountInBars() : 0;
     for (int i = 0; i < numCountInOptions; ++i)

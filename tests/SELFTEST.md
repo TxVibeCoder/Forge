@@ -720,6 +720,42 @@ list's public state). Undoable; equal / out-of-range indices are no-ops. Fixture
 
 > `-scenereorder` CONTAINS `-scene` → placed **before** `--selftest-scene` (longest-first) in both ladders; verify `mode=scenereorder`. **Floor is now 32 gates.** The inline-rename focus/teardown + the row PopupMenu are UI, proved by `--screenshot` + adversarial QC, not by a gate.
 
+## `Forge --selftest-capture` (performance capture — the real Session → Arrange bridge, W7)
+
+The acceptance gate for **frontier Wave 7 — performance recording** (`ProjectSession::startPerformanceCapture` /
+`stopPerformanceCapture` / `performanceCaptureTick`). Unlike `--selftest-sendarrange` (a single static clip
+appended at the end), capture preserves WHEN each clip fired: it samples `LaunchHandle::getPlayedRange()` on the
+message thread (~30 Hz, manually pumped here in lockstep with `blockUntilSyncPointChange` for determinism) and
+stamps a one-shot clip at its absolute captured Edit beat. Fixture: seeds a 4-note MIDI clip in slot (0,0),
+rolls the transport to a KNOWN beat 4 (deterministic — not wall-clock pre-roll) before arming capture, launches,
+samples, stops, and commits, bracketed in one undo transaction exactly like the shell's Global-Rec toggle.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clipCreated` | the 4-note fixture clip exists in slot (0,0) | 1 |
+| `captureArmed` | `isPerformanceCaptureArmed()` true after arming | 1 |
+| `spanCount` | accumulated span count while sampling | > 0 |
+| `accumulated` | a span was captured after the stop transition | 1 |
+| `stamped` | clips stamped onto the Arrangement at commit | ≥ 1 |
+| `clipStamped` | track 0's arrange clip count grew by exactly `stamped` | 1 |
+| `isMidiCopy` | the stamped clip is a `te::MidiClip` | 1 |
+| `oneShot` | the stamped clip is NOT looping (normalized) | 1 |
+| `capturedStartBeat` / `placedStartBeat` | the live launch beat vs. the stamped clip's beat | both ≈ 4.0, within 0.5 of each other |
+| `absoluteBeatPreserved` | the stamped clip landed at its CAPTURED beat (not append-at-0) | 1 |
+| `sourceIntact` | the source slot clip is still filled (a copy, not a move) | 1 |
+| `undoRemovedTake` | one `ed->undo()` removes the whole stamped take | 1 |
+
+> `-capture` is collision-free (no substring overlap) — placed before bare `--selftest` in both ladders.
+> **Floor is now 33 gates.** Adversarially QC'd (4 dimensions): the accumulation logic's stop/relaunch reseal
+> and identity-resolution-at-commit were both scrutinized — QC caught and a fix landed for a confirmed defect
+> (commit was resolving the source clip by CELL INDEX, so clearing+replacing a clip in a slot mid-capture-session
+> would stamp the replacement clip's content at the original clip's captured beat); commit now resolves by
+> `te::EditItemID` (captured at span-OPEN time, never re-derived), verified via `te::findClipForID`. The
+> `sendSlotToArrangement` clone/normalize/strip body was factored into a shared `insertClipCopyOnTimeline` helper
+> (behaviour-preserving — `--selftest-sendarrange` stays byte-identical, confirmed clean by an independent QC
+> pass). The TransportBar's new "Capture" toggle was checked against the W06 starved-control regression class at
+> the 760 px window minimum — confirmed clean (worst-case control width 40 px, no starvation).
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

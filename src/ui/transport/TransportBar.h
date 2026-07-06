@@ -72,10 +72,22 @@ public:
         (MidiClockSync::isSendingClockAny). If unset, the toggle reflects its own last state. */
     std::function<bool()> queryMidiClockEnabled;
 
-    /** The width the bar's fixed controls occupy (6 buttons + gaps + the count-in selector +
+    /** Fired when the user toggles GLOBAL performance capture (Wave 7) — the DESIRED armed state. A
+        DISTINCT control from the Rec button (which is the MIDI-into-slot take path). The owner routes
+        this to ProjectSession: arm on true (startPerformanceCapture), disarm+commit-to-Arrangement on
+        false (stopPerformanceCapture). */
+    std::function<void(bool)> onGlobalRecordToggled;
+
+    /** Engine-truth query: is performance capture currently armed? Wired by the owner
+        (ProjectSession::isPerformanceCaptureArmed). If unset, the toggle reflects its own last state. */
+    std::function<bool()> queryGlobalRecordArmed;
+
+    /** The width the bar's fixed controls occupy (7 buttons + gaps + the count-in selector +
         the launch-quantisation selector + the 4 px side insets). Now that the bar hosts no
-        stretching readout, the ControlBar sizes it to this and gives the leftover span to the LCD. */
-    static constexpr int preferredWidth = 8 + 6 * (64 + 4) + 120 + 4 + 110;   // = 650
+        stretching readout, the ControlBar sizes it to this and gives the leftover span to the LCD.
+        (Wave 7 added the 7th button — the Global-Rec/Capture toggle. resized() shrinks the whole
+        strip proportionally below this width so no button/combo ever starves to 0 px.) */
+    static constexpr int preferredWidth = 8 + 7 * (64 + 4) + 120 + 4 + 110;   // = 718
 
     void resized() override;
 
@@ -92,7 +104,8 @@ private:
                      recordButton    { "Rec" },
                      loopButton      { "Loop" },
                      metronomeButton { "Click" },
-                     midiClockButton { "Clock" };
+                     midiClockButton { "Clock" },
+                     globalRecButton { "Capture" };   // Wave 7: global performance capture -> Arrangement
     juce::ComboBox   countInBox;
     juce::ComboBox   launchQuantBox;
 

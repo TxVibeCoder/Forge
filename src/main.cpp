@@ -53,7 +53,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -860,6 +860,13 @@ public:
             // Wave 4: MIDI quantise seam. Synchronous; one callAsync yield suffices.
             MessageManager::callAsync ([this] { runQuantiseSelftest(); });
         }
+        else if (mode == SelfTest::capture)
+        {
+            // Wave 7: performance capture — roll the transport, sample getPlayedRange, commit spans.
+            // Needs real graph time, so it pumps blockUntilSyncPointChange internally (not a callAsync
+            // one-shot); dispatched on the loop so the engine is up.
+            MessageManager::callAsync ([this] { runCaptureSelftest(); });
+        }
         else if (mode == SelfTest::screenshot)
         {
             // Build a populated demo session, then snapshot each view to a PNG (see captureScreenshots).
@@ -1354,6 +1361,38 @@ private:
         // never assigned — the button was a silent no-op; only the 'R' key recorded. Menu item,
         // key, and button now all route through the one toggleRecordTake.
         controlBar.getTransportBar().onRecord = [this] { toggleRecordTake(); };
+
+        // Wave 7 — global performance capture. Arm on the rising edge; on the falling edge commit every
+        // captured span onto the Arrangement, bracketed into ONE undo transaction (one Ctrl+Z removes the
+        // whole take), then save + rebuild the Arrange lanes (they have no clip-add listener). Mirrors the
+        // sendToArrangement handler's seal/save/rebuild discipline.
+        controlBar.getTransportBar().queryGlobalRecordArmed = [this] { return session.isPerformanceCaptureArmed(); };
+        controlBar.getTransportBar().onGlobalRecordToggled = [this] (bool arm)
+        {
+            if (arm)
+            {
+                session.startPerformanceCapture();
+                setStatusMessage ("Performance capture armed — launch clips, then toggle Capture off to stamp them to the Arrangement");
+                return;
+            }
+
+            sealUndoTransaction();                                    // seal prior work: the take is its own step
+            const int n = session.stopPerformanceCapture (/*commit*/ true);
+            sealUndoTransaction();                                    // close the take's transaction
+
+            if (n > 0)
+            {
+                if (! session.save())
+                    FORGE_LOG_ERROR ("Failed to save project — I/O error");
+
+                arrangeView.rebuild();
+                setStatusMessage ("Captured " + juce::String (n) + " clip" + (n == 1 ? "" : "s") + " to the Arrangement");
+            }
+            else
+            {
+                setStatusMessage ("Performance capture stopped — nothing was launched to capture");
+            }
+        };
 
         // Help — a minimal About box. May be left unset (the model null-guards every callback).
         cb.onAbout = []
@@ -4570,6 +4609,178 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-capture (W7): performance capture — the REAL Session -> Arrange bridge. Seeds a born-audible
+    // MIDI clip in slot (0,0), rolls the transport to a clearly NON-ZERO Edit beat FIRST, then arms capture,
+    // launches the clip, samples getPlayedRange in lockstep with the audio graph (blockUntilSyncPointChange —
+    // the same pump --selftest playback + --selftest-session use), stops, and commits. Proves: capture
+    // accumulates a span; commit STAMPS one one-shot MidiClip onto the track's linear timeline; the clip lands
+    // at its ABSOLUTE captured beat (> 0, matching the launch beat — NOT append-at-end 0, which is what
+    // distinguishes capture from W10 sendToArrangement); the source slot stays filled (a copy); and one undo
+    // removes the whole take. Does NOT prove the captured arrangement RENDERS audibly (needs a pumped render;
+    // parked, per the W09/W10 render-leg convention — audibility rides sendToArrangement's playSlotClips flip).
+    void runCaptureSelftest()
+    {
+        bool clipCreated = false, captureArmed = false, accumulated = false, committedNonZero = false,
+             clipStamped = false, isMidiCopy = false, oneShot = false, absoluteBeatPreserved = false,
+             sourceIntact = false, undoRemovedTake = false;
+        int  spanCount = 0, stamped = 0, clipsBefore = -1, clipsAfter = -1, clipsAfterUndo = -1;
+        double capturedStartBeat = -1.0, placedStartBeat = -1.0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            // Free-trigger so the launch fires immediately (no bar-snap wait) — deterministic. Restore after.
+            const auto savedQ = session.getGlobalLaunchQuantisation();
+            session.setGlobalLaunchQuantisation (te::LaunchQType::none);
+
+            if (auto mc = session.createMidiClipInSlot (0, 0, "CAP"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 4; ++i)
+                    seq.addNote (60 + i, te::BeatPosition::fromBeats ((double) i),
+                                 te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+            }
+
+            auto  tracks  = te::getAudioTracks (*ed);
+            auto* track0  = tracks.isEmpty() ? nullptr : tracks[0];
+            clipsBefore   = (track0 != nullptr) ? track0->getClips().size() : -1;   // 0: empty lane
+
+            auto* transport = session.getTransport();
+
+            // Pump helper: advance the real audio graph N sync points (each up to ~100 ms), draining the
+            // device-change cascade first so the stream is actually rolling (the playback-gate idiom).
+            const auto pump = [this, transport] (int n)
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    engine.getDeviceManager().dispatchPendingUpdates();
+                    if (transport != nullptr)
+                        if (auto* epc = transport->getCurrentPlaybackContext())
+                            epc->blockUntilSyncPointChange();
+                }
+            };
+
+            // Start rolling at a KNOWN non-zero beat (beat 4) BEFORE launching, so the launch lands well
+            // away from 0 — the capture must preserve WHEN, so the placed clip's start must match this beat,
+            // NOT append-at-end 0. setPosition makes the launch beat deterministic (independent of machine
+            // pump timing), unlike a wall-clock pre-roll.
+            engine.getDeviceManager().dispatchPendingUpdates();
+            if (transport != nullptr)
+            {
+                transport->setPosition (ed->tempoSequence.toTime (te::BeatPosition::fromBeats (4.0)));
+                transport->play (false);
+                if (auto* epc = transport->getCurrentPlaybackContext())
+                    epc->blockUntilSyncPointChange();
+            }
+            pump (4);   // a few blocks so the graph is solidly rolling near beat 4 before we launch
+
+            // Arm, launch, and sample in lockstep (manual ticks — the owned 30 Hz Timer can't fire while this
+            // message-thread runner blocks in pump(); manual sampling is deterministic).
+            session.startPerformanceCapture();
+            captureArmed = session.isPerformanceCaptureArmed();
+            session.launchSlot (0, 0);
+
+            for (int i = 0; i < 24; ++i)
+            {
+                pump (1);
+                session.performanceCaptureTick();
+            }
+
+            spanCount = session.getCapturedSpanCount();
+
+            // Reference launch beat, read straight off the live LaunchHandle (Edit beats) while still playing.
+            if (auto* slot = session.getClipSlot (0, 0))
+                if (auto* c = slot->getClip())
+                    if (auto lh = c->getLaunchHandle())
+                        if (auto r = lh->getPlayedRange())
+                            capturedStartBeat = r->getStart().inBeats();
+
+            // Stop the clip and pump so the play->stop transition seals the span.
+            session.stopSlot (0, 0);
+            for (int i = 0; i < 8; ++i)
+            {
+                pump (1);
+                session.performanceCaptureTick();
+            }
+            accumulated = session.getCapturedSpanCount() > 0;
+
+            // Commit, bracketed into ONE undo transaction exactly like the shell handler.
+            um.beginNewTransaction();
+            stamped = session.stopPerformanceCapture (/*commit*/ true);
+            um.beginNewTransaction();
+            committedNonZero = stamped > 0;
+
+            if (transport != nullptr)
+                transport->stop (false, false);
+
+            clipsAfter   = (track0 != nullptr) ? track0->getClips().size() : -1;
+            clipStamped  = stamped >= 1 && clipsAfter == clipsBefore + stamped;
+            sourceIntact = session.isSlotFilled (0, 0);   // capture is a COPY
+
+            if (track0 != nullptr && track0->getClips().size() > 0)
+                if (auto* placed = dynamic_cast<te::MidiClip*> (track0->getClips().getLast()))
+                {
+                    isMidiCopy = true;
+                    oneShot    = ! placed->isLooping();
+                    placedStartBeat = ed->tempoSequence.toBeats (placed->getPosition().getStart()).inBeats();
+                }
+
+            // Absolute-beat placement: the stamped clip starts at the captured launch beat (both near beat 4,
+            // clearly NOT 0 — which append-at-end would give on this empty lane). This is the whole point of
+            // capture: preserve WHEN each clip fired.
+            absoluteBeatPreserved = capturedStartBeat > 2.0 && placedStartBeat > 2.0
+                                    && std::abs (placedStartBeat - capturedStartBeat) < 0.5;
+
+            // One Ctrl+Z removes the whole take (all stamped clips share one transaction).
+            ed->undo();
+            clipsAfterUndo  = (track0 != nullptr) ? track0->getClips().size() : -1;
+            undoRemovedTake = clipsAfterUndo == clipsBefore;
+
+            session.setGlobalLaunchQuantisation (savedQ);
+        }
+
+        const bool pass = clipCreated && captureArmed && accumulated && committedNonZero
+                          && clipStamped && isMidiCopy && oneShot && absoluteBeatPreserved
+                          && sourceIntact && undoRemovedTake;
+
+        String report;
+        report << "mode=capture" << newLine
+               << "clipCreated="           << (clipCreated ? 1 : 0) << newLine
+               << "captureArmed="          << (captureArmed ? 1 : 0) << newLine
+               << "spanCount="             << spanCount << newLine
+               << "accumulated="           << (accumulated ? 1 : 0) << newLine
+               << "stamped="               << stamped << newLine
+               << "committedNonZero="      << (committedNonZero ? 1 : 0) << newLine
+               << "clipsBefore="           << clipsBefore << newLine
+               << "clipsAfter="            << clipsAfter << newLine
+               << "clipStamped="           << (clipStamped ? 1 : 0) << newLine
+               << "isMidiCopy="            << (isMidiCopy ? 1 : 0) << newLine
+               << "oneShot="               << (oneShot ? 1 : 0) << newLine
+               << "capturedStartBeat="     << String (capturedStartBeat, 3) << newLine
+               << "placedStartBeat="       << String (placedStartBeat, 3) << newLine
+               << "absoluteBeatPreserved=" << (absoluteBeatPreserved ? 1 : 0) << newLine
+               << "sourceIntact="          << (sourceIntact ? 1 : 0) << newLine
+               << "clipsAfterUndo="        << clipsAfterUndo << newLine
+               << "undoRemovedTake="       << (undoRemovedTake ? 1 : 0) << newLine
+               << "result="                << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="               << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write capture selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Capture selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-followaction (W1): the per-clip follow-action + loop-toggle seams. Synchronous. Fills slots
     // (0,0) and (0,1) so trackNext has a valid sibling (FollowActions createFollowAction resolves non-null
     // only when a filled clip exists AFTER this one). Proves set/read-back, EXACTLY-one-action (the engine
@@ -6203,6 +6414,7 @@ public:
                             : commandLine.contains ("--selftest-duplicate")      ? "selftest-duplicate"      // before bare --selftest (W3)
                             : commandLine.contains ("--selftest-slotmove")       ? "selftest-slotmove"       // before bare --selftest (W3)
                             : commandLine.contains ("--selftest-quantise")       ? "selftest-quantise"       // before bare --selftest (W4)
+                            : commandLine.contains ("--selftest-capture")        ? "selftest-capture"        // before bare --selftest (W7)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -6267,6 +6479,7 @@ public:
                         : commandLine.contains ("--selftest-duplicate")      ? SelfTest::duplicate      // before bare --selftest (W3)
                         : commandLine.contains ("--selftest-slotmove")       ? SelfTest::slotmove       // before bare --selftest (W3)
                         : commandLine.contains ("--selftest-quantise")       ? SelfTest::quantise       // before bare --selftest (W4)
+                        : commandLine.contains ("--selftest-capture")        ? SelfTest::capture        // before bare --selftest (W7)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

@@ -62,8 +62,8 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-TWO gates as of W16; W16 extended 4 EXISTING gates
-  with new report fields — `undo`, `midi`, `popout`, `sendarrange` — without adding any new gate name):
+- **Selftest floor** (must pass after any change — THIRTY-THREE gates as of W17; W17 adds ONE new gate,
+  `--selftest-capture`, for frontier Wave 7 performance recording):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
@@ -71,7 +71,8 @@ conflict, surface it.
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
   `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
-  `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`;
+  `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
+  `--selftest-capture`;
   (⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`, and `-scenerename`/`-scenedelete`/
   `-scenereorder` ⊃ `-scene`; verify the report's `mode=` line)
@@ -185,6 +186,21 @@ conflict, surface it.
   the same as "safe to call for an unrelated reason."
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
+- **A capture/accumulation seam that spans real time must resolve by IDENTITY at commit, never by re-reading
+  the cell it started from (W17 — a QC-caught confirmed defect, fixed before ship).** Wave 7's performance
+  capture samples `LaunchHandle::getPlayedRange()` over a live performance and, at commit, stamps one clip per
+  captured span onto the Arrangement. The naive resolve — `getClipSlot(track,scene)->getClip()` at commit
+  time — reads "whatever occupies that cell NOW", which silently diverges from "whatever occupied it WHEN the
+  span was captured" the instant a user clears/replaces a clip in that slot mid-capture-session (an ordinary
+  jam move — swapping a loop variation while other tracks keep playing). The fix:
+  `ProjectSession::sealCaptureSpan`/`performanceCaptureTick` capture the clip's `te::EditItemID` at
+  span-**OPEN** time (from the freshly-verified-non-null clip, never re-derived at seal or commit), and
+  `stopPerformanceCapture` resolves the source at commit via `te::findClipForID(*edit, span.clipID)` — an
+  edit-wide identity lookup that still finds a since-MOVED clip and cleanly degrades (a logged skip, never a
+  silent wrong-content stamp) if the clip was genuinely deleted. **General lesson: any seam that captures state
+  now but acts on it later (spanning a live-editable window) must key its later action on a stable identity
+  (`EditItemID`), never on a positional/index resolve that can silently point at different content by the time
+  the action runs.**
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,
   never `setBounds(0,0,…)` (which yanks the scroll to the top on any relayout).
 - **JUCE lock types:** `juce::CriticalSection::ScopedLockType` / `ScopedUnlockType` (the bare `ScopedLock` is the
