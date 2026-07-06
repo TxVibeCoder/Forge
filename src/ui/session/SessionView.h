@@ -163,6 +163,14 @@ private:
     // persist explicitly via session.save(); +Scene is intentionally NOT undoable.
     void addScene();
 
+    // W15 scene lifecycle: after a rename / delete / reorder, seal the W05 undo transaction
+    // (onEditMutated → save) synchronously, then rebuild the grid DEFERRED. The rebuild is deferred
+    // because a rename commit fires from inside the scene row's own TextEditor callback and rebuild()
+    // destroys that row (+ editor) — deleting a component whose method is live on the stack is a UAF;
+    // one message-loop hop lets the callback unwind first. The 25 Hz poll watches TRACK count only,
+    // never scene count, so a direct rebuild() is the required refresh trigger after a scene mutation.
+    void afterSceneMutation();
+
     // W07 +Track: append a new empty audio track at the END (existing indices stay stable). Fires
     // session.onTracksChanged, which the shell has wired to rebuild the grid + persist — so this
     // does NOT rebuild() itself (doing so would double-rebuild).

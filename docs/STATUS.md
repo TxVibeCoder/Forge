@@ -1,6 +1,6 @@
 # Forge — Project Status & Roadmap
 
-*Living status document. Last updated 2026-07-03 (latest: **W14 — frontier program Wave 4: MIDI quantise** (pushed to origin/main); prior: W13 grid clip primitives, W12 per-clip launch quantise, **W11 — frontier program Wave 1: launcher
+*Living status document. Last updated 2026-07-06 (latest: **W15 — frontier program Wave 5: Session scene lifecycle (rename → delete → reorder)** (committed local, holding for push; floor 29 → 32 via `--selftest-scenerename` / `-scenedelete` / `-scenereorder`; a 5-dim adversarial QC fixed a MAJOR reorder desync + 2 MINORs — **all THIRTY-TWO selftests PASS**; devlog `devlog/wave-15-scene-lifecycle.md`); prior: **W14 — frontier program Wave 4: MIDI quantise** (pushed to origin/main); prior: W13 grid clip primitives, W12 per-clip launch quantise, **W11 — frontier program Wave 1: launcher
 expressiveness (follow-actions · loop-toggle · launch-modes)** on the W10 tip `90449ce` — the FIRST wave of the
 10-wave frontier build program. Per-clip follow actions + loop-toggle + launch modes (Trigger/Gate/Toggle) via
 new ProjectSession seams + SessionView submenus + the ClipSlotComponent onReleased (Role B); the engine

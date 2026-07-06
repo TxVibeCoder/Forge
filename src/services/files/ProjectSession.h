@@ -73,6 +73,35 @@ public:
     /** Number of scenes (grid rows) in the current edit, 0 if no edit. */
     int  getNumScenes() const;
 
+    // ── Scene lifecycle (W15) ─────────────────────────────────────────────────────────────────
+    // rename / delete / reorder a scene row. UNLIKE grow-only ensureScenes (R3, off-stack), all
+    // three ride the Edit UndoManager so one Ctrl-Z reverts one gesture — the shell owns the
+    // per-gesture transaction boundary (onEditMutated seals; these seams never beginNewTransaction
+    // themselves). Scenes are resolved fresh via edit->getSceneList().getScenes()[index]; NO
+    // te::Scene* is ever cached (R1). Message-thread only; null-edit / out-of-range paths WARN.
+
+    /** Renames scene `index`. A blank name persists (the scene row falls back to its 1-based
+        number). No-op + WARN on no edit / out-of-range index. Undoable (te::Scene::name is bound
+        to the Edit UndoManager). Does NOT markAsChanged — the shell seals + saves via onEditMutated. */
+    void setSceneName (int index, const juce::String& newName);
+
+    /** The name of scene `index`, or "" if unset / out-of-range / no edit. Const, non-mutating. */
+    juce::String getSceneName (int index) const;
+
+    /** Deletes scene `index`: the SCENE row AND every audio track's slot at that index (with any
+        clip in it) — all on the Edit UndoManager (one transaction ⇒ one Ctrl-Z restores scene +
+        slots + clips). The engine's SceneList::deleteScene handles the per-track slot removal.
+        No-op + WARN (returns false) on no edit / out-of-range index. Returns true on delete. */
+    bool deleteScene (int index);
+
+    /** Reorders scene `from` to index `to`, moving the SCENES tree AND every track's CLIPSLOTS tree
+        in lockstep (the desync guard — a scene row and its per-track slots must move together), on
+        the Edit UndoManager. No engine moveScene seam exists — this is a raw ValueTree::moveChild on
+        each list's public state (both are ValueTreeObjectLists that auto-resync on a child move).
+        No-op + WARN (returns false) on no edit / equal indices / either index out-of-range.
+        Returns true on move. */
+    bool moveScene (int from, int to);
+
     /** CONST, NON-MUTATING resolve of the ClipSlot at cell (trackIndex, sceneIndex). Walks
         te::getAudioTracks(*edit), bounds-checks sceneIndex against the track's slot count, and
         returns nullptr past the end (or for an out-of-range track / no edit). MUST be the only

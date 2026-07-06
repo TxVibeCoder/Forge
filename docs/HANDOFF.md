@@ -1,18 +1,29 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-03**, end of **"W14 — frontier program
-> Wave 4: MIDI quantise (piano-roll)"** — the **FOURTH** wave of the 10-wave **frontier build program**
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W15 — frontier program
+> Wave 5: Session scene lifecycle (rename → delete → reorder)"** — the **FIFTH** wave of the 10-wave **frontier
+> build program**
 > ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a discovery swarm produced after the
-> hands-on plan completed at W10 (W11 launcher expressiveness · W12 per-clip launch quantise · W13 grid clip primitives). ⚠ **W05's owed adversarial-QC dimensions
+> hands-on plan completed at W10 (W11 launcher expressiveness · W12 per-clip launch quantise · W13 grid clip
+> primitives · W14 MIDI quantise). ⚠ **W05's owed adversarial-QC dimensions
 > remain PARTIALLY owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout
 > focus routing were not re-run).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W14 are PUSHED to `origin/main`** (through `9f5cc62`, sanitize-clean; local `main` ==
-`origin/main`). This session pushed the docs sanitization (`2a366e9`) + W12 per-clip launch quantise + W13 grid
-clip primitives + W14 MIDI quantise. Last build **clean** (MSVC Debug, 0 warnings) · **all TWENTY-NINE selftests
-PASS** (W14 added `--selftest-quantise`; floor 28 → 29).
+**`main`**. **W07–W14 are PUSHED to `origin/main`** (through `9f5cc62`, sanitize-clean). **W15 is committed
+LOCALLY only — NOT pushed** (holding for maintainer OK); baseline was `09c4928`. Last build **clean** (MSVC
+Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W15 added `--selftest-scenerename` /
+`--selftest-scenedelete` / `--selftest-scenereorder`; floor 29 → 32).
+Shipped (W15 — frontier Wave 5): the Session scene grid becomes an editable set-list — **double-click a scene
+name to rename** (blank falls back to the number); right-click a scene row → a **PopupMenu** (`Stop scene /
+Rename… / Delete scene / Move up / Move down`) replacing the bare right-click-stop. All three (rename / delete /
+reorder) ride the user undo stack (one Ctrl+Z per gesture) via new `ProjectSession` seams
+(`setSceneName` / `deleteScene` / `moveScene`) + a file-disjoint `SceneColumnComponent` (inline `TextEditor` +
+row menu, Fable). **No engine `moveScene` seam exists** — reorder is raw lockstep `ValueTree::moveChild` on the
+SCENES tree AND every track's CLIPSLOTS tree; a 5-dimension adversarial QC caught + fixed a **MAJOR** (the
+uneven-slot-count reorder desync — `moveScene` now pads all tracks to full width first) + 2 MINORs. Full record →
+[devlog/wave-15-scene-lifecycle.md](devlog/wave-15-scene-lifecycle.md).
 Shipped (W14 — frontier Wave 4): the piano-roll gains **MIDI quantise** — press **`q`** to snap the selection
 (or the whole clip) to the grid, starts-only, one undoable step, via a new header-only `MidiEditHelpers.h`
 (engine `QuantisationType`, 50%-strength interpolation proven). Prior wave (W13 — frontier Wave 3): right-click
@@ -362,14 +373,19 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **✅ DONE: frontier Waves 2–4 (W12–W14)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
-   (`2f804a2`) + MIDI quantise (`52b6e66`), **PUSHED to `origin/main`** (tip `9f5cc62`). **▶ NEXT: frontier program Wave 5 —
-   Session scene lifecycle (rename → delete → reorder)** (a serial `ProjectSession` sub-spine + a disjoint
-   `SceneColumnComponent`; strict dependency chain; ⚠ its scene-row PopupMenu is contested with W7's whole-scene
-   send — W5 ships the scaffold, W7 appends one item). Then Wave 6 (the owed W05 QC-debt hardening, interleavable
-   as the main.cpp-only slot), Wave 7
-   (performance recording) … — full ordered program + the critic's corrections in
-   `docs/frontier-program.local.md`. **W12 follow-ups (documented):** a save→reload round-trip leg for
+1. **✅ DONE: frontier Waves 2–5 (W12–W15)** — per-clip launch quantise (`03f6efd`) + grid clip primitives
+   (`2f804a2`) + MIDI quantise (`52b6e66`), all **PUSHED to `origin/main`** (tip `9f5cc62`); **W15 Session scene
+   lifecycle (rename → delete → reorder) is committed LOCALLY, holding for push OK.** W15 shipped the scene-row
+   PopupMenu scaffold (`Stop / Rename… / Delete / Move up / Move down`) that W7's whole-scene send will APPEND one
+   item to (never a competing rewrite — the critic's territory finding #1). **▶ NEXT: frontier program Wave 6 —
+   the owed W05 QC-debt hardening** (assert-only, `main.cpp`-only — the maximally-clean collision-free wave;
+   discharge the undo-correctness sweep across the five W05 mutation hooks + torn-off-popout focus routing). Then
+   Wave 7 (performance recording — the real Session→Arrange bridge, which appends the whole-scene-send item to
+   W15's menu), Wave 8 (Session mixer polish) … — full ordered program + the critic's corrections in
+   `docs/frontier-program.local.md`. **W15 follow-ups (documented):** a save→reload round-trip leg for the scene
+   gates; drag-to-reorder (parked — no headless mouse-drag driver); scene colour / multi-select. **A benign W15
+   QC note:** an unrelated grid rebuild landing mid-rename silently commits the partial name rather than
+   discarding it (no UAF; Ctrl+Z reverses). **W12 follow-ups (documented):** a save→reload round-trip leg for
    `--selftest-session`; a curated launch-Q submenu subset (a Fable call). **W11 follow-ups (documented):**
    immediate-launch for Gate (instant click-hold under any quant); a disk save→reload leg for
    `--selftest-launchmode`; Random/weighted/group follow-actions (v2). **W10 follow-ups (documented, not built):**
@@ -613,11 +629,11 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest work is committed + PUSHED to `origin/main`.** W07–W11 (through `0f9d5cc`) plus this session's stack —
-  the docs sanitization (`2a366e9`), W12 per-clip launch quantise (`03f6efd`/`c32b8f1`), W13 grid clip primitives
-  (`2f804a2`/`2edf78a`), and W14 MIDI quantise (`52b6e66`/`9f5cc62`, tip `9f5cc62`) — are all on **`origin/main`**;
-  the sanitize scan ran clean before the push (the `C:\Users\USER` / `REDACTED` / `REDACTED` real-identity scan
-  returned zero hits). Local `main` == `origin/main`. Prior pushed history: W08 (`0ad7abc`), W07
+- **Latest PUSHED work is on `origin/main` through `9f5cc62`; W15 is committed LOCALLY only (holding for push OK).**
+  Pushed: W07–W11 (through `0f9d5cc`), the docs sanitization (`2a366e9`), W12 per-clip launch quantise
+  (`03f6efd`/`c32b8f1`), W13 grid clip primitives (`2f804a2`/`2edf78a`), and W14 MIDI quantise
+  (`52b6e66`/`9f5cc62`, tip `9f5cc62`). The sanitize scan (the real-identity denylist — see CLAUDE.md
+  §Public-repo hygiene) ran clean before each push. Prior pushed history: W08 (`0ad7abc`), W07
   (`fc0fdbe`), W06 (`e670ab5` / `aa45ad7`),
   W05 (`5e5dcf2`), doc audit (`7f03974`), W04b (`cc27300`), W04a (`41e3139`), W03 (`ffa494d`), W02 (`bb9ef5e`),
   Wave 01 (`e3b8c7c`). The working tree is otherwise **clean** (the local `Waveform User Guide.pdf` is

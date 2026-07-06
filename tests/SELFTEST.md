@@ -581,6 +581,58 @@ Proves the quantise math + interpolation + undo — NOT audible playback.
 
 > Verified 2026-07-03: **PASS**. `quantise` is substring-collision-free; before bare `--selftest`; verify `mode=quantise`. **Floor is now 29 gates.** Grid mapping is a fraction of a BEAT (0.25 → "1/4", not "1/16"). Groove is a documented fast-follow (2 built-in swing templates on the same seam).
 
+## `Forge --selftest-scenerename` (scene rename)
+
+The acceptance gate for **W15 — scene rename** (`ProjectSession::setSceneName`). Synchronous. Proves a name
+reads back, a blank name persists (the row falls back to its number), the rename is undoable
+(`te::Scene::name` is UndoManager-bound), and renaming one scene leaves others untouched.
+
+| field | meaning | PASS |
+|---|---|---|
+| `nameReadsBack` | `setSceneName(2,"Verse")` → `getSceneName(2)=="Verse"` | 1 |
+| `blankPersists` | `setSceneName(2,"")` → `getSceneName(2)` empty | 1 |
+| `undoReverts` | a sealed rename of scene 3 reverts on `ed->undo()` | 1 |
+| `otherUntouched` | renaming scene 5 leaves scene 4 unchanged | 1 |
+
+> `-scenerename` CONTAINS `-scene` → placed **before** `--selftest-scene` (longest-first) in both ladders; verify `mode=scenerename`.
+
+## `Forge --selftest-scenedelete` (scene delete)
+
+The acceptance gate for **W15 — scene delete** (`ProjectSession::deleteScene`). Synchronous. Deleting a scene
+drops the count and shifts scenes + their per-track slots down in lockstep; one Ctrl+Z restores the scene, its
+name, AND the clip in a shifted slot (both `removeFromParent` + `deleteSlot` ride the UndoManager). Fixture fills
+(0,3) with a marker clip so the slot-shift + clip-restore are observable.
+
+| field | meaning | PASS |
+|---|---|---|
+| `countBefore` | 8 scenes, (0,3) filled | 1 |
+| `deleteDropsCount` | `deleteScene(2)` → count 7 | 1 |
+| `indexShift` | old scene 3 ("THREE") is now at index 2 | 1 |
+| `slotShift` | the (0,3) clip shifted up to (0,2) | 1 |
+| `undoRestoresCount` | undo → count 8 | 1 |
+| `undoRestoresName` | undo → scene 2="TWO", scene 3="THREE" | 1 |
+| `undoRestoresClip` | undo → clip back at (0,3) (rode the UndoManager) | 1 |
+| `outOfRangeNoop` | `deleteScene(999)` returns false, count unchanged | 1 |
+
+> `-scenedelete` CONTAINS `-scene` → placed **before** `--selftest-scene` (longest-first) in both ladders; verify `mode=scenedelete`.
+
+## `Forge --selftest-scenereorder` (scene reorder)
+
+The acceptance gate for **W15 — scene reorder** (`ProjectSession::moveScene`). Synchronous. Moving scene `from`
+to `to` reorders the SCENES tree AND every track's CLIPSLOTS tree in lockstep, so both scene NAMES and per-track
+CLIPS follow (the desync guard — no engine `moveScene` seam exists; this is raw `ValueTree::moveChild` on each
+list's public state). Undoable; equal / out-of-range indices are no-ops. Fixture names S0..S3 and fills (0,0) +
+(0,2) so a scene↔slot desync would be visible.
+
+| field | meaning | PASS |
+|---|---|---|
+| `moveReorders` | `moveScene(0,2)` → names become [S1,S2,S0,…] | 1 |
+| `slotsFollowScenes` | the (0,0) clip rides to (0,2), (0,2)→(0,1); (0,0) now empty | 1 |
+| `undoReverts` | undo → scene 0="S0" and clip back at (0,0) | 1 |
+| `noopGuards` | `moveScene(3,3)` and `moveScene(0,999)` both false, count unchanged | 1 |
+
+> `-scenereorder` CONTAINS `-scene` → placed **before** `--selftest-scene` (longest-first) in both ladders; verify `mode=scenereorder`. **Floor is now 32 gates.** The inline-rename focus/teardown + the row PopupMenu are UI, proved by `--screenshot` + adversarial QC, not by a gate.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

@@ -19,8 +19,17 @@
     A "+ Scene" add-affordance sits in the column's bottom footer band (twin of the track columns'
     clip-stop footer); clicking it fires onAddScene so the owner grows the grid by one scene (W07).
 
+    Scene lifecycle gestures (W5): double-clicking a row's name area (or the context menu's
+    "Rename…") opens an inline TextEditor over the name — Return / focus-loss commits (firing
+    onSceneRenamed; blank is allowed, the row falls back to its number on the next rebuild),
+    Escape cancels. Right-click opens the row's PopupMenu (Stop scene / Rename… / Delete scene /
+    Move up / Move down — the moves disable at the grid edges); the old bare right-click-stop
+    became the menu's first item. Editor + menu are neutral chrome (panel/raised/text tones) —
+    no new accent.
+
     All engine ops route up through null-guarded std::function seams (onSceneLaunched,
-    onSceneStopped, onStopAll, onAddScene); this component NEVER touches the te:: model directly.
+    onSceneStopped, onSceneRenamed, onSceneDeleted, onSceneMovedUp, onSceneMovedDown, onStopAll,
+    onAddScene); this component NEVER touches the te:: model directly.
 
     Message-thread only.
 */
@@ -85,6 +94,24 @@ public:
 
     /** A scene's stop affordance was used → stop that row's clips across all tracks. */
     std::function<void (int sceneIndex)> onSceneStopped;
+
+    /** W5 rename: the row's inline editor committed (Return / focus-loss) → the owner persists
+        the name and rebuilds. newName may be blank — the seam persists it and the row falls back
+        to its 1-based number on the rebuild snapshot. */
+    std::function<void (int sceneIndex, const juce::String& newName)> onSceneRenamed;
+
+    /** W5 delete: the row menu's "Delete scene" was chosen → the owner deletes the scene (and
+        every track's slot in that row) and rebuilds. Immediate — no confirm dialog; Ctrl+Z is
+        the recovery path. */
+    std::function<void (int sceneIndex)> onSceneDeleted;
+
+    /** W5 reorder: the row menu's "Move up" was chosen (never offered on row 0) → the owner
+        moves the scene to sceneIndex - 1, in lockstep across every track's slots, and rebuilds. */
+    std::function<void (int sceneIndex)> onSceneMovedUp;
+
+    /** W5 reorder: the row menu's "Move down" was chosen (never offered on the last row) → the
+        owner moves the scene to sceneIndex + 1, in lockstep, and rebuilds. */
+    std::function<void (int sceneIndex)> onSceneMovedDown;
 
     /** The MASTER "stop all" ■ was clicked → stop every launched clip in the grid. */
     std::function<void()> onStopAll;

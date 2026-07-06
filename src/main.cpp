@@ -53,7 +53,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -796,6 +796,21 @@ public:
         {
             // Wave 2 (W07): ensureScenes grows the grid past the former 16 ceiling (+ Scene). Synchronous.
             MessageManager::callAsync ([this] { runSceneSelftest(); });
+        }
+        else if (mode == SelfTest::scenerename)
+        {
+            // W15: the setSceneName seam (rename + blank-persists + undo). Synchronous.
+            MessageManager::callAsync ([this] { runSceneRenameSelftest(); });
+        }
+        else if (mode == SelfTest::scenedelete)
+        {
+            // W15: the deleteScene seam (count drop + index/slot shift + atomic undo restore). Synchronous.
+            MessageManager::callAsync ([this] { runSceneDeleteSelftest(); });
+        }
+        else if (mode == SelfTest::scenereorder)
+        {
+            // W15: the moveScene seam (reorder + scene/slot lockstep + undo). Synchronous.
+            MessageManager::callAsync ([this] { runSceneReorderSelftest(); });
         }
         else if (mode == SelfTest::dragdrop)
         {
@@ -4513,6 +4528,218 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-scenerename (W15): the setSceneName seam. name reads back; a blank name persists (the
+    // row falls back to its number); the rename is undoable (te::Scene::name is UndoManager-bound); and
+    // renaming one scene leaves the others untouched.
+    void runSceneRenameSelftest()
+    {
+        bool nameReadsBack = false, blankPersists = false, undoReverts = false, otherUntouched = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (8);
+
+            session.setSceneName (2, "Verse");
+            nameReadsBack = session.getSceneName (2) == "Verse";
+
+            session.setSceneName (2, "");
+            blankPersists = session.getSceneName (2).isEmpty();
+
+            um.beginNewTransaction();                        // seal a per-gesture unit like the shell does
+            session.setSceneName (3, "Drop");
+            const bool setBeforeUndo = session.getSceneName (3) == "Drop";
+            ed->undo();
+            undoReverts = setBeforeUndo && session.getSceneName (3) != "Drop";
+
+            // Capture scene 4's name (a seeded default — ensureScenes names the first 8 rows) BEFORE
+            // renaming its neighbour, then assert it's unchanged: a real index-isolation check that
+            // doesn't assume the seed (the prior `|| != "Solo"` disjunction passed vacuously — QC-5).
+            const juce::String scene4Before = session.getSceneName (4);
+            session.setSceneName (5, "Solo");
+            otherUntouched = session.getSceneName (4) == scene4Before && session.getSceneName (5) == "Solo";
+        }
+
+        const bool pass = nameReadsBack && blankPersists && undoReverts && otherUntouched;
+
+        String report;
+        report << "mode=scenerename" << newLine
+               << "nameReadsBack="   << (nameReadsBack ? 1 : 0) << newLine
+               << "blankPersists="   << (blankPersists ? 1 : 0) << newLine
+               << "undoReverts="     << (undoReverts ? 1 : 0) << newLine
+               << "otherUntouched="  << (otherUntouched ? 1 : 0) << newLine
+               << "result="          << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write scene-rename selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Scene-rename selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-scenedelete (W15): the deleteScene seam. Deleting scene i drops the count by one and
+    // shifts scenes AND their per-track slots down in lockstep; one Ctrl-Z restores the scene, its name,
+    // AND the clip that was in a shifted slot (removeFromParent + deleteSlot both ride the UndoManager).
+    // Fixture: fill (0,3) with a distinct clip so the slot-shift + clip-restore are observable.
+    void runSceneDeleteSelftest()
+    {
+        bool countBefore = false, deleteDropsCount = false, indexShift = false, slotShift = false,
+             deletedRowClipRemoved = false, undoRestoresCount = false, undoRestoresName = false,
+             undoRestoresClip = false, outOfRangeNoop = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (8);
+
+            // Count filled slots on track 0 across the live scene range — proves the DELETED row's OWN
+            // clip is removed (not just that a lower clip shifted up), and restored atomically on undo.
+            auto filledOnTrack0 = [this]
+            {
+                int c = 0;
+                for (int s = 0; s < session.getNumScenes(); ++s)
+                    if (session.isSlotFilled (0, s)) ++c;
+                return c;
+            };
+
+            session.setSceneName (1, "ONE");
+            session.setSceneName (2, "TWO");
+            session.setSceneName (3, "THREE");
+            const bool clip2 = session.createMidiClipInSlot (0, 2, "DEL2") != nullptr;   // clip IN the deleted row
+            const bool clip3 = session.createMidiClipInSlot (0, 3, "DEL3") != nullptr;   // marker below it
+
+            countBefore = session.getNumScenes() == 8 && clip2 && clip3
+                          && session.isSlotFilled (0, 2) && session.isSlotFilled (0, 3);
+            const int filledBefore = filledOnTrack0();   // 2
+
+            um.beginNewTransaction();
+            const bool deleted = session.deleteScene (2);   // deletes a row that CONTAINS a clip
+            deleteDropsCount = deleted && session.getNumScenes() == 7;
+            indexShift = session.getSceneName (2) == "THREE";      // old scene 3 shifted up into slot 2
+            slotShift  = session.isSlotFilled (0, 2);              // the (0,3) clip shifted up to (0,2)
+            deletedRowClipRemoved = filledOnTrack0() == filledBefore - 1;   // the (0,2) clip itself is gone
+
+            um.beginNewTransaction();
+            ed->undo();
+            undoRestoresCount = session.getNumScenes() == 8;
+            undoRestoresName  = session.getSceneName (2) == "TWO" && session.getSceneName (3) == "THREE";
+            undoRestoresClip  = session.isSlotFilled (0, 3) && filledOnTrack0() == filledBefore;   // BOTH clips back
+
+            outOfRangeNoop = ! session.deleteScene (999) && session.getNumScenes() == 8;
+        }
+
+        const bool pass = countBefore && deleteDropsCount && indexShift && slotShift
+                          && deletedRowClipRemoved && undoRestoresCount && undoRestoresName
+                          && undoRestoresClip && outOfRangeNoop;
+
+        String report;
+        report << "mode=scenedelete" << newLine
+               << "countBefore="           << (countBefore ? 1 : 0) << newLine
+               << "deleteDropsCount="      << (deleteDropsCount ? 1 : 0) << newLine
+               << "indexShift="            << (indexShift ? 1 : 0) << newLine
+               << "slotShift="             << (slotShift ? 1 : 0) << newLine
+               << "deletedRowClipRemoved=" << (deletedRowClipRemoved ? 1 : 0) << newLine
+               << "undoRestoresCount="     << (undoRestoresCount ? 1 : 0) << newLine
+               << "undoRestoresName="      << (undoRestoresName ? 1 : 0) << newLine
+               << "undoRestoresClip="      << (undoRestoresClip ? 1 : 0) << newLine
+               << "outOfRangeNoop="        << (outOfRangeNoop ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write scene-delete selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Scene-delete selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-scenereorder (W15): the moveScene seam. Moving scene `from` to `to` reorders the SCENES
+    // tree AND every track's CLIPSLOTS tree in lockstep, so both the scene NAMES and the per-track CLIPS
+    // follow (the desync guard). Undoable; equal / out-of-range indices are no-ops. Fixture: name scenes
+    // S0..S3 and fill (0,0) + (0,2) with distinct clips so a scene<->slot desync would be visible.
+    void runSceneReorderSelftest()
+    {
+        bool moveReorders = false, slotsFollowScenes = false, undoReverts = false,
+             unevenLockstep = false, noopGuards = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (8);
+
+            session.setSceneName (0, "S0");
+            session.setSceneName (1, "S1");
+            session.setSceneName (2, "S2");
+            session.setSceneName (3, "S3");
+            session.createMidiClipInSlot (0, 0, "R0");   // marker at (0,0)
+            session.createMidiClipInSlot (0, 2, "R2");   // marker at (0,2)
+
+            um.beginNewTransaction();
+            const bool moved = session.moveScene (0, 2);
+            // After moving index 0 -> 2: [S1, S2, S0, S3]; the (0,0) clip rides to (0,2), (0,2)->(0,1).
+            moveReorders = moved && session.getSceneName (0) == "S1"
+                                 && session.getSceneName (1) == "S2"
+                                 && session.getSceneName (2) == "S0";
+            slotsFollowScenes = session.isSlotFilled (0, 2) && session.isSlotFilled (0, 1)
+                                && ! session.isSlotFilled (0, 0);
+
+            um.beginNewTransaction();
+            ed->undo();
+            undoReverts = session.getSceneName (0) == "S0" && session.isSlotFilled (0, 0)
+                          && ! session.isSlotFilled (0, 1);
+
+            // UNEVEN-SLOT-COUNT lockstep (QC-3, W15): a freshly appended track has slots materialised only
+            // on demand, so it can hold a FILLED slot at a low index yet have fewer TOTAL slots than the
+            // move target. moveScene must pad it to full width and move it in lockstep — else its clip is
+            // left behind (a scene<->clip desync that persists to disk). This leg FAILS under the old
+            // skip-the-short-track guard and PASSES only with the pad-first fix.
+            session.appendAudioTrack ("Uneven");
+            const int ut = session.getNumAudioTracks() - 1;
+            session.createMidiClipInSlot (ut, 1, "U1");   // track `ut` now has only 2 slots (0,1); (ut,1) filled
+            um.beginNewTransaction();
+            const bool unevenMoved = session.moveScene (1, 5);   // move a scene BELOW `ut`'s slot count
+            unevenLockstep = unevenMoved && session.isSlotFilled (ut, 5) && ! session.isSlotFilled (ut, 1);
+
+            noopGuards = ! session.moveScene (3, 3) && ! session.moveScene (0, 999)
+                         && session.getNumScenes() == 8;
+        }
+
+        const bool pass = moveReorders && slotsFollowScenes && undoReverts
+                          && unevenLockstep && noopGuards;
+
+        String report;
+        report << "mode=scenereorder" << newLine
+               << "moveReorders="       << (moveReorders ? 1 : 0) << newLine
+               << "slotsFollowScenes="  << (slotsFollowScenes ? 1 : 0) << newLine
+               << "undoReverts="        << (undoReverts ? 1 : 0) << newLine
+               << "unevenLockstep="     << (unevenLockstep ? 1 : 0) << newLine
+               << "noopGuards="         << (noopGuards ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write scene-reorder selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Scene-reorder selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " — report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-dragdrop: the file-import seams both drop paths route through. Session leg: a file
     // dropped on a pad -> importAudioIntoSlot fills that slot. Arrange leg: a file dropped on lane N ->
     // importAudioFile(file, time, N) lands the clip on track N (a fresh empty target track ends with
@@ -5652,6 +5879,9 @@ public:
                             : commandLine.contains ("--selftest-taptempo")       ? "selftest-taptempo"       // before bare --selftest
                             : commandLine.contains ("--selftest-slotdelete")     ? "selftest-slotdelete"     // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-addtrack")       ? "selftest-addtrack"       // before bare --selftest (W07)
+                            : commandLine.contains ("--selftest-scenerename")    ? "selftest-scenerename"    // before -scene (substring! W15)
+                            : commandLine.contains ("--selftest-scenedelete")    ? "selftest-scenedelete"    // before -scene (substring! W15)
+                            : commandLine.contains ("--selftest-scenereorder")   ? "selftest-scenereorder"   // before -scene (substring! W15)
                             : commandLine.contains ("--selftest-scene")          ? "selftest-scene"          // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-dragdrop")       ? "selftest-dragdrop"       // before bare --selftest (W07)
                             : commandLine.contains ("--selftest-demo")           ? "selftest-demo"           // before bare --selftest (W09)
@@ -5713,6 +5943,9 @@ public:
                         : commandLine.contains ("--selftest-taptempo")       ? SelfTest::taptempo       // before bare --selftest
                         : commandLine.contains ("--selftest-slotdelete")     ? SelfTest::slotdelete     // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-addtrack")       ? SelfTest::addtrack       // before bare --selftest (W07)
+                        : commandLine.contains ("--selftest-scenerename")    ? SelfTest::scenerename    // before -scene (substring! W15)
+                        : commandLine.contains ("--selftest-scenedelete")    ? SelfTest::scenedelete    // before -scene (substring! W15)
+                        : commandLine.contains ("--selftest-scenereorder")   ? SelfTest::scenereorder   // before -scene (substring! W15)
                         : commandLine.contains ("--selftest-scene")          ? SelfTest::scene          // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-dragdrop")       ? SelfTest::dragdrop       // before bare --selftest (W07)
                         : commandLine.contains ("--selftest-demo")           ? SelfTest::demo           // before bare --selftest (W09)

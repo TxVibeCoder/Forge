@@ -5,11 +5,14 @@ using namespace juce;
 
 //==============================================================================
 /*  SceneRow — one scene-launch row: a ▶ launch button on the left and the scene name (or its
-    1-based row number) filling the rest. The row holds its scene index, a pushed-in
-    SceneLaunchState, and a pushed-in beat-pulse alpha only — never a te::Scene*. The launch
-    button fires onLaunched(); a right-click (or the playing/queued affordance) fires onStopped();
-    both are wired up to the column's seams by SceneColumnComponent, and both are named in the
-    row's tooltip (the right-click stop is otherwise undiscoverable).
+    1-based row number) filling the rest. The row holds its scene index, the build's total row
+    count (to disable Move up/down at the edges), a pushed-in SceneLaunchState, and a pushed-in
+    beat-pulse alpha only — never a te::Scene*. The launch button fires onLaunched(); a
+    right-click opens the row's context menu (W5: Stop scene / Rename… / Delete scene / Move
+    up / Move down) which fires onStopped / onDelete / onMoveUp / onMoveDown; double-clicking
+    the name area (or the menu's Rename…) opens an inline TextEditor that fires onRename on
+    commit. All are wired up to the column's seams by SceneColumnComponent, and the gestures are
+    named in the row's tooltip (they are otherwise undiscoverable).
 
     State render (mirrors the slot pad vocabulary, §d + the W04a semantic accents, named
     ForgeLookAndFeel colours only — playing/queued speak the play-green family, never amber;
@@ -23,16 +26,18 @@ class SceneColumnComponent::SceneRow : public Component,
                                        public SettableTooltipClient
 {
 public:
-    SceneRow (int idx, const String& displayName)
-        : sceneIndex (idx), name (displayName)
+    SceneRow (int idx, const String& displayName, int totalRows)
+        : sceneIndex (idx), numRows (totalRows), name (displayName)
     {
         // Idle-hover affordance: repaint on mouse enter/exit ONLY (no polling) so paint() can
         // lift the base fill to raisedBg while the pointer is over the row.
         setRepaintsOnMouseActivity (true);
 
-        // Name BOTH interactions in one tooltip — the row (SettableTooltipClient) covers the
-        // name area and the ▶ button carries the same text.
-        const String tip = "Launch " + name + String::fromUTF8 (" \xe2\x80\x94 right-click stops the row");
+        // Name the gestures in one tooltip — the row (SettableTooltipClient) covers the
+        // name area and the ▶ button carries the same text (W5: the bare right-click-stop
+        // became the context menu's first item).
+        const String tip = "Launch " + name
+                         + String::fromUTF8 (" \xe2\x80\x94 double-click to rename, right-click for options");
         setTooltip (tip);
 
         // ▶ launch button. Transparent fill so the row's own paint() shows through; the glyph
@@ -50,6 +55,26 @@ public:
         // primary click target. This also makes right-click-stop work over the button, which
         // the shared tooltip already promises.
         launchButton.addMouseListener (this, false);
+
+        // Inline rename editor (W5) — hidden until a double-click on the name area (or the
+        // menu's Rename…). addChildComponent: an invisible component neither paints nor
+        // intercepts the mouse, so the row behaves exactly as before until an edit begins.
+        // Neutral chrome per the Fable charter (panel/raised/text tones); the selected-text
+        // highlight speaks the existing amber selection accent, not a new colour.
+        nameEditor.setColour (TextEditor::backgroundColourId,      Colour (ForgeLookAndFeel::raisedBg));
+        nameEditor.setColour (TextEditor::textColourId,            Colour (ForgeLookAndFeel::textPrim));
+        nameEditor.setColour (TextEditor::outlineColourId,         Colour (ForgeLookAndFeel::hairline));
+        nameEditor.setColour (TextEditor::focusedOutlineColourId,  Colour (ForgeLookAndFeel::hairline));
+        nameEditor.setColour (TextEditor::highlightColourId,       Colour (ForgeLookAndFeel::accent));
+        nameEditor.setColour (TextEditor::highlightedTextColourId, Colour (ForgeLookAndFeel::onAccent));
+        nameEditor.setColour (CaretComponent::caretColourId,       Colour (ForgeLookAndFeel::textPrim));
+        nameEditor.setFont (Font (FontOptions (13.0f)));            // matches the painted name
+        nameEditor.setJustification (Justification::centredLeft);
+        nameEditor.setSelectAllWhenFocused (true);
+        nameEditor.onReturnKey = [this] { commitRename(); };
+        nameEditor.onEscapeKey = [this] { cancelRename(); };
+        nameEditor.onFocusLost = [this] { commitRename(); };
+        addChildComponent (nameEditor);
 
         refreshLaunchLook();
     }
@@ -79,12 +104,58 @@ public:
         }
     }
 
-    /** Right-click anywhere on the row stops this scene's clips (the symmetric of left-click
-        launch), routed up through the column's onSceneStopped seam. */
+    /** Right-click anywhere on the row (the ▶ button forwards its clicks here too) opens the
+        scene context menu (W5). Async + SafePointer (the SessionView slot-menu idiom — the row
+        can be destroyed by a rebuild before the menu resolves); the handler copies the seam +
+        index OUT of the row before firing, because delete / move handlers rebuild the column
+        and destroy this row mid-callback. Move up/down disable at the grid edges. */
     void mouseDown (const MouseEvent& e) override
     {
-        if (e.mods.isPopupMenu() && onStopped != nullptr)
-            onStopped (sceneIndex);
+        if (! e.mods.isPopupMenu())
+            return;
+
+        PopupMenu menu;
+        menu.addItem (menuStop, String::charToString ((juce_wchar) 0x25a0) + " Stop scene");   // ■
+        menu.addItem (menuRename, String::fromUTF8 ("Rename\xe2\x80\xa6"));                    // Rename…
+        menu.addSeparator();
+        menu.addItem (menuDelete,   "Delete scene");
+        menu.addItem (menuMoveUp,   "Move up",   sceneIndex > 0);
+        menu.addItem (menuMoveDown, "Move down", sceneIndex < numRows - 1);
+
+        Component::SafePointer<SceneRow> safeThis (this);
+        menu.showMenuAsync (PopupMenu::Options().withTargetScreenArea (
+                                Rectangle<int> (e.getScreenX(), e.getScreenY(), 1, 1)),
+                            [safeThis] (int result)
+                            {
+                                auto* self = safeThis.getComponent();
+                                if (self == nullptr || result == 0)
+                                    return;
+
+                                if (result == menuRename)
+                                {
+                                    self->beginRename();   // row still alive — menu just closed
+                                    return;
+                                }
+
+                                const int idx = self->sceneIndex;
+                                const auto cb = result == menuStop     ? self->onStopped
+                                              : result == menuDelete   ? self->onDelete
+                                              : result == menuMoveUp   ? self->onMoveUp
+                                              : result == menuMoveDown ? self->onMoveDown
+                                                                       : std::function<void (int)>();
+                                if (cb != nullptr)
+                                    cb (idx);   // may destroy the row (rebuild) — touch nothing after
+                            });
+    }
+
+    /** Rename affordance: a plain double-click over the NAME area only. The ▶ button forwards
+        its mouse events here (listener above), so gate on the name bounds or a double-click on
+        the button would open the editor on top of a double-launch. */
+    void mouseDoubleClick (const MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu()
+            && nameBounds.contains (e.getEventRelativeTo (this).getPosition()))
+            beginRename();
     }
 
     // Explicit repaint on enter/exit: covers the events the ▶ button forwards via its mouse
@@ -143,11 +214,62 @@ public:
         launchButton.setBounds (r.removeFromLeft (launchBtnW));
         r.removeFromLeft (4);
         nameBounds = r;
+
+        // Keep the (possibly mid-edit) rename editor glued to the name area; as a child added
+        // last it already sits above the row's own paint.
+        nameEditor.setBounds (nameBounds);
     }
 
     std::function<void (int sceneIndex)> onLaunched, onStopped;
+    std::function<void (int sceneIndex)> onDelete, onMoveUp, onMoveDown;             // W5 menu
+    std::function<void (int sceneIndex, const String& newName)> onRename;            // W5 editor
 
 private:
+    //==========================================================================
+    // Inline rename (W5). The editor's lifetime is the ROW's (a plain member) — poll-driven
+    // repaints never touch it — and the `editing` flag makes commit exactly-once: Return fires
+    // onReturnKey, then hiding the editor drops focus and fires onFocusLost too; the second
+    // arrival no-ops on the cleared flag (same for Escape → cancel → focus-lost).
+
+    void beginRename()
+    {
+        if (editing)
+            return;
+
+        editing = true;
+        nameEditor.setText (name, false /*sendTextChangeMessage*/);   // seed with the DISPLAYED text
+        nameEditor.setBounds (nameBounds);
+        nameEditor.setVisible (true);
+        nameEditor.toFront (true);
+        nameEditor.grabKeyboardFocus();                    // selectAllWhenFocused selects the seed
+    }
+
+    void commitRename()
+    {
+        if (! editing)
+            return;
+
+        editing = false;
+        const String newName = nameEditor.getText().trim();   // blank allowed — seam persists it
+        nameEditor.setVisible (false);                        // focus-lost re-entry no-ops (flag cleared)
+
+        // Fire ASYNC: the owner's handler rebuilds the scene column, destroying THIS row (and
+        // the TextEditor whose callback we're inside). Deferring one message-loop tick lets the
+        // editor's stack unwind first; the captured COPY of the seam (bound to the column, which
+        // survives rebuilds) keeps the fire safe even though the row is gone by then.
+        if (onRename != nullptr)
+            MessageManager::callAsync ([cb = onRename, idx = sceneIndex, newName] { cb (idx, newName); });
+    }
+
+    void cancelRename()
+    {
+        if (! editing)
+            return;
+
+        editing = false;
+        nameEditor.setVisible (false);   // no fire — the painted name is still the truth
+    }
+
     void refreshLaunchLook()
     {
         // ▶ glyph: play-family when the row is hot (playGreen firing, playGreenDim about to fire),
@@ -160,12 +282,22 @@ private:
 
     static constexpr int launchBtnW = 26;   // ▶ button width (sheet 00: 26×22)
 
+    // Context-menu item ids (0 = dismissed, so ids start at 1).
+    static constexpr int menuStop     = 1;
+    static constexpr int menuRename   = 2;
+    static constexpr int menuDelete   = 3;
+    static constexpr int menuMoveUp   = 4;
+    static constexpr int menuMoveDown = 5;
+
     const int sceneIndex;
+    const int numRows;      // total rows this build — Move up/down disable at the edges
     const String name;
     SceneLaunchState state = SceneLaunchState::idle;
     float pulseAlpha = -1.0f;   // negative = no pulse flowing (transport stopped / poll edge)
+    bool editing = false;       // rename in flight — commit/cancel exactly once
 
     TextButton launchButton;
+    TextEditor nameEditor;      // hidden (addChildComponent) until beginRename()
     Rectangle<int> nameBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SceneRow)
@@ -226,9 +358,14 @@ void SceneColumnComponent::rebuildRows (const StringArray& names, int numScenes)
         if (display.isEmpty())
             display = String (i + 1);
 
-        auto* row = rows.add (new SceneRow (i, display));
+        auto* row = rows.add (new SceneRow (i, display, numScenes));
         row->onLaunched = [this] (int sceneIndex) { if (onSceneLaunched) onSceneLaunched (sceneIndex); };
         row->onStopped  = [this] (int sceneIndex) { if (onSceneStopped)  onSceneStopped  (sceneIndex); };
+        row->onRename   = [this] (int sceneIndex, const String& newName)
+                                  { if (onSceneRenamed) onSceneRenamed (sceneIndex, newName); };
+        row->onDelete   = [this] (int sceneIndex) { if (onSceneDeleted)   onSceneDeleted   (sceneIndex); };
+        row->onMoveUp   = [this] (int sceneIndex) { if (onSceneMovedUp)   onSceneMovedUp   (sceneIndex); };
+        row->onMoveDown = [this] (int sceneIndex) { if (onSceneMovedDown) onSceneMovedDown (sceneIndex); };
         addAndMakeVisible (row);
     }
 

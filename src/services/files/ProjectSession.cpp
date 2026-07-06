@@ -542,6 +542,121 @@ int ProjectSession::getNumScenes() const
     return edit != nullptr ? edit->getSceneList().getNumScenes() : 0;
 }
 
+// ── Scene lifecycle (W15) ────────────────────────────────────────────────────────────────────
+void ProjectSession::setSceneName (int index, const juce::String& newName)
+{
+    if (edit == nullptr)
+    {
+        FORGE_LOG_WARN ("setSceneName: no open edit");
+        return;
+    }
+
+    auto scenes = edit->getSceneList().getScenes();
+
+    if (index < 0 || index >= scenes.size() || scenes[index] == nullptr)
+    {
+        FORGE_LOG_WARN ("setSceneName: scene index " + juce::String (index) + " out of range");
+        return;
+    }
+
+    // te::Scene::name is a CachedValue bound to the Edit UndoManager (tracktion_Scene.cpp:19-20),
+    // so this write is undoable and dirties the tree. A blank name is intentional — the scene row
+    // falls back to its 1-based number. No markAsChanged: the shell seals + saves via onEditMutated.
+    scenes[index]->name = newName;
+}
+
+juce::String ProjectSession::getSceneName (int index) const
+{
+    if (edit == nullptr)
+        return {};
+
+    auto scenes = edit->getSceneList().getScenes();
+
+    if (index < 0 || index >= scenes.size() || scenes[index] == nullptr)
+        return {};
+
+    return scenes[index]->name.get();
+}
+
+bool ProjectSession::deleteScene (int index)
+{
+    if (edit == nullptr)
+    {
+        FORGE_LOG_WARN ("deleteScene: no open edit");
+        return false;
+    }
+
+    auto& sceneList = edit->getSceneList();
+    auto scenes = sceneList.getScenes();
+
+    if (index < 0 || index >= scenes.size() || scenes[index] == nullptr)
+    {
+        FORGE_LOG_WARN ("deleteScene: scene index " + juce::String (index) + " out of range");
+        return false;
+    }
+
+    // Stop any live/queued launch in the deleted row FIRST (parity with clearSlot / the duplicate
+    // path) so a clip in this row is cleanly silenced at the stop-quantise point rather than left
+    // sounding until the async graph rebuild drops it (QC-2, W15). Not a UAF either way — the
+    // LaunchHandle is shared_ptr-owned by the audio graph — but stop-first matches launch semantics.
+    {
+        auto tracks = te::getAudioTracks (*edit);
+        for (int t = 0; t < tracks.size(); ++t)
+            stopClipInSlot (getClipSlot (t, index), *edit);
+    }
+
+    // SceneList::deleteScene removes the SCENE row (with the UndoManager) AND every audio track's
+    // slot at this index — clip->removeFromParent() + ClipSlotList::deleteSlot are BOTH UndoManager-
+    // bound (tracktion_Scene.cpp:224-241 / Clip.cpp:397-401 / ClipSlot.cpp:179-183), so with the
+    // shell's single per-gesture transaction one Ctrl-Z restores scene + slots + clips atomically.
+    sceneList.deleteScene (*scenes[index]);
+    return true;
+}
+
+bool ProjectSession::moveScene (int from, int to)
+{
+    if (edit == nullptr)
+    {
+        FORGE_LOG_WARN ("moveScene: no open edit");
+        return false;
+    }
+
+    const int n = getNumScenes();
+
+    if (from == to || from < 0 || from >= n || to < 0 || to >= n)
+    {
+        FORGE_LOG_WARN ("moveScene: bad indices " + juce::String (from) + " -> " + juce::String (to)
+                        + " (count " + juce::String (n) + ")");
+        return false;
+    }
+
+    // No engine moveScene seam exists. SceneList and ClipSlotList are both ValueTreeObjectLists whose
+    // objectOrderChanged() is a no-op override (the base auto-resyncs its objects array on a raw child
+    // move), and both expose a public `state` ValueTree. Move the SCENES tree AND every track's
+    // CLIPSLOTS tree with the SAME from/to (the desync guard) on the Edit UndoManager, inside the
+    // shell's transaction, so one Ctrl-Z reverts the whole reorder.
+    auto* um = &edit->getUndoManager();
+
+    // Lockstep REQUIRES every track's CLIPSLOTS tree to have the same child count as SCENES before the
+    // move. A freshly appendAudioTrack'd track materialises slots only on demand (up to the touched row),
+    // so it can hold a FILLED slot yet have fewer total slots than `to`. Skipping such a track (an earlier
+    // guard did) would leave its clip behind while the scene moves — a silent scene<->clip desync that
+    // PERSISTS to disk (QC-3, W15). Pad every track to the scene count FIRST (a no-op for already-full
+    // tracks), in the SAME transaction so pad + move revert as one Ctrl-Z; then every slot tree moves in
+    // lockstep with SCENES and no per-track skip is possible.
+    for (auto* at : te::getAudioTracks (*edit))
+        if (at != nullptr)
+            at->getClipSlotList().ensureNumberOfSlots (n);
+
+    edit->getSceneList().state.moveChild (from, to, um);
+
+    for (auto* at : te::getAudioTracks (*edit))
+        if (at != nullptr)
+            at->getClipSlotList().state.moveChild (from, to, um);
+
+    return true;
+}
+
 te::ClipSlot* ProjectSession::getClipSlot (int trackIndex, int sceneIndex) const
 {
     // R2: const, non-mutating. Walk existing tracks only — NEVER insert a track or a slot.

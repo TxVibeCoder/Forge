@@ -217,6 +217,34 @@ void SessionView::wireScenes()
             session.stopSlot (t, sceneIdx);
     };
     scenes->onStopAll = [this] { session.stopAllSlots(); };
+
+    // W15 scene lifecycle — rename / delete / reorder. Each routes through a ProjectSession seam (all
+    // undoable, unlike grow-only +Scene) then afterSceneMutation() to seal + rebuild. Move up/down map
+    // to moveScene(s, s∓1); the row disables Move-up on index 0 and Move-down on the last row, so the
+    // s-1 / s+1 targets are always in range when these fire.
+    scenes->onSceneRenamed   = [this] (int s, const juce::String& n) { session.setSceneName (s, n); afterSceneMutation(); };
+    scenes->onSceneDeleted   = [this] (int s) { if (session.deleteScene (s))     afterSceneMutation(); };
+    scenes->onSceneMovedUp   = [this] (int s) { if (session.moveScene (s, s - 1)) afterSceneMutation(); };
+    scenes->onSceneMovedDown = [this] (int s) { if (session.moveScene (s, s + 1)) afterSceneMutation(); };
+}
+
+void SessionView::afterSceneMutation()
+{
+    // Seal the W05 undo transaction + save synchronously (mirrors the slot-mutation gestures — the
+    // seam already wrote through the Edit UndoManager, so this makes the gesture Ctrl+Z-reversible).
+    if (onEditMutated != nullptr)
+        onEditMutated();
+
+    // Defer the grid rebuild (see the header note): a rename commit fires from inside the scene row's
+    // TextEditor callback, and rebuild() destroys that row + editor — deleting a component whose method
+    // is live on the stack is a UAF. One message-loop hop lets the callback unwind first; the
+    // SafePointer guards against the view dying in the interim.
+    juce::Component::SafePointer<SessionView> safe (this);
+    juce::MessageManager::callAsync ([safe]
+    {
+        if (safe != nullptr)
+            safe->rebuild();
+    });
 }
 
 //==============================================================================

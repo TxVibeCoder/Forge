@@ -62,14 +62,17 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — TWENTY-NINE gates as of W14): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — THIRTY-TWO gates as of W15): `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
-  `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`, `--selftest-quantise`;   (⚠ new gate names that CONTAIN an existing name must be
-  ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`; verify the report's `mode=` line)
+  `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
+  `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`;
+  (⚠ new gate names that CONTAIN an existing name must be
+  ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`, and `-scenerename`/`-scenedelete`/
+  `-scenereorder` ⊃ `-scene`; verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
@@ -129,6 +132,19 @@ conflict, surface it.
   notes snap 4× finer than the visible grid. `QuantisationType::roundBeatToNearest` already folds `setProportion`
   (the 0-100% strength) into the result (`orig + proportion*(snapped-orig)`) — do NOT hand-lerp. Use a LOCAL
   `QuantisationType`, never `clip.getQuantisation()` (the clip's persistent playback quantise).
+- **Scene reorder has NO engine seam — and per-track slot trees can be UNEVEN (W15).** There is no
+  `SceneList::moveScene`; reorder is a raw `ValueTree::moveChild(from, to, um)` on the public `SceneList::state`
+  AND every track's `ClipSlotList::state` (both `ValueTreeObjectList`s that auto-resync on a child move), all in
+  ONE transaction. The footgun: a freshly `appendAudioTrack`'d track materialises slots only on demand (up to the
+  touched row via `ensureNumberOfSlots(sceneIndex+1)`), so it can hold a **filled** slot yet have **fewer total
+  slots than the scene count**. Moving/deleting must NOT skip a short track (that desyncs its clip from the moved
+  scene and PERSISTS to disk) — **pad every track to `getNumScenes()` first** (`ensureNumberOfSlots`, a no-op for
+  full tracks), then move/delete in lockstep. Rename (`Scene::name`, a UM-bound `CachedValue`), delete
+  (`SceneList::deleteScene` — scene row + `clip->removeFromParent()` + `deleteSlot`, all UM-bound) and reorder all
+  ride the user undo stack; the shell seals one transaction per gesture via `onEditMutated`. And a scene mutation
+  MUST `rebuild()` — the 25 Hz poll watches TRACK count only, never scene count — but DEFER the rebuild
+  (`callAsync` + `SafePointer`): a rename commit fires from inside the row's own `TextEditor` callback and
+  `rebuild()` would delete that row mid-stack (a UAF).
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,
