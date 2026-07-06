@@ -58,6 +58,38 @@ void PianoRollView::setMidiClip (te::MidiClip* c)
     repaint();
 }
 
+void PianoRollView::refreshAfterExternalEdit()
+{
+    if (clip == nullptr)
+        return;
+
+    // A structural change (add/remove) destroys-and-recreates the affected te::MidiNote object(s)
+    // (the engine's MidiList is a ValueTreeObjectList over the note child nodes), so a HELD
+    // component's note reference goes dangling/orphaned when that happens. A pure position/content
+    // edit (move, resize, velocity) mutates the SAME te::MidiNote object's properties in place — its
+    // identity survives. So: if every component's note is still present (by identity) in the clip's
+    // CURRENT live set, and the counts match, nothing structural happened — a cheap layoutNotes()
+    // (which reads each note's current beat/pitch and repositions, touching neither the selection
+    // nor the scroll) is enough. Only fall back to the destructive rebuildNotes() when the held set
+    // has genuinely diverged from the engine's.
+    const auto& liveNotes = clip->getSequence().getNotes();
+
+    bool structurallyStale = (liveNotes.size() != noteComps.size());
+
+    if (! structurallyStale)
+        for (auto* nc : noteComps)
+            if (! liveNotes.contains (&nc->getNote()))
+            {
+                structurallyStale = true;
+                break;
+            }
+
+    if (structurallyStale)
+        rebuildNotes();
+    else
+        layoutNotes();
+}
+
 void PianoRollView::resized()
 {
     // Split off a fixed-height velocity strip at the bottom (outside the Viewport so it never

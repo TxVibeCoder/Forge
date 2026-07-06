@@ -62,7 +62,9 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-TWO gates as of W15): `--selftest` (playback),
+- **Selftest floor** (must pass after any change — THIRTY-TWO gates as of W16; W16 extended 4 EXISTING gates
+  with new report fields — `undo`, `midi`, `popout`, `sendarrange` — without adding any new gate name):
+  `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
@@ -145,6 +147,42 @@ conflict, surface it.
   MUST `rebuild()` — the 25 Hz poll watches TRACK count only, never scene count — but DEFER the rebuild
   (`callAsync` + `SafePointer`): a rename commit fires from inside the row's own `TextEditor` callback and
   `rebuild()` would delete that row mid-stack (a UAF).
+- **`FourOscPlugin`'s mod-matrix flush unconditionally wipes the redo stack on EVERY save — confirmed engine
+  defect, not fixed (W16).** `FourOscPlugin::flushPluginStateToValueTree()`
+  (`libs/tracktion_engine/.../tracktion_FourOscPlugin.cpp:1393-1424`) calls `state.addChild(mm, -1, um)`
+  **unconditionally** on every flush — i.e. every `session.save()`, which the shell's `doUndo()`/`doRedo()`
+  **always** call — even when the mod-matrix is completely **empty** (source-traced: `modMatrixChildren=0` still
+  triggers it). `ValueTree::addChild` has **no equality gate** (unlike `setProperty`, which skips a no-op write),
+  so this is a genuine new `UndoManager` action on every save, which (a) discards the pending redo stack and
+  (b) becomes a new top-of-stack entry ahead of whatever the real undo/redo just did — so the **next** Ctrl+Z
+  undoes this phantom action, not the user's actual next target. Reachable on **any** edit containing a
+  `FourOscPlugin` — Forge's own default instrument, auto-created on every MIDI track by `createMidiClipInSlot`,
+  i.e. nearly every real Forge project. **Practical impact: Redo is unavailable immediately after any Undo**, and
+  a second Ctrl+Z can silently consume the phantom instead of the intended prior step. **Not fixed** — the fix
+  lives in vendored `libs/tracktion_engine` (a plugin-specific override most Forge waves never touch), and per
+  the project's standing "do not fork the engine" default this is a **maintainer decision**, not something to
+  patch unilaterally. Any gate/feature that asserts `um.canUndo()`/`um.canRedo()` immediately after a real
+  `doUndo()`/`doRedo()` **will be unreliable** — assert on **content-level** state instead (slot occupancy,
+  marker/note counts), exactly as `--selftest-undo`'s `shellUndoRevertsOnlyMarker` and `--selftest-popout`'s
+  `undoFiredThroughPopoutKey`/`redoFiredThroughPopoutKey` do. `--selftest-undo`'s `redoAvailableAfterSingleUndo`
+  field monitors this defect (informational, non-gating — logs `FORGE_LOG_WARN` when false) so a future engine
+  fix would show up as a signal, not silently.
+- **A view that stays bound to a clip after the user moves on must not let an UNRELATED undo/redo silently
+  reset its selection or scroll (W16).** `PianoRollView` stays bound to whatever MIDI clip was last opened even
+  after the user switches to editing something else — so the shell's app-wide `undoOrRedo()` fan-out (which
+  must resync the roll after a note-content edit so it never dangles a stale `te::MidiNote&`, see the dim-5
+  history below) can fire on a completely unrelated gesture (e.g. a Session scene rename) while a clip still
+  happens to be bound. The naive fix — re-call `setMidiClip()` unconditionally — rebuilds unconditionally
+  (`rebuildNotes()` always clears `selection` and `scrollToClipPitchRange()` always resnaps the viewport), so
+  it silently wiped a multi-note selection and reset manual scroll on **every** unrelated undo/redo (caught by
+  adversarial QC, not the original build). Fixed via `PianoRollView::refreshAfterExternalEdit()`: compare the
+  bound clip's *live* note set (by `te::MidiNote*` identity, since a structural add/remove destroys-and-recreates
+  the object while a move/resize mutates it in place) against what's currently displayed — only a genuine
+  structural divergence calls the destructive `rebuildNotes()`; anything else (including "nothing changed") calls
+  the cheap, non-destructive `layoutNotes()` (repositions existing components, touches neither selection nor
+  scroll). The general lesson: a fan-out step reacting to "something, somewhere, changed" must diff against what
+  it actually owns before doing anything destructive — "safe to call repeatedly" (a doc-comment claim) is not
+  the same as "safe to call for an unrelated reason."
 - **Never arm recording synchronously in one blocking callback** — yield for the async device-list rebuild
   (`rescanMidiDeviceList` for MIDI, `dispatchPendingUpdates` for wave) before arming/checking.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,

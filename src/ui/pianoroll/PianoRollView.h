@@ -57,6 +57,16 @@ public:
         components and auto-scrolls to centre the clip's pitch range. Safe to call repeatedly. */
     void setMidiClip (te::MidiClip*);
 
+    /** Re-syncs the view against the CURRENTLY bound clip's live note set, for a caller that
+        doesn't know whether an external edit (e.g. an app-wide undo/redo unrelated to this clip)
+        actually touched it. Distinguishes a STRUCTURAL change (a note added/removed — the held
+        te::MidiNote* set differs from the engine's current one) from a pure position/content
+        change or no change at all: only a structural change rebuilds (dropping the selection, per
+        rebuildNotes()'s contract); everything else just re-lays-out the existing components, which
+        touches neither the selection nor the scroll position. No-op if no clip is bound. Cheap for
+        realistic clip sizes (one Array::contains scan per held note). */
+    void refreshAfterExternalEdit();
+
     void resized() override;
     void paint (juce::Graphics&) override;
     bool keyPressed (const juce::KeyPress&) override;

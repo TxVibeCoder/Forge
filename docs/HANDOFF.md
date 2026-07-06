@@ -1,22 +1,36 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W15 — frontier program
-> Wave 5: Session scene lifecycle (rename → delete → reorder)"** — the **FIFTH** wave of the 10-wave **frontier
-> build program**
-> ([[forge-frontier-program]] / `docs/frontier-program.local.md`), the plan a discovery swarm produced after the
-> hands-on plan completed at W10 (W11 launcher expressiveness · W12 per-clip launch quantise · W13 grid clip
-> primitives · W14 MIDI quantise). ⚠ **W05's owed adversarial-QC dimensions
-> remain PARTIALLY owed** (the broad undo-correctness sweep across all five W05 mutation hooks + torn-off-popout
-> focus routing were not re-run).
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W16 — frontier program
+> Wave 6: W05 QC debt discharge (undo + popout + lifetime hardening)"** — the **SIXTH** wave of the 10-wave
+> **frontier build program**
+> ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ **W05's owed adversarial-QC debt is now
+> DISCHARGED** — undo-correctness (shell-hooks, record-gate) and shell-integration (popout refresh + key-routing)
+> are all gated headlessly. Building this wave **uncovered a confirmed, pre-existing engine defect** (see below)
+> — not fixed (out of scope, a maintainer call), but documented + monitored.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W15 are PUSHED to `origin/main`** (tip `9cc7f04`, sanitize-clean; local `main` ==
-`origin/main`). W15 built on `6ca11cd`. Last build **clean** (MSVC
-Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W15 added `--selftest-scenerename` /
-`--selftest-scenedelete` / `--selftest-scenereorder`; floor 29 → 32). ⚠ **History was rewritten this session**
-(`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed —
-all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+**`main`**. **W07–W15 are PUSHED to `origin/main`** (tip `9cc7f04`, sanitize-clean). **W16 is committed LOCALLY
+only — NOT pushed** (holding for maintainer OK); baseline was `20500c1`. Last build **clean** (MSVC
+Debug, 0 warnings) · **all THIRTY-TWO selftests PASS** (W16 adds ZERO new gate names — all 6 dimensions extend
+4 existing gates: `--selftest-undo`, `--selftest-midi`, `--selftest-popout`, `--selftest-sendarrange`; floor
+stays 32). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from
+an earlier commit's HANDOFF prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the old
+`09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+Shipped (W16 — frontier Wave 6): six dimensions, each proving the shell's **real** entry point
+(`doUndo()`/`doRedo()`, the popout's actual `keyPressed` forward chain) rather than the `ed->undo()` bypass
+every pre-existing gate used. **Building it surfaced a confirmed, severe engine defect**:
+`FourOscPlugin::flushPluginStateToValueTree()` (`libs/tracktion_engine`) unconditionally performs an
+`UndoManager`-tracked `ValueTree::addChild` on **every save** (even with an empty mod-matrix) — since
+`doUndo()`/`doRedo()` always save, this discards the pending redo stack and plants a phantom top-of-stack entry,
+on **any edit with a FourOscPlugin** (Forge's own default instrument, auto-created on every MIDI track). **Redo
+is unavailable immediately after any Undo, in production, today** — not fixed this wave (vendored engine code,
+a maintainer decision per the standing "do not fork the engine" default); documented + monitored via a
+non-gating `redoAvailableAfterSingleUndo` field and a new CLAUDE.md gotcha. **A second, separate finding**: the
+wave's own dimension-5 fix (piano-roll note-staleness) initially wiped the user's note selection + scroll
+position on ANY unrelated undo/redo — caught by adversarial QC, fixed via a new
+`PianoRollView::refreshAfterExternalEdit()` that only does a destructive rebuild on a genuine structural note
+change. Full record → [devlog/wave-16-w05-qc-debt.md](devlog/wave-16-w05-qc-debt.md).
 Shipped (W15 — frontier Wave 5): the Session scene grid becomes an editable set-list — **double-click a scene
 name to rename** (blank falls back to the number); right-click a scene row → a **PopupMenu** (`Stop scene /
 Rename… / Delete scene / Move up / Move down`) replacing the bare right-click-stop. All three (rename / delete /
@@ -375,16 +389,18 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 > gap". **Wave 1 (W11) shipped**; standing call: build the program's waves autonomously (each: file-disjoint
 > agents → orchestrator build + gates + adversarial QC) and hold each push for the maintainer's OK.
 
-1. **✅ DONE: frontier Waves 2–5 (W12–W15)** — per-clip launch quantise + grid clip primitives + MIDI quantise +
-   **W15 Session scene lifecycle (rename → delete → reorder)**, all **PUSHED to `origin/main`** (tip `9cc7f04`).
-   W15 shipped the scene-row
-   PopupMenu scaffold (`Stop / Rename… / Delete / Move up / Move down`) that W7's whole-scene send will APPEND one
-   item to (never a competing rewrite — the critic's territory finding #1). **▶ NEXT: frontier program Wave 6 —
-   the owed W05 QC-debt hardening** (assert-only, `main.cpp`-only — the maximally-clean collision-free wave;
-   discharge the undo-correctness sweep across the five W05 mutation hooks + torn-off-popout focus routing). Then
-   Wave 7 (performance recording — the real Session→Arrange bridge, which appends the whole-scene-send item to
-   W15's menu), Wave 8 (Session mixer polish) … — full ordered program + the critic's corrections in
-   `docs/frontier-program.local.md`. **W15 follow-ups (documented):** a save→reload round-trip leg for the scene
+1. **✅ DONE: frontier Waves 2–6 (W12–W16)** — per-clip launch quantise + grid clip primitives + MIDI quantise +
+   Session scene lifecycle, all **PUSHED to `origin/main`** (tip `9cc7f04`); **W16 (owed W05 QC-debt discharge)
+   is committed LOCALLY, holding for push OK.** W16 discharges the last standing W05 debt (undo-correctness +
+   shell-integration) and surfaced a confirmed, unfixed engine defect (redo wiped by `FourOscPlugin`'s
+   mod-matrix flush — see the CLAUDE.md gotcha; a maintainer decision, not fixed this wave).
+   **▶ NEXT: frontier program Wave 7 — performance recording** (the real Session→Arrange bridge: capture which
+   clips launched, when, and for how long, onto each track's timeline; then whole-scene-send and send-as-loop
+   ride the same region, appending one item to W15's scene-row PopupMenu — never a competing rewrite, per the
+   critic's territory finding #1). Then Wave 8 (Session mixer polish) … — full ordered program + the critic's
+   corrections in `docs/frontier-program.local.md`. **W16 follow-ups (documented):** the `FourOscPlugin`
+   redo-wipe defect itself (fix requires patching vendored `libs/tracktion_engine` — explicitly a maintainer
+   call, see the gotcha). **W15 follow-ups (documented):** a save→reload round-trip leg for the scene
    gates; drag-to-reorder (parked — no headless mouse-drag driver); scene colour / multi-select. **A benign W15
    QC note:** an unrelated grid rebuild landing mid-rename silently commits the partial name rather than
    discarding it (no UAF; Ctrl+Z reverses). **W12 follow-ups (documented):** a save→reload round-trip leg for
@@ -631,9 +647,10 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest PUSHED work is on `origin/main` at tip `9cc7f04` (W15); local `main` == `origin/main`.**
+- **Latest PUSHED work is on `origin/main` at tip `9cc7f04` (W15); W16 is committed LOCALLY only, holding for
+  push OK — local `main` is 1 commit ahead of `origin/main`.**
   Pushed: W07–W11, the docs sanitization, W12 per-clip launch quantise, W13 grid clip primitives, W14 MIDI
-  quantise, and W15 scene lifecycle (`9cc7f04`). ⚠ **History was rewritten + force-pushed this session** to scrub
+  quantise, and W15 scene lifecycle (`9cc7f04`). ⚠ **History was rewritten + force-pushed in a prior session** to scrub
   a real-identity leak from an earlier HANDOFF commit's prose (`git-filter-repo` → `python -m git_filter_repo`,
   which drops `origin` — re-added before pushing); the old `09c4928` became `6ca11cd`, and hashes below it are
   unchanged. The sanitize scan (the real-identity denylist — see CLAUDE.md §Public-repo hygiene; a 3-lens

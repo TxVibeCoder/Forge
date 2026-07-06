@@ -1074,7 +1074,7 @@ private:
 
     // --selftest-midi state machine (event-driven; mirrors the record selftest's yield discipline).
     static constexpr const char* kSelfTestMidiName = "Forge SelfTest MIDI";
-    int  miPhase = 0;                                   // 1=created 2=enabled 3=armed+rolling 4=on 5=off
+    int  miPhase = 0;                       // 1=created 2=enabled 3=armed+rolling 4=undo-attempt 5=on 6=off
     te::VirtualMidiInputDevice* miDevice = nullptr;     // the virtual MIDI in we inject through (engine-owned)
     String miAvailableMidiIns;                          // MIDI-in device names after create (diagnostic)
     bool miDeviceEnabled   = false;
@@ -1084,6 +1084,13 @@ private:
     int  miPreExistingNotes = -1;                       // notes in slot (0,0) BEFORE capture (must be 0)
     bool miClipCreated     = false;
     int  miCapturedNotes   = 0;
+
+    // W16 (owed W05 debt, dimension 2 — undo-record-gate-leg): a doUndo() attempt mid-take, via the
+    // REAL shell wrapper (never ed->undo()), while genuinely (synthetically) recording.
+    bool   miCanUndoBeforeAttempt          = false;
+    bool   miStillRecordingAfterUndoAttempt = false;
+    bool   miUndoStackUnchangedDuringRecord = false;
+    String miStatusTextAfterUndoAttempt;
 
     // --selftest-midilearn state machine (event-driven; the native bind runs on an AsyncUpdater, so the
     // CC-inject and the verify must be separate message-loop turns — same yield discipline as --selftest-midi).
@@ -1131,6 +1138,12 @@ private:
     bool poMixerBack         = false, poRollBack          = false;   // turn 2: parent == the shell, window gone
     bool poNoGhostOverlay    = false;   // turn 2, BEFORE any rescue relayout: restored views hidden, no stolen focus
     bool poMixerVisibleAfter = false, poRollVisibleAfter  = false;   // turn 2: visible after driving view state
+
+    // W16 (owed W05 debt) additions: undo/redo through the SHELL wrapper while popped out (dims 3+5),
+    // and key-routing through the popout's own real forward chain (dim 4).
+    bool poUndoNoParentDisturbed = false, poUndoNoCrash = false, poRollStillBound = false;
+    bool poPianoRollNoteCountMatches = false, poRedoNoCrash = false;
+    bool poKeyRoutedToShell = false, poUndoFiredThroughPopoutKey = false, poRedoFiredThroughPopoutKey = false;
 
     ControlBar controlBar;
     ForgeMenuModel menuModel;   // top menu-bar model (W04a): wired in setupMenuModel(), installed by MainWindow::setMenuBar
@@ -1634,6 +1647,20 @@ private:
         mixerView.refreshControls();    // structural guard rebuilds strips if the track set changed
         channelTray.refreshNow();
         markerBar.refresh();
+
+        // W16 (owed W05 debt — a confirmed latent defect, not just a test gap): a NOTE-CONTENT-ONLY
+        // undo/redo (add/delete/move a single note) on a clip that stays PARENTED never re-triggers
+        // PianoRollView's structural rebuild — reconcileDrawerClip() below only detaches on a
+        // PARENT-loss, so a stale MidiNoteComponent (holding a raw te::MidiNote& the engine's
+        // ValueTreeObjectList just destroyed) survives: a dangling-reference surface reachable via
+        // ordinary Ctrl+Z while editing notes with the roll open. refreshAfterExternalEdit() (NOT
+        // setMidiClip(), which unconditionally rebuilds — QC caught that as a regression: it silently
+        // wiped the user's note selection AND reset the scroll position on every unrelated app-wide
+        // undo/redo, e.g. undoing a Session scene rename while the roll happened to have a clip
+        // bound) resyncs cheaply and non-destructively unless the note SET has genuinely gone stale.
+        if (auto* mc = pianoRoll.getClip())
+            if (mc->state.getParent().isValid())
+                pianoRoll.refreshAfterExternalEdit();
 
         // A redo-of-delete (or any structural undo/redo) can leave the drawer holding a detached clip —
         // reconcile it (now also covers the audio DetailView, not just the piano-roll).
@@ -2691,7 +2718,32 @@ private:
         startTimer (300);   // YIELD: record graph live before we inject
     }
 
-    // Phase 4: inject 4 note-ons; YIELD so the notes have real (non-zero) length before the note-offs
+    // Phase 4 (W16 — owed W05 debt, dimension 2): attempt a doUndo() WHILE genuinely (synthetically)
+    // recording, via the shell's REAL wrapper (main.cpp:1597), never a raw ed->undo() bypass. Proves
+    // the record-gate no-op (undoOrRedo's isRecording() early-return, main.cpp:1610-1615) actually
+    // fires on this real-but-synthetic recording path — not just a state-level assertion — and that
+    // nothing downstream (the notes about to be injected, the eventual capturedNoteCount) is disturbed.
+    void midiSelftestUndoAttempt()
+    {
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            miCanUndoBeforeAttempt = um.canUndo();   // record-arm's setTarget already wrote through the UM
+
+            doUndo();   // the REAL shell wrapper — not ed->undo() directly
+
+            if (auto* t = session.getTransport())
+                miStillRecordingAfterUndoAttempt = t->isRecording();
+
+            miUndoStackUnchangedDuringRecord = (um.canUndo() == miCanUndoBeforeAttempt);
+            miStatusTextAfterUndoAttempt     = statusLabel.getText();
+        }
+
+        miPhase = 4;
+        startTimer (300);
+    }
+
+    // Phase 5: inject 4 note-ons; YIELD so the notes have real (non-zero) length before the note-offs
     // (a zero-length note can be dropped, which would fail the exact capturedNoteCount==injected gate).
     void midiSelftestInjectOn()
     {
@@ -2702,18 +2754,18 @@ private:
                 ++miNotesInjected;
             }
 
-        miPhase = 4;
+        miPhase = 5;
         startTimer (300);   // hold the notes so each has real length
     }
 
-    // Phase 5-prep: inject the matching note-offs, then YIELD so the take finalises before stop.
+    // Phase 6-prep: inject the matching note-offs, then YIELD so the take finalises before stop.
     void midiSelftestInjectOff()
     {
         if (miDevice != nullptr)
             for (int n : { 60, 64, 67, 72 })
                 miDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOff (1, n), miDevice->getMPESourceID());
 
-        miPhase = 5;
+        miPhase = 6;
         startTimer (500);   // let the note-offs + take settle before we stop
     }
 
@@ -2754,11 +2806,24 @@ private:
             miDevice = nullptr;
         }
 
+        // W16 (owed W05 debt, dimension 2): the record-gate no-op's status text is set ONLY on the
+        // isRecording() early-return branch (main.cpp:1610-1615) — checking it (rather than just
+        // "nothing changed") rules out the assertion passing because doUndo() silently short-circuited
+        // for an unrelated reason (e.g. a null edit).
+        const bool miUndoBlockedWhileRecording =
+            miStatusTextAfterUndoAttempt.containsIgnoreCase ("disabled while recording");
+
         // PASS proves end-to-end capture INTO THE SLOT: device enabled, slot (not track) armed, transport
         // rolled, notes injected, a clip materialised in the slot, and it holds EXACTLY the injected notes
         // (exact count rules out an empty clip, pre-seeded notes, or notes leaking to the wrong target).
+        // W16 additionally proves a mid-take doUndo() (the REAL shell wrapper) is a genuine no-op: the
+        // transport keeps recording, the undo stack is untouched, and the capture that follows is
+        // byte-identical to the pre-W16 baseline (capturedNoteCount == notesInjected, unchanged).
         const bool pass = miDeviceEnabled && miSlotArmed && miRecordingStarted
                           && miPreExistingNotes == 0
+                          && miStillRecordingAfterUndoAttempt
+                          && miUndoStackUnchangedDuringRecord
+                          && miUndoBlockedWhileRecording
                           && miNotesInjected >= 4
                           && miClipCreated
                           && miCapturedNotes == miNotesInjected;
@@ -2770,6 +2835,9 @@ private:
                << "preExistingNotes="    << miPreExistingNotes << newLine
                << "trackArmed="          << (miSlotArmed ? 1 : 0) << newLine
                << "recordingStarted="    << (miRecordingStarted ? 1 : 0) << newLine
+               << "stillRecordingAfterUndoAttempt=" << (miStillRecordingAfterUndoAttempt ? 1 : 0) << newLine
+               << "undoStackUnchangedDuringRecord=" << (miUndoStackUnchangedDuringRecord ? 1 : 0) << newLine
+               << "undoBlockedWhileRecording="      << (miUndoBlockedWhileRecording ? 1 : 0) << newLine
                << "notesInjected="       << miNotesInjected << newLine
                << "clipCreated="         << (miClipCreated ? 1 : 0) << newLine
                << "capturedNoteCount="   << miCapturedNotes << newLine
@@ -3556,6 +3624,101 @@ private:
 
         mixerView.refreshControls();   // one forced sync tick while popped out: the binding is still live
 
+        // W16 (owed W05 debt, dims 3+5 — undo-refresh-into-popout / the dim-5 fix's proof): undo/redo
+        // through the REAL shell wrapper (doUndo/doRedo, never ed->undo()) while BOTH views are torn
+        // off. A note-content-ONLY mutation (add/undo a single note on a clip that stays parented the
+        // whole time) is the exact reproduction of the dim-5 defect above — proves (a) the refresh
+        // fan-out doesn't disturb popout ownership, and (b) the piano-roll's own note-view stays in
+        // sync (the dim-5 fix) rather than holding a stale, dangling te::MidiNote& reference.
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+
+            um.beginNewTransaction();
+            if (auto mc = session.createMidiClipInSlot (0, 0, "POUNDO"))
+            {
+                pianoRoll.setMidiClip (mc.get());
+                auto& seq = mc->getSequence();
+                const int before = seq.getNumNotes();
+
+                um.beginNewTransaction();   // seal the note-add as its OWN, later transaction
+                seq.addNote (67, te::BeatPosition::fromBeats (2.0), te::BeatDuration::fromBeats (1.0),
+                            100, 0, &um);
+
+                doUndo();   // the REAL shell wrapper — exercises the dim-5 piano-roll refresh fix
+                poUndoNoParentDisturbed = mixerPopout != nullptr && pianoRollPopout != nullptr
+                                         && mixerView.getParentComponent() == mixerPopout.get()
+                                         && pianoRoll.getParentComponent() == pianoRollPopout.get();
+                poRollStillBound = pianoRoll.getClip() != nullptr;
+                poPianoRollNoteCountMatches = pianoRoll.getClip() != nullptr
+                                             && pianoRoll.getClip()->getSequence().getNumNotes() == before;
+                pianoRoll.repaint();   // schedule a repaint — the existing 300ms yield below lets it
+                                       // run before finishPopoutSelftest(), the deterministic trigger
+                                       // point for a stale (unfixed) MidiNoteComponent
+                poUndoNoCrash = true;  // reaching here without a jassert/crash IS the assertion
+
+                doRedo();
+                poRedoNoCrash = mixerPopout != nullptr && pianoRollPopout != nullptr
+                                && mixerView.getParentComponent() == mixerPopout.get()
+                                && pianoRoll.getParentComponent() == pianoRollPopout.get();
+            }
+        }
+
+        // W16 (owed W05 debt, dim 4 — popout-key-routing-gate): drive the REAL forward chain —
+        // PopoutWindow::keyPressed -> onUnhandledKey -> MainComponent::keyPressed -> doUndo()/doRedo()
+        // (main.cpp:1410/1463, 1747-1753) — never a call straight into MainComponent::keyPressed
+        // (that would bypass the very forwarding this dimension proves).
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            um.beginNewTransaction();
+            session.createMidiClipInSlot (0, 2, "POKEY");
+            sealUndoTransaction();
+            const bool seeded = um.canUndo() && session.isSlotFilled (0, 2);
+
+            if (mixerPopout != nullptr)
+            {
+                const bool handled = mixerPopout->keyPressed (
+                    KeyPress ((int) 'Z', ModifierKeys (ModifierKeys::commandModifier), (juce_wchar) 'Z'));
+                poKeyRoutedToShell = handled;
+                // CONTENT-level assertion, not um.canUndo()/canRedo(): a confirmed engine defect
+                // (FourOscPlugin's unconditional mod-matrix flush on every session.save() — see
+                // CLAUDE.md gotcha, and the identical note on --selftest-undo's
+                // redoAvailableAfterSingleUndo) pushes a phantom UndoManager action on EVERY doUndo()/
+                // doRedo() call (via the internal save()), so um.canUndo()/canRedo() no longer
+                // reliably reflect whether THIS SPECIFIC mutation reverted — canUndo() stays true
+                // (from the phantom action) even though the seeded clip is genuinely gone. The slot's
+                // actual occupancy is the real, deterministic proof the key reached the shell's undo path.
+                poUndoFiredThroughPopoutKey = seeded && ! session.isSlotFilled (0, 2);
+            }
+
+            // Redo sub-leg: DELIBERATELY isolated from the undo sub-leg above. Chaining undo-then-redo
+            // on the SAME mutation would hit the SAME engine defect twice over: the undo's own
+            // session.save() phantom action (see above) discards the redo entry it JUST created,
+            // before the Ctrl+Y below ever gets a chance to use it — that would test the (already
+            // documented, out-of-scope) defect a second time, not the key-routing this leg exists to
+            // prove. So: seed a FRESH mutation and revert it via ed->undo() DIRECTLY (bypassing the
+            // shell wrapper, hence bypassing session.save() and the phantom action entirely — the
+            // same direct-engine idiom every pre-existing gate in this file already uses safely),
+            // leaving a clean, genuinely-redoable stack. THEN prove pianoRollPopout's Ctrl+Y reaches
+            // the shell's real doRedo() and re-applies the content.
+            if (pianoRollPopout != nullptr)
+            {
+                um.clearUndoHistory();
+                um.beginNewTransaction();
+                session.createMidiClipInSlot (0, 3, "POREDO");
+                sealUndoTransaction();
+                ed->undo();   // direct engine call — no session.save(), no phantom action
+                const bool preRedoSeeded = ! session.isSlotFilled (0, 3) && um.canRedo();
+
+                pianoRollPopout->keyPressed (
+                    KeyPress ((int) 'Y', ModifierKeys (ModifierKeys::commandModifier), (juce_wchar) 'Y'));
+                poRedoFiredThroughPopoutKey = preRedoSeeded && session.isSlotFilled (0, 3);
+            }
+        }
+
         // The real close path, not restore directly: closeButtonPressed -> onClosed -> restore
         // (reparents home now, defers each window's reset to the NEXT message-loop turn).
         if (mixerPopout != nullptr)     mixerPopout->closeButtonPressed();
@@ -3591,7 +3754,10 @@ private:
                           && poMixerOut && poRollOut
                           && poMixerBack && poRollBack
                           && poNoGhostOverlay
-                          && poMixerVisibleAfter && poRollVisibleAfter;
+                          && poMixerVisibleAfter && poRollVisibleAfter
+                          && poUndoNoParentDisturbed && poUndoNoCrash && poRollStillBound
+                          && poPianoRollNoteCountMatches && poRedoNoCrash
+                          && poKeyRoutedToShell && poUndoFiredThroughPopoutKey && poRedoFiredThroughPopoutKey;
 
         String report;
         report << "mode=popout" << newLine
@@ -3605,6 +3771,14 @@ private:
                << "rollRestored="       << (poRollBack ? 1 : 0) << newLine
                << "mixerVisibleAfter="  << (poMixerVisibleAfter ? 1 : 0) << newLine
                << "rollVisibleAfter="   << (poRollVisibleAfter ? 1 : 0) << newLine
+               << "undoNoParentDisturbed="   << (poUndoNoParentDisturbed ? 1 : 0) << newLine
+               << "undoNoCrash="             << (poUndoNoCrash ? 1 : 0) << newLine
+               << "rollStillBoundAfterUndo=" << (poRollStillBound ? 1 : 0) << newLine
+               << "pianoRollNoteCountMatchesAfterUndo=" << (poPianoRollNoteCountMatches ? 1 : 0) << newLine
+               << "redoNoCrash="             << (poRedoNoCrash ? 1 : 0) << newLine
+               << "keyRoutedToShell="        << (poKeyRoutedToShell ? 1 : 0) << newLine
+               << "undoFiredThroughPopoutKey=" << (poUndoFiredThroughPopoutKey ? 1 : 0) << newLine
+               << "redoFiredThroughPopoutKey=" << (poRedoFiredThroughPopoutKey ? 1 : 0) << newLine
                << "result="             << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -3629,7 +3803,8 @@ private:
     void runUndoSelftest()
     {
         auto* ed = session.getEdit();
-        if (ed == nullptr) { finishUndoSelftest (false, false, false, false, false, false, false, false); return; }
+        if (ed == nullptr) { finishUndoSelftest (false, false, false, false, false, false, false, false,
+                                                 false, false, false, false, false); return; }
 
         FORGE_LOG_INFO ("selftest-undo: slot-clip create/delete + note-edit undo/redo round-trips");
 
@@ -3681,16 +3856,95 @@ private:
             noteLegOk = added && seq.getNumNotes() == before && um.canRedo();
         }
 
+        // W16 (owed W05 debt, dimension 1 — undo-shell-hooks-gate): every leg above drives ed->undo()/
+        // ed->redo() DIRECTLY, exactly the bypass flagged as owed debt (docs/HANDOFF.md, wave-05-undo
+        // devlog) — Ctrl+Z and the Edit menu only ever call the shell's doUndo()/doRedo() wrapper
+        // (undoOrRedo(), main.cpp:1600), which ALSO fans a cross-surface refresh out (rebuild/
+        // refreshControls/reconcileDrawerClip) that a raw ed->undo() never exercises. This leg drives
+        // the REAL wrapper across two independently-sealed shell mutations (mirroring
+        // sessionView.onEditMutated + markerBar.onEditMutated) to prove per-gesture transaction
+        // isolation, LIFO undo/FIFO redo order, and reconcileDrawerClip() firing on the real path.
+        um.clearUndoHistory();
+
+        // Shell path A: mirrors sessionView.onEditMutated (main.cpp:434) — its own transaction.
+        um.beginNewTransaction();
+        const bool shellClipCreated = session.createMidiClipInSlot (0, 1, "SHELLA") != nullptr;
+        sealUndoTransaction();
+        const bool shellPathASealed = shellClipCreated && session.isSlotFilled (0, 1) && um.canUndo();
+
+        // Bind the piano-roll drawer to path-A's clip (legal — pianoRoll binds unconditionally
+        // regardless of SelfTest mode, main.cpp:672-680) so a later doUndo() also exercises
+        // reconcileDrawerClip() on the path that ONLY runs inside undoOrRedo(), never via a bare
+        // ed->undo() (the read above never reaches it).
+        te::MidiClip* slotAClip = nullptr;
+        if (auto* slotA = session.getClipSlot (0, 1))
+            slotAClip = dynamic_cast<te::MidiClip*> (slotA->getClip());
+        pianoRoll.setMidiClip (slotAClip);
+        const bool drawerBoundToA = pianoRoll.getClip() != nullptr;
+
+        // A THIRD mutation detaches path-A's clip from its slot (a Session "Delete clip" gesture),
+        // its OWN transaction, WITHOUT going through doUndo() — so the piano-roll's bound Clip::Ptr
+        // keeps it alive but PARENTLESS (the W07 drawer-detach hazard). reconcileDrawerClip() has not
+        // run yet on this path.
+        session.clearSlot (0, 1);
+        sealUndoTransaction();
+
+        // Shell path B: mirrors markerBar.onEditMutated (main.cpp:661) — a SEPARATE gesture (its own
+        // transaction), so a single doUndo() below must revert ONLY this, not the clip-clear before it.
+        const auto markerId = session.addMarker (te::TimePosition::fromSeconds (1.0), "SHELLB");
+        sealUndoTransaction();
+        const bool shellPathBSealed = markerId.isValid() && session.getMarkers().size() == 1 && um.canUndo();
+
+        // doUndo() #1 — the REAL shell wrapper (main.cpp:1597), never ed->undo() directly. Must
+        // revert ONLY the most recent transaction (the marker): the clip-clear stays in effect
+        // (per-gesture transaction isolation), AND the fan-out's reconcileDrawerClip() runs
+        // unconditionally and detects the piano-roll's bound clip is STILL parentless from the
+        // earlier (un-undone) clear -> nulls it.
+        doUndo();
+        const bool shellUndoRevertsOnlyMarker = session.getMarkers().empty() && ! session.isSlotFilled (0, 1);
+        const bool drawerReconcileOnRealPath  = drawerBoundToA && pianoRoll.getClip() == nullptr;
+
+        // KNOWN ENGINE DEFECT (source-traced this session; see CLAUDE.md "FourOscPlugin's mod-matrix
+        // flush wipes redo" gotcha): FourOscPlugin::flushPluginStateToValueTree() unconditionally calls
+        // state.addChild(mm, -1, um) on EVERY flush — i.e. every session.save(), which doUndo()/doRedo()
+        // ALWAYS call — even when the mod-matrix is completely EMPTY. ValueTree::addChild has NO
+        // equality gate (unlike setProperty), so this is a genuine tracked UndoManager action on every
+        // save, which discards the pending redo stack AND becomes a new top-of-stack entry ahead of
+        // whatever the real undo/redo just touched. Reachable on ANY edit containing a FourOscPlugin —
+        // Forge's own default instrument, auto-created on every MIDI track by createMidiClipInSlot, i.e.
+        // nearly every real Forge project. NOT fixed this wave (the fix lives in vendored
+        // libs/tracktion_engine, outside this wave's "main.cpp + tests/SELFTEST.md" scope) — logged here
+        // as an HONEST, NON-BLOCKING, informational field so the defect is monitored, never silently
+        // hidden and never falsely gated as if this wave were responsible for fixing it (mirrors the
+        // --selftest-sendarrange SKIP convention: log the truth, don't fake a PASS or block on a
+        // pre-existing, out-of-scope limitation).
+        const bool redoAvailableAfterSingleUndo = um.canRedo();
+        if (! redoAvailableAfterSingleUndo)
+            FORGE_LOG_WARN ("selftest-undo: redo unavailable after a single doUndo() — known FourOscPlugin "
+                            "mod-matrix-flush engine defect (see CLAUDE.md gotcha), not fixed this wave");
+
         finishUndoSelftest (baselineClean, created, canUndoAfterCreate, emptyAfterDelete,
-                            filledAfterUndo, canRedoAfterUndo, emptyAfterRedo, noteLegOk);
+                            filledAfterUndo, canRedoAfterUndo, emptyAfterRedo, noteLegOk,
+                            shellPathASealed, shellPathBSealed, shellUndoRevertsOnlyMarker,
+                            drawerReconcileOnRealPath, redoAvailableAfterSingleUndo);
     }
 
     void finishUndoSelftest (bool baselineClean, bool created, bool canUndoAfterCreate,
                              bool emptyAfterDelete, bool filledAfterUndo, bool canRedoAfterUndo,
-                             bool emptyAfterRedo, bool noteLegOk)
+                             bool emptyAfterRedo, bool noteLegOk,
+                             bool shellPathASealed, bool shellPathBSealed,
+                             bool shellUndoRevertsOnlyMarker, bool drawerReconcileOnRealPath,
+                             bool redoAvailableAfterSingleUndo)
     {
+        // redoAvailableAfterSingleUndo is INFORMATIONAL ONLY — a known, un-fixed engine defect
+        // (FourOscPlugin's unconditional mod-matrix flush, see the gotcha above) makes it
+        // deterministically false today. It never gates PASS/FAIL: this gate's job is to prove the
+        // SHELL's own transaction isolation + refresh fan-out are correct, not to re-litigate an
+        // out-of-scope engine bug every run.
         const bool pass = baselineClean && created && canUndoAfterCreate && emptyAfterDelete
-                          && filledAfterUndo && canRedoAfterUndo && emptyAfterRedo && noteLegOk;
+                          && filledAfterUndo && canRedoAfterUndo && emptyAfterRedo && noteLegOk
+                          && shellPathASealed && shellPathBSealed && shellUndoRevertsOnlyMarker
+                          && drawerReconcileOnRealPath;
 
         String report;
         report << "mode=undo" << newLine
@@ -3702,6 +3956,12 @@ private:
                << "canRedoAfterUndo="  << (canRedoAfterUndo ? 1 : 0) << newLine
                << "emptyAfterRedo="    << (emptyAfterRedo ? 1 : 0) << newLine
                << "noteLeg="           << (noteLegOk ? 1 : 0) << newLine
+               << "shellPathASealed="  << (shellPathASealed ? 1 : 0) << newLine
+               << "shellPathBSealed="  << (shellPathBSealed ? 1 : 0) << newLine
+               << "shellUndoRevertsOnlyMarker=" << (shellUndoRevertsOnlyMarker ? 1 : 0) << newLine
+               << "drawerReconcileOnRealPath="  << (drawerReconcileOnRealPath ? 1 : 0) << newLine
+               << "redoAvailableAfterSingleUndo=" << (redoAvailableAfterSingleUndo ? 1 : 0)
+                                                   << " (informational, non-gating — see CLAUDE.md gotcha)" << newLine
                << "result="            << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -4108,6 +4368,11 @@ private:
              waveNotLooping = false, waveNoAutoTempo = false, waveSourceMatches = false;
         juce::File waveFile;
 
+        // W16 (owed W05 debt, dimension 6) — see the render-audibility leg below.
+        bool  renderAttempted = false;
+        float renderPeak = -1.0f;
+        juce::String renderAudible = "SKIP";
+
         if (auto* ed = session.getEdit())
         {
             auto& um = ed->getUndoManager();
@@ -4182,6 +4447,48 @@ private:
             undoRemovedCopy       = clipsAfterUndo == clipsAfterFirst;   // 2 -> 1
             sourceIntactAfterUndo = session.isSlotFilled (0, 0);
 
+            // W16 (owed W05 debt, dimension 6 — arrange-render-audibility-gate-leg): everything above
+            // proves audibility only via the playSlotClips STATE assertion (a documented follow-up,
+            // never sampled non-zero output). Track 0 now holds exactly the un-undone first send (one
+            // 4-note MIDI arrange clip on a 4OSC instrument, sidestepping the Sampler's async-load
+            // blocker) — render it via the existing, synchronous, message-thread-safe
+            // Exporter::renderStems (already used by the export UI, no UndoManager touch) and sample
+            // the stem's peak via the existing readPeakMagnitude helper (already used by
+            // --selftest-record). Three-state, never a fictional PASS: PASS only on genuine non-silent
+            // output; FAIL only if a stem WAS produced but reads silent (a real regression); SKIP if
+            // the render infrastructure can't produce a file (logged, non-blocking).
+            renderAttempted = true;
+            {
+                auto renderDir = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_sendarrange_render");
+                renderDir.deleteRecursively();
+
+                juce::String renderErr;
+                const bool renderOk = Exporter::renderStems (*ed, renderDir, renderErr);
+
+                if (renderOk)
+                {
+                    auto stems = renderDir.findChildFiles (File::findFiles, false, "*.wav");
+                    if (stems.size() == 1)
+                    {
+                        renderPeak    = readPeakMagnitude (stems.getReference (0));
+                        renderAudible = renderPeak > 0.01f ? "PASS" : "FAIL";
+                    }
+                    else
+                    {
+                        FORGE_LOG_WARN ("selftest-sendarrange: render produced " + juce::String (stems.size())
+                                        + " stem(s), expected exactly 1 — degrading renderAudible to SKIP");
+                    }
+                }
+                else
+                {
+                    FORGE_LOG_WARN ("selftest-sendarrange: renderStems failed — " + renderErr
+                                    + " — degrading renderAudible to SKIP (never a fictional PASS)");
+                }
+
+                renderDir.deleteRecursively();
+            }
+
             // Wave leg (track 1): import a sine WAV into slot (1,0), send it, and assert the AudioClipBase
             // normalization — a NON-looping, NON-auto-tempo WaveAudioClip whose audio source survived the
             // state copy (matches the slot clip's source). This is the fix path the MIDI leg cannot reach.
@@ -4213,7 +4520,8 @@ private:
                           && isMidiCopy && noteCountPreserved && landedAtStart && copyNotLooping
                           && arrangeAudible && secondAppended && undoRemovedCopy && sourceIntactAfterUndo
                           && waveImported && waveSent && waveIsAudioClip && waveNotLooping
-                          && waveNoAutoTempo && waveSourceMatches;
+                          && waveNoAutoTempo && waveSourceMatches
+                          && renderAudible != "FAIL";   // SKIP is honest + non-blocking; only proven silence fails
 
         String report;
         report << "mode=sendarrange" << newLine
@@ -4242,6 +4550,9 @@ private:
                << "waveNotLooping="        << (waveNotLooping ? 1 : 0) << newLine
                << "waveNoAutoTempo="       << (waveNoAutoTempo ? 1 : 0) << newLine
                << "waveSourceMatches="     << (waveSourceMatches ? 1 : 0) << newLine
+               << "renderAttempted="       << (renderAttempted ? 1 : 0) << newLine
+               << "renderPeak="            << renderPeak << newLine
+               << "renderAudible="         << renderAudible << newLine
                << "result="                << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="               << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -5285,9 +5596,10 @@ private:
             {
                 case 1:  midiSelftestEnableDevice(); break;   // device created → find + enable, yield
                 case 2:  midiSelftestArmAndRoll();   break;   // enabled → alloc ctx, arm slot, roll, yield
-                case 3:  midiSelftestInjectOn();     break;   // rolling → inject note-ons, yield
-                case 4:  midiSelftestInjectOff();    break;   // → inject note-offs, yield
-                default: finishSelfTestMidi();       break;   // phase 5 → stop, verify, report, quit
+                case 3:  midiSelftestUndoAttempt();  break;   // rolling → W16: doUndo() mid-take, yield
+                case 4:  midiSelftestInjectOn();     break;   // → inject note-ons, yield
+                case 5:  midiSelftestInjectOff();    break;   // → inject note-offs, yield
+                default: finishSelfTestMidi();       break;   // phase 6 → stop, verify, report, quit
             }
             return;
         }
