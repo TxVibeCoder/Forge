@@ -6,15 +6,14 @@
 > **frontier build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ **Frontier
 > Wave 7 is now COMPLETE** (all three items: capture core [W17] + whole-scene-send + send-as-loop [W18]).
 > W18's 4-dimension adversarial QC swarm found **zero confirmed defects** (unlike W17, which caught and fixed
-> one) — a clean pass, no fix-then-reverify cycle needed. **Built + gated + committed** (`4df11e1`) — **NOT YET
-> PUSHED**, awaiting the maintainer's go-ahead.
+> one) — a clean pass, no fix-then-reverify cycle needed. **Built + gated + committed + PUSHED**
+> (tip `30d343c`, sanitize-clean).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W16 are PUSHED to `origin/main`** (tip `96b1037`, sanitize-clean; local `main` ==
-`origin/main` as of that tip). W17 (`f89109c`) and W18 (this session) are committed **locally on top of
-`96b1037`, NOT YET PUSHED**. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-FOUR selftests PASS**
-(W18 adds ONE new gate, `--selftest-scenesend`, and extends `--selftest-sendarrange` with a send-as-loop leg;
-floor **33 → 34**). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity
+**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean; local `main` ==
+`origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-FOUR selftests PASS** (W18 adds
+ONE new gate, `--selftest-scenesend`, and extends `--selftest-sendarrange` with a send-as-loop leg; floor
+**33 → 34**). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity
 leak from an earlier commit's HANDOFF prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the
 old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
 Shipped (W18 — frontier Wave 7 fast-follows): **whole-scene "Send to Arrangement"** — a new
