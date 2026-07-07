@@ -108,6 +108,10 @@ public:
         created, so the shell can open it in the piano-roll drawer. */
     std::function<void (te::MidiClip::Ptr)> onMidiClipCreated;
 
+    /** Wave 10: invoked when the empty-slot "New Step Clip" action creates a born-audible step clip,
+        so the shell can open it in the StepGrid drawer (mirrors onMidiClipCreated). */
+    std::function<void (te::StepClip::Ptr)> onStepClipCreated;
+
     /** Authoritative per-track arm query (engine truth), set by the shell. Drives the R indicator
         and the rec-armed pad tint. */
     std::function<bool (te::AudioTrack&)> isTrackArmed;

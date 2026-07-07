@@ -1,22 +1,35 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-07**, end of **"W19 — frontier program
-> Wave 8: Session mixer polish (master corner + peak-hold)"** — the **EIGHTH** wave of the 10-wave **frontier
-> build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ The Session grid becomes a
-> self-contained mixing surface: a **master strip** fills the bottom-right corner (master volume + meter), and
-> the shared `PeakMeter` gains an opt-in **peak-hold line + sticky clip latch** (enabled on the master). The
-> scene column no longer dangles into the corner (wrapped in a clip container) — WITHOUT reintroducing the W07
-> rowBand drift MAJOR (contentH is untouched; QC verified). **Built + gated (36/36 PASS) + adversarially QC'd
-> (3 clean + 1 fixed) + committed (`bdd7c84`) — NOT YET PUSHED**, awaiting the maintainer's go-ahead.
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-07**, end of **"W20 — frontier program
+> Wave 10: Step Clips (the drum-grid clip type)"** — the CAPSTONE of the 10-wave **frontier build program**
+> ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ Forge gains a first-class in-app **drum
+> step-sequencer clip type**: right-click an empty Session slot → **New Step Clip** → a born-audible step clip
+> opens in a **16×8 drag-to-toggle grid** in the bottom drawer. **Frontier Wave 9 (LFO modifiers) was SKIPPED**
+> at the maintainer's call (its source-verified recipe is preserved in `docs/wave-9-lfo-recipe.local.md`), so the
+> program is complete bar Wave 9. **Built (2-role wave: a file-disjoint UI agent for `StepGridView` + orchestrator
+> for the seam/shell/gate) + gated (37/37 PASS) + adversarially QC'd — a 4-dimension swarm caught 3 real defects
+> (a conditional non-4/4 length bug, a high-severity raw-pointer UAF, and an undo-staleness display bug), ALL
+> FIXED + re-verified. Committed locally — NOT YET PUSHED**, awaiting the maintainer's go-ahead.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). W19 (`bdd7c84`, this
-session) is committed **locally on top of `30d343c`, NOT YET PUSHED**. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-SIX selftests PASS** (W19
-adds TWO new gates, `--selftest-sessionmaster` + `--selftest-peakhold`; floor **34 → 36**). ⚠ **History was
-rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF
-prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` →
-`6ca11cd`).
+**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). **W19 (`64bbb39`) and W20
+(this session) are committed LOCALLY on top of `30d343c`, NOT YET PUSHED.** Last build **clean** (MSVC Debug,
+0 warnings) · **all THIRTY-SEVEN selftests PASS** (W20 adds ONE new gate, `--selftest-stepclip`; floor
+**36 → 37**; plus an 11th `--screenshot` state `session_stepgrid`). ⚠ **History was rewritten in a prior session**
+(`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
+pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+Shipped (W20 — frontier Wave 10, Step Clips): a new `ProjectSession::createStepClipInSlot` seam (generic
+`te::insertNewClip(TrackItem::Type::step)` — the StepClip ctor auto-builds the 8-GM-drum-channel × 16-step grid;
+born-audible via `ensureDefaultInstrument`, born-looping-in-slot with no normalization footguns; length derived
+from the meter so it's correct in any time sig — a QC fix). A net-new `StepGridView` (`src/ui/stepclip/`):
+immediate-mode 16×8 drag-to-toggle grid over `StepClip::setCell/getCell`, R1-disciplined, holds the clip as a
+`StepClip::Ptr` (a QC UAF fix — a raw pointer dangled on slot-clip delete). Shell: the `isMidi()==false` drawer
+gotcha defeated via a `BottomMode::StepGrid` + an explicit `dynamic_cast<te::StepClip*>` before the MidiClip cast
+in both `onSlotSelected` + `onClipSelected`; a "New Step Clip" empty-slot menu action; the undo/redo fan-out now
+repaints the grid (a QC staleness fix — cell toggles don't broadcast). Gate `--selftest-stepclip` (create + grid
++ born-audible + toggle + undo + UAF-regression). Full record →
+[devlog/wave-20-step-clips.md](devlog/wave-20-step-clips.md).
 Shipped (W19 — frontier Wave 8): **Session master strip in the corner** — the bottom-right sceneColW×mixerBandH
 corner (previously the empty space where the scene column dangled below the pad viewport, the W08 deferred
 finding) now holds a compact **MASTER** strip (accent label + horizontal peak meter + horizontal dB fader driving
@@ -451,10 +464,21 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    `--selftest-peakhold` (floor 34→36). **Built + gated (36/36 PASS) + adversarially QC'd** (4 dimensions: 3
    clean + 1 fixed — a vacuous `clipCleared` gate leg, now driving the real `clearClipLatch` predicate) —
    commit/push status in the top block.
-   **▶ NEXT: frontier Wave 9 — Live modulation** (plugin-param modifiers / LFO): a new header-only
-   `src/engine/ModifierHelpers.h` over the engine's unit-tested `ModifierList` seam + a small "Modulate" UI
-   affordance (reusing the MIDI-learn param picker) + `--selftest-modifier`; no ProjectSession touch. Then Wave 10
-   (Step Clips) closes the program. Full ordered program + the critic's corrections in
+   **✅ DONE: frontier Wave 10 — Step Clips (W20), the CAPSTONE** — a first-class in-app drum step-sequencer clip
+   type. New `ProjectSession::createStepClipInSlot` seam (the StepClip ctor auto-builds the 8×16 GM-drum grid;
+   born-audible + born-looping-in-slot; meter-derived length), a net-new `StepGridView` (`src/ui/stepclip/`, a
+   16×8 drag-to-toggle immediate-mode grid holding a `StepClip::Ptr`), the `BottomMode::StepGrid` drawer routing
+   (the `isMidi()==false` gotcha defeated), a "New Step Clip" empty-slot action, and the `--selftest-stepclip`
+   gate (floor 36→37) + an 11th `--screenshot` state. **Built + gated (37/37 PASS) + 4-dim QC — 3 real defects
+   caught + fixed** (non-4/4 length, a raw-pointer UAF, undo-staleness). **Frontier Wave 9 (LFO) SKIPPED** —
+   recipe preserved in `docs/wave-9-lfo-recipe.local.md`.
+   **▶ NEXT: the frontier program is COMPLETE bar Wave 9.** Options: (a) pick up **frontier Wave 9 — Live
+   modulation** (plugin-param LFO modifiers; header-only `src/engine/ModifierHelpers.h` over the engine's
+   unit-tested `ModifierList` + a "Modulate" affordance + `--selftest-modifier` — the frozen recipe is ready in
+   `docs/wave-9-lfo-recipe.local.md`); (b) the documented **Step Clips follow-up** — a drum SAMPLER instrument
+   (v1's 4OSC gives 8 pitches, not drum timbres) so the grid sounds like real drums; (c) the standing
+   **`FourOscPlugin` redo-wipe engine defect** (a maintainer call — vendored engine patch); or (d) a new
+   direction from the maintainer. Full ordered program + the critic's corrections in
    `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render
    audibility leg for `--selftest-capture` (parked, same class as the W09/W10 render-leg follow-up); the
    reseal heuristic's dependency on `LaunchHandle::nudge`/`setLooping`/`playSynced` staying uncalled (see the
@@ -540,6 +564,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-scenesend # whole-scene send: shared-start alignment across filled-slot tracks + atomic undo (W18) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sessionmaster # Session master-corner strip: fader tracks master volume (W19) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-peakhold # PeakMeter peak-hold + sticky clip-latch ballistics (pure) (W19) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-stepclip # Step Clip: create + auto-grid + born-audible + cell-toggle + undo + UAF-regression (W20) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -800,7 +825,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/wave-19-session-mixer-polish.md](devlog/wave-19-session-mixer-polish.md) — **W19: frontier Wave 8 — Session mixer polish (master corner + peak-hold) (this session)**.
+- [devlog/wave-20-step-clips.md](devlog/wave-20-step-clips.md) — **W20: frontier Wave 10 — Step Clips (the drum-grid clip type, the capstone) (this session)**.
+- [devlog/wave-19-session-mixer-polish.md](devlog/wave-19-session-mixer-polish.md) — **W19: frontier Wave 8 — Session mixer polish (master corner + peak-hold)**.
 - [devlog/wave-18-scene-send-loop.md](devlog/wave-18-scene-send-loop.md) — **W18: frontier Wave 7 fast-follows — whole-scene-send + send-as-loop (completes Wave 7)**.
 - [devlog/wave-17-performance-capture.md](devlog/wave-17-performance-capture.md) — **W17: frontier Wave 7 capture core — performance recording**.
 - [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD**.

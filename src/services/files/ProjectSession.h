@@ -123,6 +123,21 @@ public:
         Returns the new clip, or {} if there is no edit / the slot could not be resolved. */
     te::MidiClip::Ptr createMidiClipInSlot (int trackIndex, int sceneIndex, const juce::String& name);
 
+    /** Creates an empty, born-audible STEP clip (drum step-sequencer) in the slot at (trackIndex,
+        sceneIndex) — Wave 10. Clones createMidiClipInSlot but inserts a step clip via the GENERIC
+        free te::insertNewClip(owner, TrackItem::Type::step, name, range) (there is no step-specific
+        inserter). The StepClip constructor auto-builds its default grid (8 GM-drum channels + a
+        16-step pattern in 4/4), so the seam builds nothing itself; it just ensures the track's
+        default 4OSC (born audible — v1 gives 8 distinct PITCHES; a drum sampler for real drum timbres
+        is a follow-up) and markAsChanged. The clip is inserted at a PATTERN-LENGTH range (one bar =
+        the time-sig numerator in beats, derived from the meter — NOT a hardcoded 4, so it's correct in
+        3/4, 5/4, etc.), not the MIDI path's fixed 16 beats: the ClipOwner slot-insert arm sets the
+        launcher loop to the inserted clip length, so a mismatched length would loop with silent bars or
+        truncate steps. A step clip in a slot is born looping the full length (the desired launcher-drum
+        behaviour — no one-shot dance). Returns the new StepClip, or {} if there is no edit / the slot
+        could not be resolved. */
+    te::StepClip::Ptr createStepClipInSlot (int trackIndex, int sceneIndex, const juce::String& name);
+
     /** Imports `file` as a wave clip into the slot at (trackIndex, sceneIndex), replacing any
         existing clip in that slot. Guards portability: ensures the edit file exists on disk
         (calls save() first if not) so the source serialises relative (Sf), then markAsChanged.

@@ -60,6 +60,7 @@ target_sources(Forge PRIVATE
     src/ui/session/SessionMixerStrip.cpp
     src/ui/session/SessionMasterStrip.cpp
     src/ui/session/SessionView.cpp
+    src/ui/stepclip/StepGridView.cpp
     src/ui/plugins/PluginWindow.cpp
     src/ui/popout/PopoutWindow.cpp
     src/ui/export/ExportProgress.cpp

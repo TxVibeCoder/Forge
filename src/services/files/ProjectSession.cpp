@@ -980,6 +980,65 @@ te::MidiClip::Ptr ProjectSession::createMidiClipInSlot (int trackIndex, int scen
     return clip;
 }
 
+te::StepClip::Ptr ProjectSession::createStepClipInSlot (int trackIndex, int sceneIndex, const juce::String& name)
+{
+    if (edit == nullptr || trackIndex < 0 || sceneIndex < 0)
+        return {};
+
+    // Ensure the track + grid row exist (mutating path — may grow tracks/scenes, R2). Mirrors
+    // createMidiClipInSlot exactly up to the insert.
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create or access track at index " + juce::String (trackIndex));
+        return {};
+    }
+
+    ensureScenes (sceneIndex + 1);
+    track->getClipSlotList().ensureNumberOfSlots (sceneIndex + 1);
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+
+    if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("Clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " could not be resolved after grid growth");
+        return {};
+    }
+
+    // A fresh StepClip's default pattern is ONE BAR: numNotes = getBeatsPerBar()*4 steps x 0.25 beat =
+    // getBeatsPerBar() beats — i.e. the time-sig numerator (16 steps / 4 beats in 4/4, 12 steps / 3 beats
+    // in 3/4). Insert at EXACTLY that length, NOT the MIDI path's fixed 16 beats: the ClipOwner slot-insert
+    // arm sets the launcher LOOP to the inserted clip length (tracktion_ClipOwner.cpp — the StepClip branch:
+    // setLoopRangeBeats({0, getLengthInBeats()})), so a longer clip would loop with silent bars after the
+    // pattern and a shorter one would truncate steps. Derive the length from the meter (getTimeSigAt
+    // numerator) so it's correct in ANY time signature, not just 4/4 (QC-caught). Slot clips start at beat 0.
+    const int  beatsPerBar = juce::jmax (1, edit->tempoSequence.getTimeSigAt (te::BeatPosition()).numerator.get());
+    const auto startTime = edit->tempoSequence.toTime (te::BeatPosition());
+    const auto endTime   = edit->tempoSequence.toTime (te::BeatPosition() + te::BeatDuration::fromBeats ((double) beatsPerBar));
+
+    // No step-specific free inserter exists (unlike insertMIDIClip) — use the GENERIC free
+    // insertNewClip(ClipOwner&, TrackItem::Type::step, name, range), which returns a raw Clip*. The
+    // StepClip ctor auto-builds the 8-GM-drum-channel x 16-step grid; we build nothing. The slot
+    // insert path (tracktion_ClipOwner.cpp) gives a StepClip a full-length loop = the desired launcher
+    // drum behaviour (no one-shot dance, no auto-tempo trap — that's AudioClipBase-only).
+    auto* rawClip = te::insertNewClip (*slot, te::TrackItem::Type::step,
+                                       name, te::TimeRange (startTime, endTime));
+    te::StepClip::Ptr clip = dynamic_cast<te::StepClip*> (rawClip);
+
+    if (clip != nullptr)
+    {
+        PluginHost::ensureDefaultInstrument (*track);   // born audible — default 4OSC at chain head
+        edit->markAsChanged();                          // user mutation -> persist (Sf)
+    }
+    else
+    {
+        FORGE_LOG_ERROR ("Failed to insert step clip into slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex));
+    }
+
+    return clip;
+}
+
 te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int sceneIndex, const juce::File& file)
 {
     if (edit == nullptr || trackIndex < 0 || sceneIndex < 0 || ! file.existsAsFile())

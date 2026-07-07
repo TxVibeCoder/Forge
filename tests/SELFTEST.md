@@ -839,6 +839,32 @@ The acceptance gate for the **peak-hold line + sticky clip latch** — a FULLY P
 > / `clipClearedWhenEnabled` drive the REAL `forge::meter::clearClipLatch` predicate that `PeakMeter::mouseDown`
 > routes through (a QC fix — the earlier `clipCleared` leg was a vacuous field-write assertion).
 
+## `Forge --selftest-stepclip` (Step Clip drum-grid seam, W20 / frontier Wave 10)
+
+The acceptance gate for **Step Clips** (`ProjectSession::createStepClipInSlot` + the engine's `StepClip`). Creates
+a step clip in slot (0,0) and proves the whole chain headlessly. Synchronous. The StepClip constructor
+auto-builds the default grid (8 GM-drum channels × a 16-step pattern in 4/4), so the seam inserts + ensures the
+track's default 4OSC and nothing else.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clipCreated` | `createStepClipInSlot` returned a `StepClip` | 1 |
+| `numChannels` / `channelsOk` | the ctor auto-built 8 GM-drum channels | 8 / 1 |
+| `numSteps` / `stepsOk` | pattern[0] has 16 steps (`getBeatsPerBar()*4` in 4/4) | 16 / 1 |
+| `instrumentOk` | the seam's `ensureDefaultInstrument` put a synth on the track (born-audible) | 1 |
+| `noteOnsWhenOff` / `midiEmptyWhenOff` | a fresh clip (all cells off) generates NO MIDI note-ons | 0 / 1 |
+| `cellToggleOn` | `setCell(0,0,0,true)` → `getCell` true | 1 |
+| `noteOnsWhenOn` / `midiWhenOn` | with a cell on, `generateMidiSequence` emits note-ons (the born-audible link) | >0 / 1 |
+| `cellToggleOff` | `setCell(0,0,0,false)` → `getCell` false (round-trips) | 1 |
+| `undoRevertsCell` | a cell toggle in a fresh transaction reverts on `ed->undo()` (content-level, per the FourOsc redo-wipe gotcha) | 1 |
+| `stepGridSurvivesDelete` | UAF regression: a `StepGridView` holds the clip as a refcounted `Ptr`, so deleting the slot clip while bound leaves it alive-but-parentless (readable `state`, invalid parent) — a raw pointer would dangle | 1 |
+
+> `-stepclip` is collision-free (no substring overlap) — placed before the bare `--selftest` in both ladders;
+> verify `mode=stepclip`. **Floor is now 37 gates.** The 16×8 drag-to-toggle grid UI (`StepGridView`) + the
+> `BottomMode::StepGrid` drawer routing (the `isMidi()==false` gotcha — a StepClip is routed by an explicit
+> `dynamic_cast<te::StepClip*>` before the MidiClip cast) are proved by `--screenshot` + adversarial QC, not by a
+> gate. v1's 4OSC gives 8 distinct PITCHES; a drum sampler for real drum timbres is a documented follow-up.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC
@@ -852,6 +878,7 @@ PNG in `%TEMP%` via `createComponentSnapshot`, so the UI can be inspected withou
 | `forge_shot_arrange.png` / `forge_shot_mix.png` | the Arrange timeline / Mixer |
 | `forge_shot_session_top.png` / `forge_shot_session_scrolled.png` | **vertical-scroll proof** — the grid at a short (1040×360) window, snapped at the top then scrolled to the bottom. Comparing them confirms all 16 scene rows are reachable (not clipped), pads stay ~46 px (no stretch), and the pinned scene column stays aligned with the pads while scrolling. |
 | `forge_shot_session_scenes.png` | **dynamic scene-count proof (W07)** — the demo grid grown to **20 scenes** via `ensureScenes`, scrolled to the bottom: rows 16–20 render, stay row-aligned with the pinned scene column (the `rowBand` equal-height invariant — a QC-fixed drift), and scroll. |
+| `forge_shot_session_stepgrid.png` | **Step Grid drawer proof (W20)** — a step clip created + populated with a drum pattern (kick on the beats, snare on 2 & 4, hat on eighths), opened in the `BottomMode::StepGrid` drawer: the 16×8 grid paints with the 8 GM-drum lane names in the gutter, active cells in `playGreen`, beat grouping every 4 steps. Proves the drag-to-toggle grid renders + a StepClip routes to the StepGrid drawer (the `isMidi()==false` gotcha). |
 
 > Verified 2026-06-30: `session_scrolled` shows scenes 10–16 with the scene column aligned to the pads,
 > confirming the Session-grid vertical scroll. This is the headless stand-in for the one check that still

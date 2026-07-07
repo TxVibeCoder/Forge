@@ -517,7 +517,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
            idModeTrigger = 300, idModeGate, idModeToggle,
            idLaunchQInherit = 400, idLaunchQBase = 401 };   // W2: 401.. = one per LaunchQType (enum order)
-    enum { idDuplicate = 50, idMoveToNext, idSendArrangeLoop };   // W3/Wave-7 structural slot ops (9..99 gap)
+    enum { idDuplicate = 50, idMoveToNext, idSendArrangeLoop, idNewStep };   // W3/Wave-7/Wave-10 slot ops (9..99 gap)
 
     // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
     // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
@@ -595,6 +595,11 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idStopRecord, "Stop recording");
     else if (! filled && trackMidiArmed)
         menu.addItem (idRecordSlot, "Record into slot");
+
+    // Wave 10: an empty slot can spawn a born-audible STEP clip (drum grid). Offered on any empty slot
+    // (createStepClipInSlot ensures the track + a default 4OSC); opens in the StepGrid drawer.
+    if (! filled)
+        menu.addItem (idNewStep, "New Step Clip");
 
     menu.addItem (idImport, "Import audio...");
 
@@ -688,6 +693,19 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                     // is untouched, so no grid rebuild).
                                     if (safeThis->onSendToArrangement != nullptr)
                                         safeThis->onSendToArrangement (trackIdx, sceneIdx, result == idSendArrangeLoop);
+                                    break;
+                                case idNewStep:
+                                    // Wave 10: create a born-audible step clip in this empty slot; the
+                                    // occupancy changed, so rebuild() (mirrors the MIDI-create path). The
+                                    // shell opens the StepGrid drawer via onStepClipCreated.
+                                    if (auto sc = safeThis->session.createStepClipInSlot (trackIdx, sceneIdx, "STEP"))
+                                    {
+                                        if (safeThis->onStepClipCreated != nullptr)
+                                            safeThis->onStepClipCreated (sc);
+                                        if (safeThis->onEditMutated != nullptr)
+                                            safeThis->onEditMutated();
+                                        safeThis->rebuild();
+                                    }
                                     break;
                                 case idRecordSlot:
                                     if (safeThis->onSlotRecord != nullptr)

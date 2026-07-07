@@ -62,9 +62,10 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-SIX gates as of W19; W19 adds TWO new gates,
-  `--selftest-sessionmaster` (the Session master-corner strip) and `--selftest-peakhold` (the PeakMeter
-  peak-hold + clip-latch ballistics), for frontier Wave 8's Session mixer polish):
+- **Selftest floor** (must pass after any change — THIRTY-SEVEN gates as of W20; W20 adds ONE new gate,
+  `--selftest-stepclip` (the Step Clip drum-grid seam: create + auto-built grid + born-audible + cell-toggle +
+  undo), for frontier Wave 10's Step Clips. Frontier Wave 9 (LFO modifiers) was SKIPPED — see the deferred
+  recipe in `docs/wave-9-lfo-recipe.local.md`):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
@@ -73,12 +74,14 @@ conflict, surface it.
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
   `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
-  `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`;
+  `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
+  `--selftest-stepclip`;
   (⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
   `-scenedelete`/`-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
-  `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
-  `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
+  `--screenshot` renders the 11-state matrix (incl. the window-level `shell_window`, the >16-scene
+  `session_scenes`, and the W20 `session_stepgrid` drawer) to `%TEMP%\forge_shot_*.png`. Full contract:
+  `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
 - **In a multi-CLI wave, CLIs DO NOT build.** One build dir + a device lock means concurrent builds collide.
   Each CLI edits + self-reviews for compile-safety; the **orchestrator** owns `main.cpp` / `CMakeLists.txt` / the

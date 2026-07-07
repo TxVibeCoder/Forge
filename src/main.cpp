@@ -37,6 +37,7 @@
 #include "ui/browser/BrowserView.h"
 #include "ui/detail/DetailView.h"
 #include "ui/pianoroll/PianoRollView.h"
+#include "ui/stepclip/StepGridView.h"
 #include "ui/session/SessionView.h"
 #include "ui/session/SessionMixerStrip.h"
 #include "ui/session/SessionMasterStrip.h"
@@ -55,9 +56,9 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip };
 enum class ViewMode { Session, Arrange, Mixer };
-enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
+enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
 
 //==============================================================================
@@ -250,6 +251,7 @@ public:
 
         addAndMakeVisible (detailView);
         addAndMakeVisible (pianoRoll);
+        addChildComponent (stepGrid);   // W10: shown only when bottomMode == StepGrid (starts hidden)
         addAndMakeVisible (browserResizer);
         addAndMakeVisible (drawerResizer);
         addAndMakeVisible (statusLabel);
@@ -340,7 +342,12 @@ public:
         // fills the drawer even when it is already open. Edits in either are persisted.
         arrangeView.onClipSelected = [this] (te::Clip* c)
         {
-            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+            if (auto* sc = dynamic_cast<te::StepClip*> (c))   // W10: route step clips before the MidiClip cast
+            {
+                stepGrid.setStepClip (sc);
+                bottomMode = BottomMode::StepGrid;
+            }
+            else if (auto* mc = dynamic_cast<te::MidiClip*> (c))
             {
                 pianoRoll.setMidiClip (mc);
                 bottomMode = BottomMode::PianoRoll;
@@ -377,6 +384,7 @@ public:
 
         detailView.onEditMutated = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
         pianoRoll.onEditMutated  = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
+        stepGrid.onEditMutated   = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };   // W10
 
         // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
         // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
@@ -509,7 +517,15 @@ public:
 
         sessionView.onSlotSelected = [this] (te::Clip* c)
         {
-            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+            // W10: a StepClip is a sibling Clip subclass — isMidi() is false, so it must be routed by
+            // an explicit dynamic_cast BEFORE the MidiClip cast (which would return null and fall through
+            // to the DetailView inspector — the documented drawer gotcha).
+            if (auto* sc = dynamic_cast<te::StepClip*> (c))
+            {
+                stepGrid.setStepClip (sc);
+                bottomMode = BottomMode::StepGrid;
+            }
+            else if (auto* mc = dynamic_cast<te::MidiClip*> (c))
             {
                 pianoRoll.setMidiClip (mc);
                 bottomMode = BottomMode::PianoRoll;
@@ -533,6 +549,18 @@ public:
             {
                 pianoRoll.setMidiClip (clip.get());
                 bottomMode = BottomMode::PianoRoll;
+                revealDrawer();
+                resized();
+            }
+        };
+
+        // W10: a freshly-created step clip opens in the StepGrid drawer (mirrors onMidiClipCreated).
+        sessionView.onStepClipCreated = [this] (te::StepClip::Ptr clip)
+        {
+            if (clip != nullptr)
+            {
+                stepGrid.setStepClip (clip.get());
+                bottomMode = BottomMode::StepGrid;
                 revealDrawer();
                 resized();
             }
@@ -854,6 +882,11 @@ public:
             // Wave 8: the PeakMeter peak-hold + clip-latch pure ballistics. Fully pure — no edit/engine.
             MessageManager::callAsync ([this] { runPeakHoldSelftest(); });
         }
+        else if (mode == SelfTest::stepclip)
+        {
+            // Wave 10: the Step Clip (drum-grid) seam — create + grid + born-audible + toggle + undo.
+            MessageManager::callAsync ([this] { runStepClipSelftest(); });
+        }
         else if (mode == SelfTest::demo)
         {
             // Wave 4 (W09): the audible-demo gate — instrument presets applied + notes seeded. Synchronous.
@@ -1027,9 +1060,13 @@ public:
         // (a setVisible(false) alone would blank the popout). While the roll is out, the drawer falls
         // back to the DetailView; bottomMode stays PianoRoll so the roll returns there on restore.
         const bool rollTornOff   = pianoRollPopout != nullptr;
-        const bool showDetail    = drawerVisible && (bottomMode == BottomMode::Detail || rollTornOff);
+        const bool showStepGrid  = drawerVisible && bottomMode == BottomMode::StepGrid;   // W10 (not tearable)
         const bool showPianoRoll = drawerVisible && bottomMode == BottomMode::PianoRoll && ! rollTornOff;
+        // Detail is the fallback: bottomMode==Detail, OR the piano roll is torn off (its drawer slot falls
+        // back to Detail). StepGrid never falls back to Detail (it has no popout).
+        const bool showDetail    = drawerVisible && ! showStepGrid && ! showPianoRoll;
         detailView.setVisible (showDetail);
+        stepGrid.setVisible (showStepGrid);
         if (! rollTornOff)
             pianoRoll.setVisible (showPianoRoll);
         drawerResizer.setVisible (drawerVisible && drawerSlide < 0);   // inert while sliding (QC)
@@ -1038,8 +1075,9 @@ public:
             const int h = (drawerSlide >= 0) ? drawerSlide
                                              : jlimit (drawerMinHeight, drawerMaxHeight, drawerHeight);
             const auto drawerArea = centre.removeFromBottom (h);
-            if (showPianoRoll) pianoRoll.setBounds (drawerArea);
-            else               detailView.setBounds (drawerArea);
+            if      (showStepGrid)  stepGrid.setBounds (drawerArea);
+            else if (showPianoRoll) pianoRoll.setBounds (drawerArea);
+            else                    detailView.setBounds (drawerArea);
             drawerResizer.setBounds (centre.removeFromBottom (resizerThickness));
         }
 
@@ -1199,6 +1237,7 @@ private:
     DetailView  detailView;     // bottom drawer: audio-clip inspector
     ChannelTray channelTray { session };   // left sidebar Channel tab: selected-track strip (W04a)
     PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
+    StepGridView  stepGrid;     // bottom drawer: step-clip (drum-grid) editor (W10)
 
     // W04b tear-off windows. Declared AFTER mixerView/pianoRoll (reverse destruction kills the
     // windows before their content even if the dtor-body resets are ever removed) and reset in
@@ -1677,6 +1716,17 @@ private:
                 resized();
             }
 
+        // W10: the same parent-loss guard for the step-grid drawer. StepGridView is a ChangeListener on
+        // the StepClip (so external edits repaint), but a DELETE detaches the state tree without notifying
+        // — unbind so no toggle writes to a dead tree. (setStepClip(nullptr) also removes the listener.)
+        if (auto* sc = stepGrid.getStepClip())
+            if (! sc->state.getParent().isValid())
+            {
+                stepGrid.setStepClip (nullptr);
+                bottomMode = BottomMode::Detail;
+                resized();
+            }
+
         if (auto* c = detailView.getClip())
             if (! c->state.getParent().isValid())
                 detailView.setClip (nullptr);
@@ -1740,6 +1790,14 @@ private:
         // A redo-of-delete (or any structural undo/redo) can leave the drawer holding a detached clip —
         // reconcile it (now also covers the audio DetailView, not just the piano-roll).
         reconcileDrawerClip();
+
+        // W20: the StepGrid drawer refreshes via the StepClip ChangeBroadcaster — but a CELL toggle does
+        // NOT broadcast (only a sequence/repeatSequence change does; a cell write takes the Selectable
+        // changed() path), so an undo/redo of a cell toggle would leave the grid painting STALE cells while
+        // the data + audio are correct. StepGridView is immediate-mode (re-resolves everything in paint),
+        // so a plain repaint on a still-bound live clip fully resyncs it (mirrors the pianoRoll refresh).
+        if (stepGrid.getStepClip() != nullptr)
+            stepGrid.repaint();
 
         statusLabel.setText (isUndo ? "Undo" : "Redo", dontSendNotification);
         statusHoldUntilMs = Time::getMillisecondCounter() + 1500;
@@ -5704,6 +5762,126 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-stepclip (W10): the Step Clip (drum-grid) seam. Creates a step clip in a slot via
+    // ProjectSession::createStepClipInSlot, then proves: the ctor auto-built the default grid (8 channels
+    // x 16 steps in 4/4); the seam's ensureDefaultInstrument made the track born-audible (a synth on the
+    // chain); StepClip::setCell/getCell toggles a cell; the clip GENERATES MIDI note-ons when a cell is on
+    // and NONE when all cells are off (the born-audible link — a launched clip would drive the instrument);
+    // and a cell toggle is undoable (content-level assertion, per the FourOsc redo-wipe gotcha).
+    void runStepClipSelftest()
+    {
+        bool clipCreated = false, channelsOk = false, stepsOk = false, instrumentOk = false,
+             cellToggleOn = false, cellToggleOff = false, midiWhenOn = false, midiEmptyWhenOff = false,
+             undoRevertsCell = false, stepGridSurvivesDelete = false;
+        int  numChannels = -1, numSteps = -1, noteOnsWhenOn = -1, noteOnsWhenOff = -1;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            auto stepClip = session.createStepClipInSlot (0, 0, "STEP");
+            clipCreated = stepClip != nullptr;
+
+            if (stepClip != nullptr)
+            {
+                numChannels = stepClip->getChannels().size();
+                channelsOk  = numChannels == (int) te::StepClip::defaultNumChannels;   // 8 GM-drum channels
+                numSteps    = stepClip->getPattern (0).getNumNotes();
+                stepsOk     = numSteps == 16;                                           // getBeatsPerBar()*4 in 4/4
+
+                // Born-audible: createStepClipInSlot's ensureDefaultInstrument gave the track a synth
+                // (mirror that seam's own probe: a synth or MIDI-input plugin on the chain).
+                auto tracks = te::getAudioTracks (*ed);
+                if (! tracks.isEmpty())
+                    for (auto* p : tracks[0]->pluginList)
+                        if (p != nullptr && (p->isSynth() || p->takesMidiInput())) { instrumentOk = true; break; }
+
+                const auto countNoteOns = [&stepClip]() -> int
+                {
+                    juce::MidiMessageSequence seq;
+                    stepClip->generateMidiSequence (seq);
+                    int n = 0;
+                    for (int i = 0; i < seq.getNumEvents(); ++i)
+                        if (seq.getEventPointer (i)->message.isNoteOn()) ++n;
+                    return n;
+                };
+
+                // A fresh step clip has all cells OFF -> the generated sequence has NO note-ons.
+                noteOnsWhenOff   = countNoteOns();
+                midiEmptyWhenOff = noteOnsWhenOff == 0;
+
+                // Toggle a cell ON -> getCell true, and the clip now generates note-ons (born-audible link).
+                stepClip->setCell (0, 0, 0, true);
+                cellToggleOn  = stepClip->getCell (0, 0, 0);
+                noteOnsWhenOn = countNoteOns();
+                midiWhenOn    = noteOnsWhenOn > 0;
+
+                // Toggle it back OFF -> getCell false (round-trips).
+                stepClip->setCell (0, 0, 0, false);
+                cellToggleOff = ! stepClip->getCell (0, 0, 0);
+
+                // Undo: toggle a DISTINCT cell in a fresh transaction, undo, assert it reverts. Content-level
+                // (NOT canUndo/canRedo — the FourOsc mod-matrix flush makes redo-availability unreliable).
+                um.beginNewTransaction();
+                stepClip->setCell (0, 1, 4, true);
+                const bool wasOn = stepClip->getCell (0, 1, 4);
+                ed->undo();
+                undoRevertsCell = wasOn && ! stepClip->getCell (0, 1, 4);
+
+                // UAF regression (QC-caught): StepGridView holds the clip as a refcounted Ptr, so deleting
+                // the slot clip while the grid is bound leaves it alive-but-PARENTLESS — the shell's
+                // reconcileDrawerClip then reads clip->state safely. With a RAW pointer this deref would be
+                // a use-after-free. Bind a grid to a SECOND clip, drop every other ref, delete the slot, and
+                // assert the grid's held clip is still readable + now parentless (only the grid's Ptr keeps
+                // it alive). PianoRollView survives a delete the same way.
+                if (auto sc2 = session.createStepClipInSlot (0, 2, "STEP2"))
+                {
+                    StepGridView grid;
+                    grid.setStepClip (sc2.get());
+                    sc2 = nullptr;                    // drop the gate's ref; only the slot + the grid's Ptr remain
+                    session.clearSlot (0, 2);         // drop the slot's ref -> a RAW grid pointer would dangle here
+                    auto* held = grid.getStepClip();
+                    stepGridSurvivesDelete = held != nullptr && ! held->state.getParent().isValid();
+                    grid.setStepClip (nullptr);       // release cleanly (deregisters the ChangeListener)
+                }
+            }
+        }
+
+        const bool pass = clipCreated && channelsOk && stepsOk && instrumentOk && cellToggleOn && cellToggleOff
+                          && midiWhenOn && midiEmptyWhenOff && undoRevertsCell && stepGridSurvivesDelete;
+
+        String report;
+        report << "mode=stepclip" << newLine
+               << "clipCreated="      << (clipCreated ? 1 : 0) << newLine
+               << "numChannels="      << numChannels << newLine
+               << "channelsOk="       << (channelsOk ? 1 : 0) << newLine
+               << "numSteps="         << numSteps << newLine
+               << "stepsOk="          << (stepsOk ? 1 : 0) << newLine
+               << "instrumentOk="     << (instrumentOk ? 1 : 0) << newLine
+               << "cellToggleOn="     << (cellToggleOn ? 1 : 0) << newLine
+               << "cellToggleOff="    << (cellToggleOff ? 1 : 0) << newLine
+               << "noteOnsWhenOff="   << noteOnsWhenOff << newLine
+               << "midiEmptyWhenOff=" << (midiEmptyWhenOff ? 1 : 0) << newLine
+               << "noteOnsWhenOn="    << noteOnsWhenOn << newLine
+               << "midiWhenOn="       << (midiWhenOn ? 1 : 0) << newLine
+               << "undoRevertsCell="  << (undoRevertsCell ? 1 : 0) << newLine
+               << "stepGridSurvivesDelete=" << (stepGridSurvivesDelete ? 1 : 0) << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write step-clip selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Step-clip selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -6005,6 +6183,26 @@ private:
         sessionView.getViewport().setViewPositionProportionately (0.0, 1.0);  // bottom: rows 16-19 in view
         captureView ("session_scenes");
 
+        // W10: the Step Grid drawer — create a step clip, lay down a recognizable drum pattern (kick on
+        // the beats, snare on 2 & 4, hat on eighths), open it in the StepGrid drawer, and snap. Proves the
+        // 16x8 drag-to-toggle grid PAINTS and that a StepClip routes to BottomMode::StepGrid (the isMidi
+        // gotcha) — the one thing the model gate (--selftest-stepclip) can't show.
+        setSize (1280, 800);                                 // restore a normal window after the short-window states
+        if (auto sc = session.createStepClipInSlot (0, 10, "STEP"))
+        {
+            for (int step = 0; step < 16; step += 4) sc->setCell (0, 0, step, true);   // ch0 (kick) on 0,4,8,12
+            sc->setCell (0, 1, 4, true); sc->setCell (0, 1, 12, true);                 // ch1 (snare) on 4,12
+            for (int step = 0; step < 16; step += 2) sc->setCell (0, 2, step, true);   // ch2 (hat) on eighths
+            stepGrid.setStepClip (sc.get());
+            bottomMode    = BottomMode::StepGrid;
+            drawerVisible = true;
+            drawerSlide   = -1;
+        }
+        sessionView.rebuild();
+        sessionView.getViewport().setViewPosition (0, 0);
+        setViewMode (ViewMode::Session);
+        captureView ("session_stepgrid");
+
         FORGE_LOG_INFO ("Screenshots written to " + File::getSpecialLocation (File::tempDirectory).getFullPathName());
 
         if (auto* t = session.getTransport())
@@ -6029,6 +6227,8 @@ private:
         detailView.setClip (nullptr);
         channelTray.setTrack (nullptr);    // the outgoing Edit's tracks are about to die (W04a)
         pianoRoll.setMidiClip (nullptr);   // drop any MIDI clip held from the outgoing Edit
+        stepGrid.setStepClip (nullptr);    // W10: drop the step clip + DEREGISTER as its ChangeListener
+                                           // before the outgoing Edit's clips are freed (else dangling)
         bottomMode = BottomMode::Detail;
         controlBar.setEdit (nullptr);
         arrangeView.setEdit (nullptr);
@@ -6704,6 +6904,7 @@ public:
                             : commandLine.contains ("--selftest-sessionmixer")   ? "selftest-sessionmixer"   // before -session (substring! W08)
                             : commandLine.contains ("--selftest-sessionmaster")  ? "selftest-sessionmaster"  // before -session (substring! W8mixer-polish)
                             : commandLine.contains ("--selftest-peakhold")       ? "selftest-peakhold"       // before bare --selftest (collision-free, W8)
+                            : commandLine.contains ("--selftest-stepclip")       ? "selftest-stepclip"       // before bare --selftest (collision-free, W10)
                             : commandLine.contains ("--selftest-session")        ? "selftest-session"
                             : commandLine.contains ("--selftest-midilearn")      ? "selftest-midilearn"      // before -midi (substring)
                             : commandLine.contains ("--selftest-midiinput")      ? "selftest-midiinput"      // before -midi (substring)
@@ -6775,6 +6976,7 @@ public:
                         : commandLine.contains ("--selftest-sessionmixer")   ? SelfTest::sessionmixer   // before -session (substring! W08)
                         : commandLine.contains ("--selftest-sessionmaster")  ? SelfTest::sessionmaster  // before -session (substring! W8mixer-polish)
                         : commandLine.contains ("--selftest-peakhold")       ? SelfTest::peakhold       // before bare --selftest (collision-free, W8)
+                        : commandLine.contains ("--selftest-stepclip")       ? SelfTest::stepclip       // before bare --selftest (collision-free, W10)
                         : commandLine.contains ("--selftest-session")        ? SelfTest::session
                         : commandLine.contains ("--selftest-midilearn")      ? SelfTest::midilearn      // before -midi (substring)
                         : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)
