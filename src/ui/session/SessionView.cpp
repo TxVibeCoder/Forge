@@ -767,14 +767,18 @@ void SessionView::importAudioInto (int trackIdx, int sceneIdx)
 
 void SessionView::handleSlotFilesDropped (int trackIdx, int sceneIdx, const File& file)
 {
-    // W07 OS-external audio drop. importAudioIntoSlot is the ONE import path (identical to the
-    // file-chooser import and the right-click "Import audio..." item), so drop and menu-import
-    // behave identically. On success fire the create/import refresh callback (onEditMutated seals
-    // the undo transaction + fans the shell refresh) and rebuild() to show the new clip.
+    // W07 OS-external file drop. A .mid/.midi file imports as a MidiClip (importMidiIntoSlot); anything
+    // else routes to the ONE audio import path (importAudioIntoSlot — identical to the file-chooser + the
+    // right-click "Import audio..." item). On success fire onEditMutated (seals the undo transaction + fans
+    // the shell refresh) and rebuild() to show the new clip.
     if (edit == nullptr)
         return;
 
-    if (session.importAudioIntoSlot (trackIdx, sceneIdx, file))
+    const bool isMidi = file.hasFileExtension ("mid;midi");
+    const bool imported = isMidi ? (session.importMidiIntoSlot (trackIdx, sceneIdx, file) != nullptr)
+                                 : (session.importAudioIntoSlot (trackIdx, sceneIdx, file) != nullptr);
+
+    if (imported)
     {
         if (onEditMutated != nullptr)
             onEditMutated();
@@ -783,7 +787,8 @@ void SessionView::handleSlotFilesDropped (int trackIdx, int sceneIdx, const File
     }
     else
     {
-        FORGE_LOG_ERROR ("Failed to import dropped audio into slot (" + juce::String (trackIdx) + "," + juce::String (sceneIdx) + ")");
+        FORGE_LOG_ERROR ("Failed to import dropped " + juce::String (isMidi ? "MIDI" : "audio") + " file into slot ("
+                         + juce::String (trackIdx) + "," + juce::String (sceneIdx) + ")");
     }
 }
 

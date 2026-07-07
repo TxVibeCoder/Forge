@@ -676,11 +676,11 @@ void TrackLaneComponent::mouseDown (const MouseEvent& e)
 
 bool TrackLaneComponent::isInterestedInFileDrag (const StringArray& files)
 {
-    // Audio-only for v1 (the import seam is wave-only). Accept if ANY dragged file has an audio
-    // extension; a mixed drop is filtered again in filesDropped. soundFileExtensions is the engine's
-    // audio-only list (no MIDI). Cheap string test only — never touch the filesystem here.
+    // Accept an audio OR a .mid/.midi file (a mixed drop is filtered again in filesDropped; the shell
+    // dispatches audio -> importAudioFile, MIDI -> importMidiFile). soundFileExtensions is the engine's
+    // audio-only list. Cheap string test only — never touch the filesystem here.
     for (const auto& f : files)
-        if (File (f).hasFileExtension (te::soundFileExtensions))
+        if (File (f).hasFileExtension (te::soundFileExtensions) || File (f).hasFileExtension ("mid;midi"))
             return true;
 
     return false;
@@ -729,11 +729,12 @@ void TrackLaneComponent::filesDropped (const StringArray& files, int x, int)
     if (x < headerW)
         return;
 
-    // Re-filter to the FIRST accepted audio file (a slot/lane import takes one file, not a loop).
+    // Re-filter to the FIRST accepted file (audio or .mid/.midi). Bubble UP with the raw File; the shell
+    // dispatches by extension (importAudioFile vs importMidiFile).
     for (const auto& f : files)
     {
         const File file (f);
-        if (file.hasFileExtension (te::soundFileExtensions))
+        if (file.hasFileExtension (te::soundFileExtensions) || file.hasFileExtension ("mid;midi"))
         {
             if (onFilesDropped != nullptr)
                 onFilesDropped (*this, file, x - headerW, jmax (0, getWidth() - headerW));

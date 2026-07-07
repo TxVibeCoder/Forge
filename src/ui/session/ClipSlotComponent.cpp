@@ -101,9 +101,10 @@ void ClipSlotComponent::mouseDoubleClick (const MouseEvent& e)
 bool ClipSlotComponent::isInterestedInFileDrag (const StringArray& files)
 {
     // Cheap check only (no file opening, per the JUCE contract): accept if ANY dragged file has an
-    // audio extension. filesDropped re-filters and imports only the first accepted file.
+    // audio OR MIDI extension. filesDropped re-filters and imports only the first accepted file (audio ->
+    // importAudioIntoSlot, .mid/.midi -> importMidiIntoSlot; dispatched by the parent).
     for (const auto& f : files)
-        if (File (f).hasFileExtension (te::soundFileExtensions))
+        if (File (f).hasFileExtension (te::soundFileExtensions) || File (f).hasFileExtension ("mid;midi"))
             return true;
 
     return false;
@@ -134,12 +135,12 @@ void ClipSlotComponent::filesDropped (const StringArray& files, int, int)
     dragHover = false;
     repaint();
 
-    // Import the FIRST accepted audio file only (a slot holds one clip — no loop-replace). Re-filter
-    // (the drag may have carried a mix); bubble UP so the parent runs the ProjectSession import seam.
+    // Import the FIRST accepted file only (a slot holds one clip). Re-filter (the drag may have carried a
+    // mix); bubble UP so the parent dispatches audio vs MIDI to the right ProjectSession import seam.
     for (const auto& f : files)
     {
         const File file (f);
-        if (file.hasFileExtension (te::soundFileExtensions))
+        if (file.hasFileExtension (te::soundFileExtensions) || file.hasFileExtension ("mid;midi"))
         {
             if (onFilesDropped != nullptr)
                 onFilesDropped (file);

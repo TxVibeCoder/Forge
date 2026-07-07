@@ -839,6 +839,29 @@ The acceptance gate for the **peak-hold line + sticky clip latch** — a FULLY P
 > / `clipClearedWhenEnabled` drive the REAL `forge::meter::clearClipLatch` predicate that `PeakMeter::mouseDown`
 > routes through (a QC fix — the earlier `clipCleared` leg was a vacuous field-write assertion).
 
+## `Forge --selftest-midifile` (MIDI-file drag-and-drop import)
+
+The acceptance gate for **MIDI-file import** (`ProjectSession::importMidiIntoSlot` + `importMidiFile`, both over
+the engine's `te::createClipFromFile`). Writes a real 4-note `.mid` (960 ticks/quarter, notes on beats 0–3) to
+disk, then imports it BOTH into a Session slot and onto an Arrange lane at a 2.0s drop time. Synchronous. The
+engine reader is tempo-INDEPENDENT (ticks→beats), so notes land on file beats regardless of the edit tempo.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `wroteFile` | the test `.mid` was written to disk | 1 |
+| `slotImported` / `slotNoteCount` / `slotNotesOk` | slot import returns a MidiClip carrying all 4 notes | 1 / 4 / 1 |
+| `arrImported` / `arrNoteCount` / `arrNotesOk` | arrange import returns a MidiClip carrying all 4 notes | 1 / 4 / 1 |
+| `arrStartSecs` / `arrStartOk` | the arrange clip slid to the 2.0s drop point | ≈2.0 / 1 |
+| `instrumentOk` | the seam's `ensureDefaultInstrument` made the track born-audible (a synth) | 1 |
+| `emptyGuard` | a non-existent `.mid` path degrades to `{}` (the pre-guard) | 1 |
+| `notelessGuard` | an EXISTING but note-less `.mid` degrades to `{}` (the `createClipFromFile`-null branch — the real graceful-degradation path) | 1 |
+
+> `-midifile` CONTAINS `-midi` → placed **before** `--selftest-midi` (longest-first, alongside `-midilearn`/
+> `-midiinput`) in both ladders; verify `mode=midifile`. **Floor is now 38 gates.** The real UI drop path
+> (accept `mid;midi` in `isInterestedInFileDrag`; dispatch audio vs MIDI by extension in `handleSlotFilesDropped`
+> + the arrange `onFilesDropped`) is proved by adversarial QC, not by a gate. v1 imports only the FIRST
+> track/channel of a multi-track file (a documented limitation); the 4OSC gives pitches (a MIDI file is melodic).
+
 ## `Forge --selftest-stepclip` (Step Clip drum-grid seam, W20 / frontier Wave 10)
 
 The acceptance gate for **Step Clips** (`ProjectSession::createStepClipInSlot` + the engine's `StepClip`). Creates

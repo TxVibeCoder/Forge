@@ -1100,6 +1100,83 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioIntoSlot (int trackIndex, int 
     return clip;
 }
 
+//==============================================================================
+te::MidiClip::Ptr ProjectSession::importMidiIntoSlot (int trackIndex, int sceneIndex, const juce::File& file)
+{
+    if (edit == nullptr || trackIndex < 0 || sceneIndex < 0 || ! file.existsAsFile())
+        return {};
+
+    // Mutating path: ensure the track + grid row exist (mirrors importAudioIntoSlot / createMidiClipInSlot).
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create or access track at index " + juce::String (trackIndex));
+        return {};
+    }
+
+    ensureScenes (sceneIndex + 1);
+    track->getClipSlotList().ensureNumberOfSlots (sceneIndex + 1);
+
+    auto* slot = getClipSlot (trackIndex, sceneIndex);
+
+    if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("Clip slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " could not be resolved after grid growth");
+        return {};
+    }
+
+    // ClipSlot IS a te::ClipOwner, so the engine's createClipFromFile drops straight into it. It reads the
+    // .mid via the tempo-INDEPENDENT ticks->beats path (notes land on the right content-relative beats
+    // regardless of the edit tempo), sizes the clip to the next whole bar, and the slot-insert normalization
+    // gives it a full-length launcher loop. false = standard MIDI (no MPE / note-expression). Returns {} on
+    // an unreadable / empty / note-less file (all covered by the null guard). Only the FIRST track/channel
+    // is imported (documented v1 limit).
+    te::MidiClip::Ptr clip = te::createClipFromFile (file, *slot, false);
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("Import MIDI into slot: no importable notes in " + file.getFullPathName()
+                        + " (unreadable / empty / meta-only)");
+        return {};
+    }
+
+    PluginHost::ensureDefaultInstrument (*track);   // createClipFromFile adds NO instrument — born audible needs one
+    edit->markAsChanged();
+    return clip;
+}
+
+te::MidiClip::Ptr ProjectSession::importMidiFile (const juce::File& file, te::TimePosition start, int trackIndex)
+{
+    if (edit == nullptr || trackIndex < 0 || ! file.existsAsFile())
+        return {};
+
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("Failed to create or access track at index " + juce::String (trackIndex));
+        return {};
+    }
+
+    // AudioTrack IS a te::ClipOwner: createClipFromFile lands a NON-looping one-shot at [0, len] (tempo-
+    // independent beats); slide it to the drop position (notes are content-relative, so they move with the
+    // clip). keepLength=true preserves the imported span.
+    te::MidiClip::Ptr clip = te::createClipFromFile (file, *track, false);
+
+    if (clip == nullptr)
+    {
+        FORGE_LOG_WARN ("Import MIDI file: no importable notes in " + file.getFullPathName()
+                        + " (unreadable / empty / meta-only)");
+        return {};
+    }
+
+    clip->setStart (start, /*preserveSync*/ false, /*keepLength*/ true);
+    PluginHost::ensureDefaultInstrument (*track);
+    edit->markAsChanged();
+    return clip;
+}
+
 bool ProjectSession::clearSlot (int trackIndex, int sceneIndex)
 {
     if (edit == nullptr)

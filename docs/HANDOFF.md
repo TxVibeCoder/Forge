@@ -13,12 +13,22 @@
 > FIXED + re-verified. Committed locally — NOT YET PUSHED**, awaiting the maintainer's go-ahead.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). **W19 (`64bbb39`) and W20
-(this session) are committed LOCALLY on top of `30d343c`, NOT YET PUSHED.** Last build **clean** (MSVC Debug,
-0 warnings) · **all THIRTY-SEVEN selftests PASS** (W20 adds ONE new gate, `--selftest-stepclip`; floor
-**36 → 37**; plus an 11th `--screenshot` state `session_stepgrid`). ⚠ **History was rewritten in a prior session**
+**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). **W19 (`64bbb39`), W20, and
+the post-W20 MIDI-file-import feature (this session) are committed LOCALLY on top of `30d343c`, NOT YET PUSHED.**
+Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-EIGHT selftests PASS** (W20 added
+`--selftest-stepclip`; the MIDI-file-import feature added `--selftest-midifile`; floor **36 → 38**; plus an 11th
+`--screenshot` state `session_stepgrid`). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
 pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+Also landed (post-W20, a maintainer-requested feature — NOT a frontier wave): **MIDI-file drag-and-drop import**.
+Dragging a `.mid`/`.midi` from Explorer onto a Session slot creates a born-audible launcher MidiClip; onto an
+Arrange lane, a one-shot at the drop point. New `ProjectSession::importMidiIntoSlot` + `importMidiFile` seams over
+the engine's `te::createClipFromFile` (tempo-INDEPENDENT ticks→beats, so notes land on file beats regardless of
+edit tempo); the drop components accept `mid;midi` and the dispatch layer branches audio-vs-MIDI by extension.
+Gate `--selftest-midifile` (floor 37 → 38). A 2-dimension adversarial QC came back **clean** (no defects); one
+observation closed by adding a note-less-file gate leg. **Limitation (documented):** only the first track/channel
+of a multi-track file is imported (a multi-channel/multi-track split is a follow-up); the browser tree still
+filters `.mid` out, so browser double-click import is a separate small follow-up.
 Shipped (W20 — frontier Wave 10, Step Clips): a new `ProjectSession::createStepClipInSlot` seam (generic
 `te::insertNewClip(TrackItem::Type::step)` — the StepClip ctor auto-builds the 8-GM-drum-channel × 16-step grid;
 born-audible via `ensureDefaultInstrument`, born-looping-in-slot with no normalization footguns; length derived
@@ -540,6 +550,7 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midi    # MIDI-record-into-slot gate  → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midilearn # MIDI-learn CC→param bind gate → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midiinput # focused-Edit HW-routing gate → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-midifile # .mid/.midi import into slot + arrange (notes/position/born-audible/guards) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-controlsurface # virtual pad→launch + LED poll → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-lufs    # BS.1770-4 LUFS (buffer + worker-thread + abort legs) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-automation # volume-curve drives playback gate → PASS/FAIL

@@ -56,7 +56,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -420,8 +420,13 @@ public:
         // track-aware) and rebuild so the clip appears. Null-guarded — unwired it is a safe no-op.
         arrangeView.onFilesDropped = [this] (int trackIndex, const File& file, te::TimePosition start)
         {
-            if (session.importAudioFile (file, start, trackIndex) == nullptr)
-                FORGE_LOG_ERROR ("Failed to import dropped audio onto arrange track "
+            // A .mid/.midi file imports as a MidiClip (born-audible, tempo-independent beats); anything
+            // else routes to the audio importer. Both land on the dropped lane at the drop time.
+            const bool ok = file.hasFileExtension ("mid;midi")
+                                ? (session.importMidiFile (file, start, trackIndex) != nullptr)
+                                : (session.importAudioFile (file, start, trackIndex) != nullptr);
+            if (! ok)
+                FORGE_LOG_ERROR ("Failed to import dropped file onto arrange track "
                                  + juce::String (trackIndex) + ": " + file.getFullPathName());
             session.save();
             arrangeView.rebuild();
@@ -886,6 +891,11 @@ public:
         {
             // Wave 10: the Step Clip (drum-grid) seam — create + grid + born-audible + toggle + undo.
             MessageManager::callAsync ([this] { runStepClipSelftest(); });
+        }
+        else if (mode == SelfTest::midifile)
+        {
+            // MIDI-file drag-drop import — write a .mid, import into a slot + arrange, assert notes/position.
+            MessageManager::callAsync ([this] { runMidiFileSelftest(); });
         }
         else if (mode == SelfTest::demo)
         {
@@ -5882,6 +5892,121 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-midifile: MIDI-file drag-and-drop import. Writes a real 4-note .mid to disk, then imports
+    // it BOTH into a Session slot (importMidiIntoSlot) and onto an Arrange lane at a drop time
+    // (importMidiFile), asserting: the clip is created, the note count survives, the arrange clip lands at
+    // the drop position, the track is born-audible (a synth), and a non-existent file degrades to {}. The
+    // engine's createClipFromFile is tempo-INDEPENDENT (ticks->beats), so the notes land on file beats.
+    void runMidiFileSelftest()
+    {
+        bool wroteFile = false, slotImported = false, slotNotesOk = false, arrImported = false,
+             arrNotesOk = false, arrStartOk = false, instrumentOk = false, emptyGuard = false,
+             notelessGuard = false;
+        int  slotNoteCount = -1, arrNoteCount = -1;
+        double arrStartSecs = -1.0;
+
+        // Build a 4-note .mid (C4..D#4, each 1 beat long, 1 beat apart) at 960 ticks/quarter.
+        const auto midiFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_selftest_import.mid");
+        {
+            const int tpqn = 960;
+            juce::MidiMessageSequence seq;
+            for (int i = 0; i < 4; ++i)
+            {
+                seq.addEvent (juce::MidiMessage::noteOn  (1, 60 + i, 0.8f), (double) (i * tpqn));
+                seq.addEvent (juce::MidiMessage::noteOff (1, 60 + i),       (double) ((i + 1) * tpqn));
+            }
+            seq.updateMatchedPairs();
+
+            juce::MidiFile mf;
+            mf.setTicksPerQuarterNote (tpqn);
+            mf.addTrack (seq);
+
+            midiFile.deleteFile();
+            if (auto out = std::unique_ptr<FileOutputStream> (midiFile.createOutputStream()))
+                wroteFile = mf.writeTo (*out);
+        }
+
+        if (auto* ed = session.getEdit())
+        {
+            session.ensureScenes (16);
+
+            // Slot import.
+            if (auto slotClip = session.importMidiIntoSlot (0, 0, midiFile))
+            {
+                slotImported  = true;
+                slotNoteCount = slotClip->getSequence().getNumNotes();
+                slotNotesOk   = slotNoteCount == 4;
+            }
+
+            // Born-audible: importMidiIntoSlot's ensureDefaultInstrument put a synth on track 0.
+            auto tracks = te::getAudioTracks (*ed);
+            if (! tracks.isEmpty())
+                for (auto* p : tracks[0]->pluginList)
+                    if (p != nullptr && (p->isSynth() || p->takesMidiInput())) { instrumentOk = true; break; }
+
+            // Arrange import onto track 1 at a 2.0s drop time.
+            if (auto arrClip = session.importMidiFile (midiFile, te::TimePosition::fromSeconds (2.0), 1))
+            {
+                arrImported  = true;
+                arrNoteCount = arrClip->getSequence().getNumNotes();
+                arrNotesOk   = arrNoteCount == 4;
+                arrStartSecs = arrClip->getPosition().getStart().inSeconds();
+                arrStartOk   = std::abs (arrStartSecs - 2.0) < 0.05;   // slid to the drop point
+            }
+
+            // Guard 1: a non-existent file must degrade to {} (no clip, no crash) — the pre-guard.
+            emptyGuard = session.importMidiIntoSlot (0, 5, File::getSpecialLocation (File::tempDirectory)
+                                                              .getChildFile ("forge_no_such_file.mid")) == nullptr;
+
+            // Guard 2: an EXISTING but NOTE-LESS .mid must ALSO degrade to {} — this exercises the
+            // createClipFromFile-returns-null branch (the real graceful-degradation path), not just the
+            // file-doesn't-exist pre-guard. Write a .mid with an empty track (no note events).
+            const auto notelessFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_selftest_noteless.mid");
+            {
+                juce::MidiFile mf;
+                mf.setTicksPerQuarterNote (960);
+                mf.addTrack (juce::MidiMessageSequence{});   // no notes
+                notelessFile.deleteFile();
+                if (auto out = std::unique_ptr<FileOutputStream> (notelessFile.createOutputStream()))
+                    mf.writeTo (*out);
+            }
+            notelessGuard = session.importMidiIntoSlot (0, 6, notelessFile) == nullptr;
+            notelessFile.deleteFile();
+        }
+
+        const bool pass = wroteFile && slotImported && slotNotesOk && arrImported && arrNotesOk
+                          && arrStartOk && instrumentOk && emptyGuard && notelessGuard;
+
+        String report;
+        report << "mode=midifile" << newLine
+               << "wroteFile="     << (wroteFile ? 1 : 0) << newLine
+               << "slotImported="  << (slotImported ? 1 : 0) << newLine
+               << "slotNoteCount=" << slotNoteCount << newLine
+               << "slotNotesOk="   << (slotNotesOk ? 1 : 0) << newLine
+               << "arrImported="   << (arrImported ? 1 : 0) << newLine
+               << "arrNoteCount="  << arrNoteCount << newLine
+               << "arrNotesOk="    << (arrNotesOk ? 1 : 0) << newLine
+               << "arrStartSecs="  << String (arrStartSecs, 3) << newLine
+               << "arrStartOk="    << (arrStartOk ? 1 : 0) << newLine
+               << "instrumentOk="  << (instrumentOk ? 1 : 0) << newLine
+               << "emptyGuard="    << (emptyGuard ? 1 : 0) << newLine
+               << "notelessGuard=" << (notelessGuard ? 1 : 0) << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write midi-file selftest report to: " + reportFile.getFullPathName());
+
+        midiFile.deleteFile();
+
+        FORGE_LOG_INFO ("MIDI-file selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -6908,6 +7033,7 @@ public:
                             : commandLine.contains ("--selftest-session")        ? "selftest-session"
                             : commandLine.contains ("--selftest-midilearn")      ? "selftest-midilearn"      // before -midi (substring)
                             : commandLine.contains ("--selftest-midiinput")      ? "selftest-midiinput"      // before -midi (substring)
+                            : commandLine.contains ("--selftest-midifile")       ? "selftest-midifile"       // before -midi (substring)
                             : commandLine.contains ("--selftest-midi")           ? "selftest-midi"
                             : commandLine.contains ("--selftest-controlsurface") ? "selftest-controlsurface" // before bare --selftest
                             : commandLine.contains ("--selftest-lufs")           ? "selftest-lufs"           // before bare --selftest
@@ -6980,6 +7106,7 @@ public:
                         : commandLine.contains ("--selftest-session")        ? SelfTest::session
                         : commandLine.contains ("--selftest-midilearn")      ? SelfTest::midilearn      // before -midi (substring)
                         : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)
+                        : commandLine.contains ("--selftest-midifile")       ? SelfTest::midifile       // before -midi (substring)
                         : commandLine.contains ("--selftest-midi")           ? SelfTest::midi
                         : commandLine.contains ("--selftest-controlsurface") ? SelfTest::controlsurface // before bare --selftest
                         : commandLine.contains ("--selftest-automation")     ? SelfTest::automation     // before bare --selftest

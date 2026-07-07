@@ -50,6 +50,15 @@ public:
         index is past the end, so a drop onto an existing lane always targets that lane. */
     te::WaveAudioClip::Ptr importAudioFile (const juce::File&, te::TimePosition start, int trackIndex = 0);
 
+    /** Imports a `.mid`/`.midi` FILE as a born-audible MidiClip on the LINEAR (Arrange) track at
+        `trackIndex`, positioned at `start`. Uses the engine's `createClipFromFile` (tempo-INDEPENDENT
+        ticks->beats, so notes land on the right beats regardless of the edit tempo), then slides the
+        clip to `start` and ensures the track has a default 4OSC (createClipFromFile adds no instrument).
+        The arrange clip is a NON-looping one-shot. N.B. the engine imports only the FIRST track/channel
+        of a multi-track file (a documented v1 limitation). Returns the clip, or {} if there is no edit /
+        the file is unreadable / empty / has no notes. */
+    te::MidiClip::Ptr importMidiFile (const juce::File&, te::TimePosition start, int trackIndex = 0);
+
     /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
         ensuring the track exists and is born audible (a default 4OSC instrument is added if the
         track has none). Returns the new clip, or {} if there is no open edit / the insert failed. */
@@ -143,6 +152,16 @@ public:
         (calls save() first if not) so the source serialises relative (Sf), then markAsChanged.
         Returns the new clip, or {} on failure / no edit. */
     te::WaveAudioClip::Ptr importAudioIntoSlot (int trackIndex, int sceneIndex, const juce::File& file);
+
+    /** Imports a `.mid`/`.midi` FILE as a born-audible MidiClip into the slot at (trackIndex, sceneIndex),
+        replacing any existing clip. Uses the engine's `createClipFromFile` (tempo-INDEPENDENT ticks->beats)
+        so the notes land on the right content-relative beats (beat 0 = clip start) regardless of the edit
+        tempo; the slot-insert path gives it a full-length launcher LOOP, and ensureDefaultInstrument makes
+        it born-audible (the 4OSC gives pitches — a MIDI file is melodic, unlike the drum-mapped Step Clip).
+        N.B. only the FIRST track/channel of a multi-track file is imported (a documented v1 limitation).
+        Returns the new clip, or {} if there is no edit / the slot can't be resolved / the file is
+        unreadable / empty / has no notes. */
+    te::MidiClip::Ptr importMidiIntoSlot (int trackIndex, int sceneIndex, const juce::File& file);
 
     /** Removes the clip in cell (trackIndex, sceneIndex): stops a live/queued launch first (via the
         clip's LaunchHandle so nothing dangles), then detaches the clip with te::Clip::removeFromParent().

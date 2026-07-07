@@ -62,13 +62,14 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-SEVEN gates as of W20; W20 adds ONE new gate,
-  `--selftest-stepclip` (the Step Clip drum-grid seam: create + auto-built grid + born-audible + cell-toggle +
-  undo), for frontier Wave 10's Step Clips. Frontier Wave 9 (LFO modifiers) was SKIPPED — see the deferred
-  recipe in `docs/wave-9-lfo-recipe.local.md`):
+- **Selftest floor** (must pass after any change — THIRTY-EIGHT gates as of W20 + the MIDI-file-import feature:
+  W20 added `--selftest-stepclip` (the Step Clip drum-grid seam), and the post-W20 MIDI-file drag-and-drop
+  feature added `--selftest-midifile` (write a .mid → import into a slot + arrange → assert notes/position/
+  born-audible). Frontier Wave 9 (LFO modifiers) was SKIPPED — see the deferred recipe in
+  `docs/wave-9-lfo-recipe.local.md`):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
-  `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
+  `--selftest-midifile`, `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
   `--selftest-livesync`, `--selftest-lcd`, `--selftest-menu`, `--selftest-tray`, `--selftest-popout`,
   `--selftest-undo`, `--selftest-taptempo`, `--selftest-slotdelete`, `--selftest-addtrack`, `--selftest-scene`,
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
@@ -77,7 +78,8 @@ conflict, surface it.
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`;
   (⚠ new gate names that CONTAIN an existing name must be
-  ordered longest-first in the ladders — `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
+  ordered longest-first in the ladders — `-midilearn`/`-midiinput`/`-midifile` ⊃ `-midi`,
+  `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
   `-scenedelete`/`-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
   `--screenshot` renders the 11-state matrix (incl. the window-level `shell_window`, the >16-scene
   `session_scenes`, and the W20 `session_stepgrid` drawer) to `%TEMP%\forge_shot_*.png`. Full contract:
