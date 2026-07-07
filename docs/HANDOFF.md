@@ -10,12 +10,12 @@
 > program is complete bar Wave 9. **Built (2-role wave: a file-disjoint UI agent for `StepGridView` + orchestrator
 > for the seam/shell/gate) + gated (37/37 PASS) + adversarially QC'd — a 4-dimension swarm caught 3 real defects
 > (a conditional non-4/4 length bug, a high-severity raw-pointer UAF, and an undo-staleness display bug), ALL
-> FIXED + re-verified. Committed locally — NOT YET PUSHED**, awaiting the maintainer's go-ahead.
+> FIXED + re-verified. **PUSHED to `origin/main`** (tip `9a1157a`, sanitize-clean).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). **W19 (`64bbb39`), W20, and
-the post-W20 MIDI-file-import feature (this session) are committed LOCALLY on top of `30d343c`, NOT YET PUSHED.**
-Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-EIGHT selftests PASS** (W20 added
+**`main`**. **W07–W20 + the post-W20 MIDI-file-import feature are PUSHED to `origin/main`** (tip `9a1157a`,
+sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all
+THIRTY-EIGHT selftests PASS** (W20 added
 `--selftest-stepclip`; the MIDI-file-import feature added `--selftest-midifile`; floor **36 → 38**; plus an 11th
 `--screenshot` state `session_stepgrid`). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
@@ -749,9 +749,12 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
   wrongly — get the member type from the lock. (Never log from the audio/RT thread regardless — see LOGGING.md.)
 - **PowerShell cwd drifts after a Bash `cd`** — use the absolute `build` path with cmake. (And a quoted
   `"C:\Program Files\..."` path in the same command as `Remove-Item` can trip the sandbox guard — split them.)
-- **Latest PUSHED work is on `origin/main` at tip `96b1037` (W16); local `main` == `origin/main`.**
-  Pushed: W07–W11, the docs sanitization, W12 per-clip launch quantise, W13 grid clip primitives, W14 MIDI
-  quantise, W15 scene lifecycle (`9cc7f04`), and W16 W05 QC-debt discharge (`96b1037`). ⚠ **History was rewritten
+- **Latest PUSHED work is on `origin/main` at tip `9a1157a` (the post-W20 MIDI-file-import feature); local
+  `main` == `origin/main`.** Pushed this session: W17 (`f89109c`) + W18 (`4df11e1`, capture fast-follows,
+  `30d343c` tip), W19 (`bdd7c84` / `64bbb39`, Session mixer polish), W20 (`367a871`, Step Clips), and the
+  MIDI-file-import feature (`9a1157a`). Earlier pushed: W07–W16 (tip `96b1037`), W12 per-clip launch quantise,
+  W13 grid clip primitives, W14 MIDI quantise, W15 scene lifecycle (`9cc7f04`), W16 W05 QC-debt discharge
+  (`96b1037`). ⚠ **History was rewritten
   + force-pushed in a prior session** to scrub
   a real-identity leak from an earlier HANDOFF commit's prose (`git-filter-repo` → `python -m git_filter_repo`,
   which drops `origin` — re-added before pushing); the old `09c4928` became `6ca11cd`, and hashes below it are
