@@ -34,6 +34,7 @@
 #include "ui/session/TrackColumnComponent.h"
 #include "ui/session/SceneColumnComponent.h"
 #include "ui/session/SessionMixerStrip.h"
+#include "ui/session/SessionMasterStrip.h"
 #include "ui/session/SlotVisualState.h"
 #include "ui/session/SessionLayout.h"
 #include "services/files/ProjectSession.h"
@@ -239,7 +240,16 @@ private:
     juce::Component columnHolder;
     juce::OwnedArray<TrackColumnComponent> columns;
     std::unique_ptr<AddTrackColumnComponent> addTrackColumn;   // W07 trailing "+" stub
-    std::unique_ptr<SceneColumnComponent> scenes;
+
+    // W08 master corner: the pinned scene column now lives INSIDE a clip container (sceneClip) sized
+    // to the pad viewport height, so it no longer dangles ~mixerBandH px below the pads into the
+    // bottom-right corner. `scenes` keeps its FULL contentH (the rowBand anti-drift invariant is about
+    // the content height fed to rowBand, NOT the visible bounds) and is translated up by the vertical
+    // scroll offset within the clip — exactly the mixerBand/mixerHolder idiom, rotated. The freed
+    // sceneColW × mixerBandH corner is filled by `sessionMaster` (a fixed, edit-bound master strip).
+    juce::Component sceneClip;
+    std::unique_ptr<SceneColumnComponent> scenes;   // child of sceneClip (clipped); NOT a direct child
+    SessionMasterStrip sessionMaster;               // fixed bottom-right corner; edit-bound, self-polling
 
     // W08 mixer band: a FIXED strip pinned to the bottom of the (non-scene) area, OUTSIDE the
     // viewport (so vertical pad-scroll never moves it — the twin of the pinned scene column, rotated

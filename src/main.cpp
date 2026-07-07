@@ -39,6 +39,8 @@
 #include "ui/pianoroll/PianoRollView.h"
 #include "ui/session/SessionView.h"
 #include "ui/session/SessionMixerStrip.h"
+#include "ui/session/SessionMasterStrip.h"
+#include "ui/common/PeakMeter.h"
 #include "ui/session/SlotVisualState.h"
 #include "ui/export/ExportProgress.h"
 #include "ui/ControlBar.h"
@@ -53,7 +55,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll };   // which editor fills the bottom drawer region
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -841,6 +843,16 @@ public:
             // Wave 3 (W08): the per-track Session mixer strip's engine->widget sync. Synchronous; one
             // callAsync yield suffices.
             MessageManager::callAsync ([this] { runSessionMixerSelftest(); });
+        }
+        else if (mode == SelfTest::sessionmaster)
+        {
+            // Wave 8: the Session master-corner strip's master-volume engine->widget sync. Synchronous.
+            MessageManager::callAsync ([this] { runSessionMasterSelftest(); });
+        }
+        else if (mode == SelfTest::peakhold)
+        {
+            // Wave 8: the PeakMeter peak-hold + clip-latch pure ballistics. Fully pure — no edit/engine.
+            MessageManager::callAsync ([this] { runPeakHoldSelftest(); });
         }
         else if (mode == SelfTest::demo)
         {
@@ -5574,6 +5586,124 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-sessionmaster (W8 mixer polish): the Session master-corner strip's engine->widget sync.
+    // Mirrors --selftest-sessionmixer but for the master: set the Edit's master volume via the plugin at
+    // TWO distinct dB values and assert the strip's fader tracks each (proving the read is live, not a
+    // default fluke). The master volume plugin exists on every edit; no playback context in headless so
+    // the meter is not asserted (same posture as sessionmixer).
+    void runSessionMasterSelftest()
+    {
+        bool   bound = false, faderReadOk = false, faderTracksChange = false;
+        double faderDbAtMinus6 = -999.0, faderDbAtUnity = -999.0;
+
+        if (auto* ed = session.getEdit())
+        {
+            if (auto mv = ed->getMasterVolumePlugin())
+            {
+                SessionMasterStrip strip;
+                strip.setEdit (ed);
+
+                mv->setVolumeDb (-6.0f);
+                strip.refreshControls();
+                bound           = strip.isBound();
+                faderDbAtMinus6 = strip.getFaderDb();
+                faderReadOk     = std::abs (faderDbAtMinus6 - (-6.0)) < 0.15;
+
+                mv->setVolumeDb (0.0f);   // second value: the strip must TRACK the change, not stick
+                strip.refreshControls();
+                faderDbAtUnity    = strip.getFaderDb();
+                faderTracksChange = std::abs (faderDbAtUnity - 0.0) < 0.15;
+            }
+        }
+
+        const bool pass = bound && faderReadOk && faderTracksChange;
+
+        String report;
+        report << "mode=sessionmaster" << newLine
+               << "bound="             << (bound ? 1 : 0) << newLine
+               << "faderDbAtMinus6="    << String (faderDbAtMinus6, 3) << newLine
+               << "faderReadOk="        << (faderReadOk ? 1 : 0) << newLine
+               << "faderDbAtUnity="     << String (faderDbAtUnity, 3) << newLine
+               << "faderTracksChange="  << (faderTracksChange ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write session-master selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Session-master selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-peakhold (W8 mixer polish): the PeakMeter peak-hold + clip-latch ballistics. FULLY PURE
+    // — drives forge::meter::advanceMeterHold directly (the computeLcdState pattern), no edit/engine/paint.
+    // Proves: (1) a loud transient jumps the hold up instantly AND latches the clip; (2) under silence the
+    // HOLD line (6 dB/s) lingers well ABOVE where the faster bar (18 dB/s) would be; (3) the clip stays
+    // sticky across all those silent ticks; (4) a "click" clears the latch (as PeakMeter::mouseDown does);
+    // (5) the hold eventually settles to the floor after long silence.
+    void runPeakHoldSelftest()
+    {
+        using namespace forge::meter;
+        const float dt = 1.0f / 12.0f;
+
+        MeterHold h;
+        h = advanceMeterHold (h, 3.0f, dt);      // +3 dBFS transient (into the clip band)
+        const bool holdJumped  = h.holdDb > 2.9f;   // instant attack to the live peak
+        const bool clipLatched = h.clipLatched;     // crossed 0 dBFS -> sticky latch set
+
+        // Silence for 6 ticks (0.5 s). The hold falls 6*0.5 = 3 dB (3 -> 0); a bar would fall 18*0.5 = 9 dB
+        // (3 -> -6). So the hold sits ~6 dB above the bar.
+        float barDb = 3.0f;
+        for (int i = 0; i < 6; ++i)
+        {
+            h = advanceMeterHold (h, kMeterMinDb, dt);
+            barDb = juce::jmax (kMeterMinDb, barDb - kMeterDecayDbPerSec * dt);   // the bar's faster decay
+        }
+        const bool holdLingers = h.holdDb > barDb + 3.0f;   // clearly above the faster-falling bar
+        const bool clipSticky  = h.clipLatched;             // never auto-cleared under silence
+
+        // The REAL click-to-clear path (PeakMeter::mouseDown routes through clearClipLatch). Test the
+        // guard predicate in BOTH directions: a click on a plain meter (showClip=false) must NOT clear
+        // the latch; a click on a clip-enabled meter (showClip=true) MUST. (h is still latched here.)
+        const bool clipStaysWhenDisabled = clearClipLatch (h, /*showClip*/ false).clipLatched;   // still latched
+        h = clearClipLatch (h, /*showClip*/ true);
+        const bool clipClearedWhenEnabled = ! h.clipLatched;
+
+        for (int i = 0; i < 200; ++i)             // long silence: the hold decays to the floor
+            h = advanceMeterHold (h, kMeterMinDb, dt);
+        const bool holdSettles = h.holdDb <= kMeterMinDb + 0.01f;
+
+        const bool pass = holdJumped && clipLatched && holdLingers && clipSticky
+                          && clipStaysWhenDisabled && clipClearedWhenEnabled && holdSettles;
+
+        String report;
+        report << "mode=peakhold" << newLine
+               << "holdJumped="   << (holdJumped ? 1 : 0) << newLine
+               << "clipLatched="  << (clipLatched ? 1 : 0) << newLine
+               << "holdDbAfterSilence=" << String (h.holdDb, 3) << newLine
+               << "holdLingers="  << (holdLingers ? 1 : 0) << newLine
+               << "clipSticky="   << (clipSticky ? 1 : 0) << newLine
+               << "clipStaysWhenDisabled="  << (clipStaysWhenDisabled ? 1 : 0) << newLine
+               << "clipClearedWhenEnabled=" << (clipClearedWhenEnabled ? 1 : 0) << newLine
+               << "holdSettles="  << (holdSettles ? 1 : 0) << newLine
+               << "result="       << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="      << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write peak-hold selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Peak-hold selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -6572,6 +6702,8 @@ public:
         const auto modeDesc = commandLine.contains ("--screenshot")              ? "screenshot"
                             : commandLine.contains ("--selftest-record")         ? "selftest-record"
                             : commandLine.contains ("--selftest-sessionmixer")   ? "selftest-sessionmixer"   // before -session (substring! W08)
+                            : commandLine.contains ("--selftest-sessionmaster")  ? "selftest-sessionmaster"  // before -session (substring! W8mixer-polish)
+                            : commandLine.contains ("--selftest-peakhold")       ? "selftest-peakhold"       // before bare --selftest (collision-free, W8)
                             : commandLine.contains ("--selftest-session")        ? "selftest-session"
                             : commandLine.contains ("--selftest-midilearn")      ? "selftest-midilearn"      // before -midi (substring)
                             : commandLine.contains ("--selftest-midiinput")      ? "selftest-midiinput"      // before -midi (substring)
@@ -6641,6 +6773,8 @@ public:
         const auto mode = commandLine.contains ("--screenshot")              ? SelfTest::screenshot
                         : commandLine.contains ("--selftest-record")         ? SelfTest::record
                         : commandLine.contains ("--selftest-sessionmixer")   ? SelfTest::sessionmixer   // before -session (substring! W08)
+                        : commandLine.contains ("--selftest-sessionmaster")  ? SelfTest::sessionmaster  // before -session (substring! W8mixer-polish)
+                        : commandLine.contains ("--selftest-peakhold")       ? SelfTest::peakhold       // before bare --selftest (collision-free, W8)
                         : commandLine.contains ("--selftest-session")        ? SelfTest::session
                         : commandLine.contains ("--selftest-midilearn")      ? SelfTest::midilearn      // before -midi (substring)
                         : commandLine.contains ("--selftest-midiinput")      ? SelfTest::midiinput      // before -midi (substring)

@@ -23,6 +23,12 @@ SessionView::SessionView (ProjectSession& s)
     mixerBand.addAndMakeVisible (mixerHolder);
     addAndMakeVisible (mixerBand);
 
+    // W08: the scene column's clip container (scenes reparent into it in rebuild) and the fixed master
+    // corner. sceneClip clips the scene column to the pad-viewport height so it stops dangling into the
+    // corner; sessionMaster fills the freed corner (hidden until an edit binds it).
+    addAndMakeVisible (sceneClip);
+    addChildComponent (sessionMaster);
+
     setWantsKeyboardFocus (true);
 }
 
@@ -32,6 +38,7 @@ SessionView::~SessionView()
     // The mixer strips carry their OWN ~12 Hz timers; clearing the array destroys each strip, and
     // ~SessionMixerStrip stops its timer FIRST — so no strip tick can land during teardown either.
     stopTimer();
+    sessionMaster.setEdit (nullptr);   // stop the master strip's own ~12 Hz poll before members drop
     columns.clear();
     mixerStrips.clear();
     addTrackColumn.reset();
@@ -52,13 +59,18 @@ void SessionView::setEdit (te::Edit* e)
             FORGE_LOG_ERROR ("Failed to ensure " + juce::String (SessionLayout::numScenes) + " scenes in edit");
 
         rebuild();
+        sessionMaster.setEdit (edit);          // W08 master corner — binds the master volume + meter
+        sessionMaster.setVisible (true);
         startTimerHz (25);                                 // §e poll cadence
     }
     else
     {
         // R4 — STRICT teardown order; NO engine read afterward. Mixer strips (each with its own
-        // timer, stopped first in ~SessionMixerStrip) are cleared alongside the columns.
+        // timer, stopped first in ~SessionMixerStrip) are cleared alongside the columns. The master
+        // strip (its own timer too) is unbound FIRST so no master poll reads the edit during teardown.
         stopTimer();
+        sessionMaster.setEdit (nullptr);
+        sessionMaster.setVisible (false);
         columns.clear();
         mixerStrips.clear();
         addTrackColumn.reset();
@@ -126,7 +138,7 @@ void SessionView::rebuild()
         scenes->setScenes (sceneNames, gridScenes);
         scenes->onAddScene = [this] { addScene(); };   // W07 +Scene affordance (bottom of the scene column)
         wireScenes();
-        addAndMakeVisible (*scenes);
+        sceneClip.addAndMakeVisible (*scenes);   // W08: child of the clip container, NOT SessionView
 
         // Per-pad / per-scene state diff buffers, primed to a value the first poll will overwrite.
         // Sized by the RUNTIME gridScenes so the poll's flat stride (t * gridScenes + s) matches.
@@ -262,6 +274,14 @@ void SessionView::resized()
     // mixer band tucks under the tracks only — INV-1 default; no scene-column change).
     auto sceneArea = area.removeFromRight (SessionLayout::sceneColW);
 
+    // W08 master corner: carve the fixed sceneColW × mixerBandH bottom-right corner out of the scene
+    // strip for the master strip; the scene column's clip container takes the REST of the strip (the
+    // pad-viewport height). This is what stops the scene column dangling into the corner — WITHOUT
+    // shortening its contentH (the rowBand anti-drift invariant is preserved; see below).
+    auto masterCorner = sceneArea.removeFromBottom (SessionLayout::mixerBandH);
+    sessionMaster.setBounds (masterCorner);
+    sceneClip.setBounds (sceneArea);
+
     // W08: reserve the fixed mixer band along the BOTTOM of the (non-scene) area, BEFORE sizing the
     // viewport. The viewport therefore shrinks by mixerBandH — but contentH below is UNCHANGED, so the
     // pad content height and the scene-column height stay EQUAL (the anti-drift invariant). A shorter
@@ -328,18 +348,20 @@ void SessionView::resized()
     // (An earlier version subtracted the H-scrollbar thickness here to line the bottom stop band up with
     // the H-bar-occluded track footers, but that broke rowBand's equal-height invariant — the far worse
     // bug. The minor bottom-edge overhang when scrolled fully down under an H-scrollbar is accepted.)
+    // Scenes is now a child of sceneClip (which clips it to the pad-viewport height). It keeps its FULL
+    // contentH (so rowBand partitions identically to the pad columns — the anti-drift invariant) and is
+    // translated up by the vertical scroll offset; the clip container hides the ~mixerBandH tail that
+    // used to dangle into the corner. Bounds are relative to sceneClip, so x = 0.
     if (scenes != nullptr)
-        scenes->setBounds (sceneArea.getX(),
-                           -viewport.getViewPositionY(),
-                           sceneArea.getWidth(),
-                           contentH);
+        scenes->setBounds (0, -viewport.getViewPositionY(), SessionLayout::sceneColW, contentH);
 }
 
 void SessionView::syncSceneColumnToScroll()
 {
-    // Message-thread only (called from the viewport's visibleAreaChanged). Cheap: one move.
+    // Message-thread only (called from the viewport's visibleAreaChanged). Cheap: one move. x = 0 —
+    // scenes lives inside sceneClip now, so its top-left is relative to the clip container.
     if (scenes != nullptr)
-        scenes->setTopLeftPosition (scenes->getX(), -viewport.getViewPositionY());
+        scenes->setTopLeftPosition (0, -viewport.getViewPositionY());
 }
 
 void SessionView::syncMixerBandToScroll()

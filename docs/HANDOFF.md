@@ -1,21 +1,35 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-06**, end of **"W18 — frontier program
-> Wave 7 fast-follows: whole-scene-send + send-as-loop"** — completing the **SEVENTH** wave of the 10-wave
-> **frontier build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ **Frontier
-> Wave 7 is now COMPLETE** (all three items: capture core [W17] + whole-scene-send + send-as-loop [W18]).
-> W18's 4-dimension adversarial QC swarm found **zero confirmed defects** (unlike W17, which caught and fixed
-> one) — a clean pass, no fix-then-reverify cycle needed. **Built + gated + committed + PUSHED**
-> (tip `30d343c`, sanitize-clean).
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-07**, end of **"W19 — frontier program
+> Wave 8: Session mixer polish (master corner + peak-hold)"** — the **EIGHTH** wave of the 10-wave **frontier
+> build program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ The Session grid becomes a
+> self-contained mixing surface: a **master strip** fills the bottom-right corner (master volume + meter), and
+> the shared `PeakMeter` gains an opt-in **peak-hold line + sticky clip latch** (enabled on the master). The
+> scene column no longer dangles into the corner (wrapped in a clip container) — WITHOUT reintroducing the W07
+> rowBand drift MAJOR (contentH is untouched; QC verified). **Built + gated (36/36 PASS) + adversarially QC'd;
+> commit/push status at the bottom of this block.**
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean; local `main` ==
-`origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-FOUR selftests PASS** (W18 adds
-ONE new gate, `--selftest-scenesend`, and extends `--selftest-sendarrange` with a send-as-loop leg; floor
-**33 → 34**). ⚠ **History was rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity
-leak from an earlier commit's HANDOFF prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the
-old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
+**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). W19 (this session) is built
+on top of `30d343c`. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-SIX selftests PASS** (W19
+adds TWO new gates, `--selftest-sessionmaster` + `--selftest-peakhold`; floor **34 → 36**). ⚠ **History was
+rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF
+prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` →
+`6ca11cd`).
+Shipped (W19 — frontier Wave 8): **Session master strip in the corner** — the bottom-right sceneColW×mixerBandH
+corner (previously the empty space where the scene column dangled below the pad viewport, the W08 deferred
+finding) now holds a compact **MASTER** strip (accent label + horizontal peak meter + horizontal dB fader driving
+the Edit's master volume), directly under the scene column's scene-launch "STOP ALL" master. New
+`SessionMasterStrip` (mirrors `MixerView::MasterStrip`'s master-volume + `masterLevels` idiom, R1/W03-UAF-safe,
+self-polling); the scene column is wrapped in a **clip container** so it stops dangling — its full `contentH`
+(the rowBand anti-drift input) is UNCHANGED, so the W07 drift MAJOR is not reintroduced (QC confirmed). **Peak-
+hold + sticky clip latch** on the shared `PeakMeter`: a slow-decay hold line + a click-to-clear clip cap,
+extracted as a Component-free pure helper (`forge::meter::advanceMeterHold`, headlessly gate-able), opt-in and
+default-OFF so every existing meter is byte-identical — enabled on the new master strip. New gates
+`--selftest-sessionmaster` (fader tracks the master volume at two distinct dB values) + `--selftest-peakhold`
+(pure ballistics: instant attack, slow decay lingers above the bar, sticky-until-click). Full record →
+[devlog/wave-19-session-mixer-polish.md](devlog/wave-19-session-mixer-polish.md).
 Shipped (W18 — frontier Wave 7 fast-follows): **whole-scene "Send to Arrangement"** — a new
 `SceneColumnComponent` row-menu item sends every filled clip in a scene to its own track, all aligned at ONE
 shared start beat (the max append point across only the filled-slot tracks), in one undo transaction. New
@@ -424,14 +438,24 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    `96b1037`). W16 discharges the last standing W05 debt (undo-correctness + shell-integration) and surfaced a
    confirmed, unfixed engine defect (redo wiped by `FourOscPlugin`'s mod-matrix flush — see the CLAUDE.md
    gotcha; a maintainer decision, not fixed this wave).
-   **✅ DONE: frontier Wave 7 — COMPLETE (W17 + W18)** — performance capture (the real Session→Arrange
-   bridge): a Global "Capture" toggle records which clips launched, when, and for how long, then stamps them
-   onto each track's Arrangement at the captured beat (W17); whole-scene-send + send-as-loop (W18), both
-   riding W17's `insertClipCopyOnTimeline` seam. **Built + gated (34/34 PASS) + committed locally
-   (`f89109c` W17, this session's commit W18) — NOT YET PUSHED.** W17's QC caught + fixed one confirmed defect
+   **✅ DONE: frontier Wave 7 — COMPLETE (W17 + W18), PUSHED (`30d343c`)** — performance capture (the real
+   Session→Arrange bridge): a Global "Capture" toggle records which clips launched, when, and for how long, then
+   stamps them onto each track's Arrangement at the captured beat (W17); whole-scene-send + send-as-loop (W18),
+   both riding W17's `insertClipCopyOnTimeline` seam. W17's QC caught + fixed one confirmed defect
    (identity-vs-cell-index resolution); W18's 4-dimension QC swarm came back clean across the board.
-   **▶ NEXT: frontier Wave 8 — Session mixer polish** (master corner + peak-hold) — full ordered program + the
-   critic's corrections in `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render
+   **✅ DONE: frontier Wave 8 — Session mixer polish (W19)** — a **master strip** fills the bottom-right corner
+   (master volume + horizontal meter/fader; new `SessionMasterStrip`), the scene column is wrapped in a clip
+   container so it stops dangling (contentH untouched — the W07 rowBand drift MAJOR is NOT reintroduced, QC
+   confirmed), and the shared `PeakMeter` gains an opt-in **peak-hold line + sticky clip latch** (default-OFF so
+   existing meters are byte-identical; enabled on the master). Gates `--selftest-sessionmaster` +
+   `--selftest-peakhold` (floor 34→36). **Built + gated (36/36 PASS) + adversarially QC'd** (4 dimensions: 3
+   clean + 1 fixed — a vacuous `clipCleared` gate leg, now driving the real `clearClipLatch` predicate) —
+   commit/push status in the top block.
+   **▶ NEXT: frontier Wave 9 — Live modulation** (plugin-param modifiers / LFO): a new header-only
+   `src/engine/ModifierHelpers.h` over the engine's unit-tested `ModifierList` seam + a small "Modulate" UI
+   affordance (reusing the MIDI-learn param picker) + `--selftest-modifier`; no ProjectSession touch. Then Wave 10
+   (Step Clips) closes the program. Full ordered program + the critic's corrections in
+   `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render
    audibility leg for `--selftest-capture` (parked, same class as the W09/W10 render-leg follow-up); the
    reseal heuristic's dependency on `LaunchHandle::nudge`/`setLooping`/`playSynced` staying uncalled (see the
    new CLAUDE.md gotcha — revisit if a future wave wires per-clip handle-level looping). **W16 follow-ups
@@ -514,6 +538,8 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-launchmode  # per-clip launch mode Trigger/Gate/Toggle state+persist (W11) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-capture  # performance capture: accumulate + commit at absolute beat + identity-resolve + undo (W17) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-scenesend # whole-scene send: shared-start alignment across filled-slot tracks + atomic undo (W18) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-sessionmaster # Session master-corner strip: fader tracks master volume (W19) → PASS/FAIL
+& ".\build\Forge_artefacts\Debug\Forge.exe" --selftest-peakhold # PeakMeter peak-hold + sticky clip-latch ballistics (pure) (W19) → PASS/FAIL
 & ".\build\Forge_artefacts\Debug\Forge.exe" --screenshot       # 10-state matrix (base session now shows the mixer band) → %TEMP%\forge_shot_*.png
 # Selftests write %TEMP%\forge_phase0_selftest.log.  First clone: git submodule update --init --recursive
 ```
@@ -774,7 +800,8 @@ cd mockups/src && MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/work" forge-
 - **[DIRECTION.md](DIRECTION.md)** — the authoritative product brief (read first).
 - [STATUS.md](STATUS.md) — living roadmap. · [../mockups/](../mockups/) — the UI mockup set (sheet 00 = the target).
 - [INTERFACE.md](INTERFACE.md) — the Session-first UI plan + design charter + the W04 UX charter (rewritten in W03).
-- [devlog/wave-18-scene-send-loop.md](devlog/wave-18-scene-send-loop.md) — **W18: frontier Wave 7 fast-follows — whole-scene-send + send-as-loop (this session, completes Wave 7)**.
+- [devlog/wave-19-session-mixer-polish.md](devlog/wave-19-session-mixer-polish.md) — **W19: frontier Wave 8 — Session mixer polish (master corner + peak-hold) (this session)**.
+- [devlog/wave-18-scene-send-loop.md](devlog/wave-18-scene-send-loop.md) — **W18: frontier Wave 7 fast-follows — whole-scene-send + send-as-loop (completes Wave 7)**.
 - [devlog/wave-17-performance-capture.md](devlog/wave-17-performance-capture.md) — **W17: frontier Wave 7 capture core — performance recording**.
 - [devlog/wave-06-handson.md](devlog/wave-06-handson.md) — **W06: hands-on wave 1 — control bar & HUD**.
 - [devlog/wave-05-undo.md](devlog/wave-05-undo.md) — **W05: global Undo/Redo + the polish sweep (QC partially owed)**.

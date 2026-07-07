@@ -800,6 +800,45 @@ samples, stops, and commits, bracketed in one undo transaction exactly like the 
 > pass). The TransportBar's new "Capture" toggle was checked against the W06 starved-control regression class at
 > the 760 px window minimum — confirmed clean (worst-case control width 40 px, no starvation).
 
+## `Forge --selftest-sessionmaster` (Session master-corner strip, W8 mixer polish)
+
+The acceptance gate for the **Session master strip** (`SessionMasterStrip`, the fixed bottom-right corner of the
+Session grid). Mirrors `--selftest-sessionmixer` but for the master: sets the Edit's master volume via
+`getMasterVolumePlugin()->setVolumeDb` at **two distinct dB values** and asserts the strip's fader tracks each —
+so a "reads a default once and sticks" bug fails the second leg. Synchronous. The master volume plugin exists on
+every edit; no playback context in headless, so the meter is not asserted (same posture as `--selftest-sessionmixer`).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `bound` | the strip resolved the master volume plugin | 1 |
+| `faderDbAtMinus6` / `faderReadOk` | after `setVolumeDb(-6)` + refresh, the fader reads ≈ -6 | ≈ -6 / 1 |
+| `faderDbAtUnity` / `faderTracksChange` | after `setVolumeDb(0)` + refresh, the fader TRACKS to ≈ 0 (not stuck at -6) | ≈ 0 / 1 |
+
+> `-sessionmaster` CONTAINS `-session` → placed **before** `--selftest-session` (longest-first, alongside
+> `-sessionmixer`) in both ladders; verify `mode=sessionmaster`. Disjoint from `-sessionmixer` (neither contains
+> the other). **Floor is now 35 gates** at this point (36 with `-peakhold` below).
+
+## `Forge --selftest-peakhold` (PeakMeter peak-hold + clip latch, W8 mixer polish)
+
+The acceptance gate for the **peak-hold line + sticky clip latch** — a FULLY PURE gate driving
+`forge::meter::advanceMeterHold` directly (the `computeLcdState` pattern; no edit / engine / paint).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `holdJumped` | a +3 dBFS transient jumps the hold line up instantly (instant attack) | 1 |
+| `clipLatched` | crossing 0 dBFS sets the sticky clip latch | 1 |
+| `holdLingers` | after 6 silent ticks the hold (6 dB/s) sits clearly ABOVE where the faster bar (18 dB/s) would be | 1 |
+| `clipSticky` | the latch is NEVER auto-cleared under silence | 1 |
+| `clipStaysWhenDisabled` | a click on a plain meter (`showClip=false`) must NOT clear the latch | 1 |
+| `clipClearedWhenEnabled` | a click on a clip-enabled meter (`showClip=true`) DOES clear it | 1 |
+| `holdSettles` | after long silence the hold decays to the floor (`kMeterMinDb`) | 1 |
+
+> `-peakhold` is collision-free (no substring overlap) — placed before the bare `--selftest` in both ladders;
+> verify `mode=peakhold`. **Floor is now 36 gates.** The peak-hold/clip features are opt-in (default OFF), so
+> every existing meter renders byte-identically; the new `SessionMasterStrip` enables both. `clipStaysWhenDisabled`
+> / `clipClearedWhenEnabled` drive the REAL `forge::meter::clearClipLatch` predicate that `PeakMeter::mouseDown`
+> routes through (a QC fix — the earlier `clipCleared` leg was a vacuous field-write assertion).
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

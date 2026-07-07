@@ -62,9 +62,9 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-FOUR gates as of W18; W18 adds ONE new gate,
-  `--selftest-scenesend`, for frontier Wave 7's whole-scene-send fast-follow, and extends the existing
-  `--selftest-sendarrange` gate with a send-as-loop leg — no new name for that half):
+- **Selftest floor** (must pass after any change — THIRTY-SIX gates as of W19; W19 adds TWO new gates,
+  `--selftest-sessionmaster` (the Session master-corner strip) and `--selftest-peakhold` (the PeakMeter
+  peak-hold + clip-latch ballistics), for frontier Wave 8's Session mixer polish):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
@@ -73,10 +73,10 @@ conflict, surface it.
   `--selftest-dragdrop`, `--selftest-sessionmixer`, `--selftest-demo`, `--selftest-sendarrange`,
   `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
-  `--selftest-capture`, `--selftest-scenesend`;
+  `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`;
   (⚠ new gate names that CONTAIN an existing name must be
-  ordered longest-first in the ladders — `-sessionmixer` ⊃ `-session`, and `-scenerename`/`-scenedelete`/
-  `-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
+  ordered longest-first in the ladders — `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
+  `-scenedelete`/`-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
   `--screenshot` renders the 10-state matrix (incl. the window-level `shell_window` and the >16-scene
   `session_scenes`) to `%TEMP%\forge_shot_*.png`. Full contract: `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.

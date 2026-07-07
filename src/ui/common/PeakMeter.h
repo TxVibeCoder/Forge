@@ -28,11 +28,56 @@ namespace forge::meter
     inline constexpr float kMeterMinDb        = -60.0f;   // bottom of the meter
     inline constexpr float kMeterMaxDb        =   6.0f;   // top of the meter (matches fader headroom)
     inline constexpr float kMeterDecayDbPerSec = 18.0f;   // visual fall-off when the signal drops
+    inline constexpr float kMeterHoldDecayDbPerSec = 6.0f;   // W08: the peak-HOLD line falls SLOWER than the
+                                                            // bar (18) so it lingers above the falling level
 
     /** Maps a dB level into a 0..1 fill fraction for the meter (clamped). */
     inline float dbToMeterFraction (float db)
     {
         return juce::jlimit (0.0f, 1.0f, (db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb));
+    }
+
+    //==========================================================================
+    // W08 peak-hold + clip-latch — a Component-FREE pure state + transition, so the ballistics are
+    // headlessly gate-able (the computeLcdState pattern) without a live meter/paint. The PeakMeter
+    // owns one MeterHold and advances it each poll via advanceMeterHold; the gate drives the free
+    // function directly.
+    struct MeterHold
+    {
+        float holdDb      = kMeterMinDb;   // the lingering peak line (instant attack, slow decay)
+        bool  clipLatched = false;         // sticky once the signal crossed 0 dBFS; cleared only on click
+    };
+
+    /** Pure transition: given the previous hold state and this tick's LIVE (pre-bar-decay) reading,
+        return the next state. The hold jumps up instantly to a new peak and decays slowly toward the
+        live level; the clip latch sets sticky the instant liveDb crosses 0 dBFS and is NEVER cleared
+        here (only a user click resets it — that's what makes the latch assertable deterministically). */
+    inline MeterHold advanceMeterHold (MeterHold prev, float liveDb, float secondsSinceLast,
+                                       float holdDecayDbPerSec = kMeterHoldDecayDbPerSec)
+    {
+        MeterHold out = prev;
+
+        if (liveDb >= out.holdDb)
+            out.holdDb = liveDb;
+        else
+            out.holdDb = juce::jmax (liveDb, out.holdDb - holdDecayDbPerSec * secondsSinceLast);
+
+        if (liveDb > 0.0f)
+            out.clipLatched = true;
+
+        return out;
+    }
+
+    /** Pure click-to-clear transition (the SAME guard PeakMeter::mouseDown applies): the sticky clip
+        latch is reset ONLY when the clip indicator is enabled — a click on a plain meter never clears
+        it. Both PeakMeter::mouseDown and --selftest-peakhold route through this, so the gate exercises
+        the real predicate, not a bare field write. */
+    inline MeterHold clearClipLatch (MeterHold prev, bool showClip)
+    {
+        MeterHold out = prev;
+        if (showClip)
+            out.clipLatched = false;
+        return out;
     }
 }
 
@@ -80,6 +125,7 @@ public:
         measurer = nullptr;
         client.reset();
         currentDb = forge::meter::kMeterMinDb;
+        hold = {};   // W08: a fresh/absent source must not carry a stale hold line or latched clip
         repaint();
     }
 
@@ -91,6 +137,18 @@ public:
         compatible: default is vertical, so every existing caller (mixer strips / master / returns / tray)
         is unchanged. */
     void setHorizontal (bool h) { horizontal = h; repaint(); }
+
+    /** W08: opt-in peak-HOLD line (a slow-decaying marker that lingers at the recent peak). Default
+        OFF so every existing meter (mixer strips / returns / tray) renders byte-identically. */
+    void setPeakHold (bool enabled) { peakHold = enabled; repaint(); }
+
+    /** W08: opt-in sticky CLIP latch (a red indicator at the hot end once the signal crossed 0 dBFS,
+        cleared by clicking the meter). Default OFF — existing callers are unchanged. */
+    void setShowClip (bool enabled) { showClip = enabled; repaint(); }
+
+    /** Selftest / owner read-backs for the hold ballistics (valid after poll). */
+    float getHoldDb()     const noexcept { return hold.holdDb; }
+    bool  isClipLatched() const noexcept { return hold.clipLatched; }
 
     /** Pull the latest peak off the measurer and apply decay. Called on the owner's timer.
         `secondsSinceLast` is the timer interval, used for the fall-off rate. */
@@ -115,7 +173,24 @@ public:
         else
             currentDb = juce::jmax (liveDb, currentDb - forge::meter::kMeterDecayDbPerSec * secondsSinceLast);
 
+        // W08: advance the (slower) hold line + sticky clip latch off the SAME live reading. Only when
+        // a feature is enabled — a default meter never touches the hold state, so its paint is unchanged.
+        if (peakHold || showClip)
+            hold = forge::meter::advanceMeterHold (hold, liveDb, secondsSinceLast);
+
         repaint();
+    }
+
+    /** Click-to-clear the sticky clip latch, via the SAME pure transition the gate tests
+        (forge::meter::clearClipLatch — a no-op unless the clip indicator is enabled). */
+    void mouseDown (const juce::MouseEvent&) override
+    {
+        const auto next = forge::meter::clearClipLatch (hold, showClip);
+        if (next.clipLatched != hold.clipLatched)
+        {
+            hold = next;
+            repaint();
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -132,6 +207,12 @@ public:
                                       : juce::Colour (ForgeLookAndFeel::accent);
         const float zeroFrac    = forge::meter::dbToMeterFraction (0.0f);
 
+        // W08: the hold-line fraction + whether to draw the sticky clip cap (both guarded on the opt-in
+        // flags, so a default meter takes neither branch and paints exactly as before).
+        const float holdFrac = forge::meter::dbToMeterFraction (hold.holdDb);
+        const bool  drawHold  = peakHold && hold.holdDb > forge::meter::kMeterMinDb;
+        const bool  drawClip  = showClip && hold.clipLatched;
+
         if (horizontal)
         {
             if (frac > 0.0f)
@@ -144,6 +225,18 @@ public:
             const float zeroX = (float) getWidth() * zeroFrac;
             g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
             g.fillRect (zeroX, 0.0f, 1.0f, (float) getHeight());
+
+            if (drawHold)   // a bright 2px vertical marker at the recent peak
+            {
+                g.setColour (juce::Colour (ForgeLookAndFeel::textPrim));
+                g.fillRect ((float) getWidth() * holdFrac - 1.0f, 0.0f, 2.0f, (float) getHeight());
+            }
+
+            if (drawClip)   // sticky red cap at the hot (right) end
+            {
+                g.setColour (juce::Colour (ForgeLookAndFeel::recordRed));
+                g.fillRect ((float) getWidth() - 3.0f, 0.0f, 3.0f, (float) getHeight());
+            }
         }
         else
         {
@@ -157,6 +250,18 @@ public:
             const float zeroY = (float) getHeight() * (1.0f - zeroFrac);
             g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
             g.fillRect (0.0f, zeroY, (float) getWidth(), 1.0f);
+
+            if (drawHold)   // a bright 2px horizontal marker at the recent peak
+            {
+                g.setColour (juce::Colour (ForgeLookAndFeel::textPrim));
+                g.fillRect (0.0f, (float) getHeight() * (1.0f - holdFrac) - 1.0f, (float) getWidth(), 2.0f);
+            }
+
+            if (drawClip)   // sticky red cap at the hot (top) end
+            {
+                g.setColour (juce::Colour (ForgeLookAndFeel::recordRed));
+                g.fillRect (0.0f, 0.0f, (float) getWidth(), 3.0f);
+            }
         }
 
         g.setColour (juce::Colour (ForgeLookAndFeel::hairline));
@@ -168,6 +273,9 @@ private:
     te::LevelMeasurer::Client client;
     float currentDb = forge::meter::kMeterMinDb;
     bool  horizontal = false;   // W08: left->right fill for a wide meter row (default: vertical, bottom->up)
+    bool  peakHold = false;     // W08: draw the slow-decay peak-hold line (opt-in; default off)
+    bool  showClip = false;     // W08: draw + latch the sticky clip cap (opt-in; default off)
+    forge::meter::MeterHold hold;   // W08: hold-line + clip-latch state, advanced each poll when enabled
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PeakMeter)
 };

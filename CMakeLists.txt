@@ -58,6 +58,7 @@ target_sources(Forge PRIVATE
     src/ui/session/SceneColumnComponent.cpp
     src/ui/session/TrackColumnComponent.cpp
     src/ui/session/SessionMixerStrip.cpp
+    src/ui/session/SessionMasterStrip.cpp
     src/ui/session/SessionView.cpp
     src/ui/plugins/PluginWindow.cpp
     src/ui/popout/PopoutWindow.cpp
