@@ -7,12 +7,12 @@
 > self-contained mixing surface: a **master strip** fills the bottom-right corner (master volume + meter), and
 > the shared `PeakMeter` gains an opt-in **peak-hold line + sticky clip latch** (enabled on the master). The
 > scene column no longer dangles into the corner (wrapped in a clip container) — WITHOUT reintroducing the W07
-> rowBand drift MAJOR (contentH is untouched; QC verified). **Built + gated (36/36 PASS) + adversarially QC'd;
-> commit/push status at the bottom of this block.**
+> rowBand drift MAJOR (contentH is untouched; QC verified). **Built + gated (36/36 PASS) + adversarially QC'd
+> (3 clean + 1 fixed) + committed (`bdd7c84`) — NOT YET PUSHED**, awaiting the maintainer's go-ahead.
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). W19 (this session) is built
-on top of `30d343c`. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-SIX selftests PASS** (W19
+**`main`**. **W07–W18 are PUSHED to `origin/main`** (tip `30d343c`, sanitize-clean). W19 (`bdd7c84`, this
+session) is committed **locally on top of `30d343c`, NOT YET PUSHED**. Last build **clean** (MSVC Debug, 0 warnings) · **all THIRTY-SIX selftests PASS** (W19
 adds TWO new gates, `--selftest-sessionmaster` + `--selftest-peakhold`; floor **34 → 36**). ⚠ **History was
 rewritten in a prior session** (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF
 prose, then force-pushed — all pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` →
