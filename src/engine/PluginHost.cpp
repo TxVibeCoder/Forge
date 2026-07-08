@@ -249,6 +249,59 @@ namespace PluginHost
     }
 
     //==============================================================================
+    bool ensureDrumKitInstrument (te::AudioTrack& track)
+    {
+        // Same idempotent guard as ensureDefaultInstrument: if the chain already hosts a synth /
+        // MIDI-input plugin, do NOT clobber it (a melodic instrument) and do NOT stack a second one.
+        for (auto* p : track.pluginList)
+            if (p != nullptr && (p->isSynth() || p->takesMidiInput()))
+                return false;
+
+        // Insert the engine Sampler at the head via the same built-in path 4OSC / the demo piano use.
+        auto plugin = addInstrumentToTrack (track, te::SamplerPlugin::getPluginName());
+        if (plugin == nullptr)
+        {
+            FORGE_LOG_ERROR ("Drum kit: failed to insert Sampler instrument — step clip may be inaudible");
+            return true;   // we took the insert path (mirrors ensureDefaultInstrument's contract)
+        }
+
+        if (auto* sampler = dynamic_cast<te::SamplerPlugin*> (plugin.get()))
+        {
+            // Render (or reuse) the 8 self-rendered CC0 drum one-shots, in StepClip channel order.
+            const auto hits = InstrumentSamples::ensureDrumKit();
+            if (hits.isEmpty())
+                FORGE_LOG_ERROR ("Drum kit: no drum one-shots available — Sampler inserted but silent");
+
+            for (const auto& h : hits)
+            {
+                // addSound resolves the absolute path via the Edit's filePathResolver (returns it
+                // as-is). startTime 0, length 0 -> whole file. gainDb 0. Returns "" on success.
+                const juce::String err = sampler->addSound (h.file.getFullPathName(), h.name,
+                                                            0.0, 0.0, 0.0f);
+                if (err.isNotEmpty())
+                {
+                    FORGE_LOG_ERROR ("Drum kit: Sampler addSound failed for note "
+                                     + juce::String (h.midiNote) + " (" + h.name + ") — " + err);
+                    continue;   // skip this voice; keep loading the rest
+                }
+
+                // One voice per GM drum note: a single-note key range (min==max==keyNote) plays the
+                // sample at its natural pitch with no resampling. The just-added sound is the last one.
+                sampler->setSoundParams (sampler->getNumSounds() - 1, h.midiNote, h.midiNote, h.midiNote);
+
+                // CAVEAT: the audio loads on an AsyncUpdater — a headless render must pump the message
+                // loop after this before rendering, or getNumSamples()==0 and the note is skipped.
+            }
+        }
+        else
+        {
+            FORGE_LOG_ERROR ("Drum kit: inserted instrument was not a SamplerPlugin");
+        }
+
+        return true;
+    }
+
+    //==============================================================================
     // ---- applyInstrumentPreset + helpers ------------------------------------------------------
     //
     // The demo builder assigns a distinct voice per track. Kick/Bass are pure 4OSC parameter sets

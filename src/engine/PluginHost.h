@@ -44,6 +44,22 @@ namespace PluginHost
         Idempotent — safe to call every time clips are (re)created; never stacks synths. */
     bool ensureDefaultInstrument (te::AudioTrack& track);
 
+    /** Ensures the track has a DRUM KIT at the head of its chain so a Step Clip on it sounds like a
+        kit (8 GM drum voices) instead of 8 pitches of a synth. Same idempotent contract as
+        ensureDefaultInstrument: if the chain already hosts a synth / MIDI-input plugin this is a
+        no-op and returns false (never clobbers an existing melodic instrument, never stacks);
+        otherwise it inserts a te::SamplerPlugin at index 0, loads it with the self-rendered CC0
+        drum one-shots from InstrumentSamples::ensureDrumKit() — one sound per GM note (36 kick,
+        38 snare, 42 closed hat, 46 open hat, 39 clap, 45 low tom, 50 high tom, 51 ride), each mapped
+        to a single-note range so it plays at natural pitch — and returns true.
+
+        NOTE (headless callers): the Sampler loads its audio asynchronously (on an AsyncUpdater), so a
+        headless RENDER of a drum note must pump the message loop (e.g. dispatchPendingUpdates /
+        MessageManager::runDispatchLoopUntil) AFTER this returns and before rendering, or the sound
+        will have zero samples and be skipped on note-on. Structural inspection (getNumSounds /
+        getKeyNote — read straight from the ValueTree) needs no pump. Message-thread only. */
+    bool ensureDrumKitInstrument (te::AudioTrack& track);
+
     /** The demo's three self-contained instrument voices. Kick + Bass are programmed 4OSC presets
         (pure synthesis, deterministic, no asset). Piano is the engine Sampler loaded with Forge's
         self-rendered CC0 piano one-shot (see InstrumentSamples), pitched chromatically from one sample. */

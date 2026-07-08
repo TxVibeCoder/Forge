@@ -22,6 +22,7 @@
 #include "engine/Metronome.h"
 #include "engine/MidiLearn.h"
 #include "engine/MidiEditHelpers.h"
+#include "engine/ModifierHelpers.h"
 #include "engine/ForgeUIBehaviour.h"
 #include "engine/LaunchpadDriver.h"
 #include "engine/ControlSurfaceHost.h"
@@ -56,7 +57,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -891,6 +892,16 @@ public:
         {
             // Wave 10: the Step Clip (drum-grid) seam — create + grid + born-audible + toggle + undo.
             MessageManager::callAsync ([this] { runStepClipSelftest(); });
+        }
+        else if (mode == SelfTest::modifier)
+        {
+            // Frontier Wave 9: the ModifierHelpers LFO seam — create + oscillate + assign + tear down.
+            MessageManager::callAsync ([this] { runModifierSelftest(); });
+        }
+        else if (mode == SelfTest::drumkit)
+        {
+            // Drum sampler: the ensureDrumKitInstrument seam — 8 CC0 drum voices mapped to GM notes.
+            MessageManager::callAsync ([this] { runDrumKitSelftest(); });
         }
         else if (mode == SelfTest::midifile)
         {
@@ -5801,8 +5812,8 @@ private:
                 numSteps    = stepClip->getPattern (0).getNumNotes();
                 stepsOk     = numSteps == 16;                                           // getBeatsPerBar()*4 in 4/4
 
-                // Born-audible: createStepClipInSlot's ensureDefaultInstrument gave the track a synth
-                // (mirror that seam's own probe: a synth or MIDI-input plugin on the chain).
+                // Born-audible: createStepClipInSlot's ensureDrumKitInstrument gave the track a drum-kit
+                // Sampler (a synth) — mirror that seam's own probe: a synth or MIDI-input plugin on the chain.
                 auto tracks = te::getAudioTracks (*ed);
                 if (! tracks.isEmpty())
                     for (auto* p : tracks[0]->pluginList)
@@ -5887,6 +5898,280 @@ private:
             FORGE_LOG_ERROR ("Failed to write step-clip selftest report to: " + reportFile.getFullPathName());
 
         FORGE_LOG_INFO ("Step-clip selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-modifier: the ModifierHelpers LFO seam (frontier Wave 9 — engine only, no UI). Proves
+    // forge::modifier::addLFO() yields an oscillating LFOModifier, assign() drives an AutomatableParameter's
+    // getCurrentModifierValue() (non-constant, hasActiveModifierAssignments() true), and unassign()+removeLFO()
+    // cleanly detach it (getAssignments() empty, a final sweep constant). Fully synchronous: updateModifierTimers
+    // advances the LFO's internal Ramp headlessly (no audio graph / timer needed) — content-level asserts only.
+    void runModifierSelftest()
+    {
+        using namespace forge::modifier;
+
+        bool  trackCreated = false, lfoCreated = false, lfoOscillates = false;
+        bool  hasVolParam = false, assigned = false, modifierActive = false, modifierValueVaries = false;
+        bool  unassignedCleanly = false, finalValueConstant = false;
+        float lfoSpread = 0.0f, modifierValueSpread = 0.0f, finalSpread = 0.0f;
+
+        if (auto* edit = session.getEdit())
+        {
+            auto* track = session.appendAudioTrack ("SelfTest Modifier");
+            trackCreated = track != nullptr;
+
+            if (track != nullptr)
+            {
+                // addLFO: default LFOConfig (2 Hz, depth 1, bipolar sine, free-running).
+                auto lfo = addLFO (*track);
+                lfoCreated = lfo != nullptr;
+
+                if (lfo != nullptr)
+                {
+                    // Sweep ~60 ticks with numSamples=512 (MUST be > 0 or the free-running phase never
+                    // advances — recipe gotcha) and read the raw LFO value.
+                    float lfoMin = 0.0f, lfoMax = 0.0f;
+                    for (int i = 0; i < 60; ++i)
+                    {
+                        edit->updateModifierTimers ({}, 512);
+                        const float v = lfo->getCurrentValue();
+                        if (i == 0) { lfoMin = lfoMax = v; }
+                        else        { lfoMin = jmin (lfoMin, v); lfoMax = jmax (lfoMax, v); }
+                    }
+                    lfoSpread     = lfoMax - lfoMin;
+                    lfoOscillates = lfoSpread > 0.3f;
+
+                    // Assign to the track's volume param, sweep again, prove the modifier drives it live.
+                    auto* volPlugin = track->getVolumePlugin();
+                    auto* volParam  = volPlugin != nullptr ? volPlugin->volParam.get() : nullptr;
+                    hasVolParam = volParam != nullptr;
+
+                    if (volParam != nullptr)
+                    {
+                        auto assignment = assign (*volParam, *lfo);
+                        assigned = assignment != nullptr;
+
+                        float modMin = 0.0f, modMax = 0.0f;
+                        for (int i = 0; i < 60; ++i)
+                        {
+                            edit->updateModifierTimers ({}, 512);
+                            volParam->updateToFollowCurve ({});   // editTime {} -> live path (recipe gotcha)
+                            const float mv = volParam->getCurrentModifierValue();
+                            if (i == 0) { modMin = modMax = mv; }
+                            else        { modMin = jmin (modMin, mv); modMax = jmax (modMax, mv); }
+                        }
+                        modifierValueSpread = modMax - modMin;
+                        modifierValueVaries = modifierValueSpread > 0.001f;
+                        modifierActive      = volParam->hasActiveModifierAssignments();
+
+                        // Tear down: unassign + removeLFO, assert the param is clean and now reads constant.
+                        unassign (*volParam, *lfo);
+                        removeLFO (*lfo);
+                        unassignedCleanly = volParam->getAssignments().isEmpty();
+
+                        float finalMin = 0.0f, finalMax = 0.0f;
+                        for (int i = 0; i < 10; ++i)
+                        {
+                            edit->updateModifierTimers ({}, 512);
+                            volParam->updateToFollowCurve ({});
+                            const float mv = volParam->getCurrentModifierValue();
+                            if (i == 0) { finalMin = finalMax = mv; }
+                            else        { finalMin = jmin (finalMin, mv); finalMax = jmax (finalMax, mv); }
+                        }
+                        finalSpread        = finalMax - finalMin;
+                        finalValueConstant = finalSpread < 0.0001f;
+                    }
+                    else
+                        FORGE_LOG_ERROR ("selftest-modifier: track has no volume plugin/parameter");
+                }
+                else
+                    FORGE_LOG_ERROR ("selftest-modifier: addLFO() returned null");
+            }
+            else
+                FORGE_LOG_ERROR ("selftest-modifier: appendAudioTrack() returned null");
+        }
+        else
+            FORGE_LOG_ERROR ("selftest-modifier: session has no active Edit");
+
+        // Config-sensitivity leg (QC hardening): a depth=0 LFO must NOT oscillate. The engine's DEFAULT
+        // config already oscillates, so the default-config sweep above alone can't catch an applyConfig
+        // regression that drops a param write; a depth=0 sweep going flat proves the config writes take.
+        bool  depthZeroFlat   = false;
+        float depthZeroSpread = -1.0f;
+        if (auto* edit = session.getEdit())
+        {
+            if (auto* t2 = session.appendAudioTrack ("SelfTest Modifier Flat"))
+            {
+                if (auto flat = addLFO (*t2, LFOConfig { 2.0f, 0.0f, true, 0, false, 0.0f }))   // depth 0
+                {
+                    float mn = 0.0f, mx = 0.0f;
+                    for (int i = 0; i < 60; ++i)
+                    {
+                        edit->updateModifierTimers ({}, 512);
+                        const float v = flat->getCurrentValue();
+                        if (i == 0) { mn = mx = v; }
+                        else        { mn = jmin (mn, v); mx = jmax (mx, v); }
+                    }
+                    depthZeroSpread = mx - mn;
+                    depthZeroFlat   = depthZeroSpread < 0.01f;
+                    removeLFO (*flat);
+                }
+            }
+        }
+
+        const bool pass = trackCreated && lfoCreated && lfoOscillates
+                          && hasVolParam && assigned && modifierActive && modifierValueVaries
+                          && unassignedCleanly && finalValueConstant && depthZeroFlat;
+
+        String report;
+        report << "mode=modifier" << newLine
+               << "trackCreated="        << (trackCreated ? 1 : 0) << newLine
+               << "lfoCreated="          << (lfoCreated ? 1 : 0) << newLine
+               << "lfoSpread="           << String (lfoSpread, 4) << newLine
+               << "lfoOscillates="       << (lfoOscillates ? 1 : 0) << newLine
+               << "hasVolParam="         << (hasVolParam ? 1 : 0) << newLine
+               << "assigned="            << (assigned ? 1 : 0) << newLine
+               << "modifierActive="      << (modifierActive ? 1 : 0) << newLine
+               << "modifierValueSpread=" << String (modifierValueSpread, 4) << newLine
+               << "modifierValueVaries=" << (modifierValueVaries ? 1 : 0) << newLine
+               << "unassignedCleanly="   << (unassignedCleanly ? 1 : 0) << newLine
+               << "finalSpread="         << String (finalSpread, 6) << newLine
+               << "finalValueConstant="  << (finalValueConstant ? 1 : 0) << newLine
+               << "depthZeroSpread="     << String (depthZeroSpread, 4) << newLine
+               << "depthZeroFlat="       << (depthZeroFlat ? 1 : 0) << newLine
+               << "result="              << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="             << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write modifier selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Modifier selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-drumkit: the self-rendered CC0 drum-kit seam (Step Clips sound like a kit, not 8 synth
+    // pitches). Appends a FRESH AudioTrack, calls PluginHost::ensureDrumKitInstrument, and proves: the head
+    // instrument is a te::SamplerPlugin with 8 sounds, each mapped (keyNote==minKey==maxKey) to the expected
+    // GM note in StepClip channel order (36,38,42,46,39,45,50,51); a 2nd call no-ops (returns false, still 8
+    // sounds — idempotent, never stacks); the 8 drum_<note>.wav one-shots exist on disk > 1 KB. STRUCTURAL:
+    // getNumSounds/getKeyNote read straight from the ValueTree, so no message-loop pump is needed. (A render
+    // leg — note-on -> non-silence — would go after the loads, must first pump the Sampler async load, and
+    // SKIP-degrade if the buffer is still empty: the same async-load class the piano preset documents.)
+    void runDrumKitSelftest()
+    {
+        static const int expectedNotes[8] = { 36, 38, 42, 46, 39, 45, 50, 51 };
+
+        bool trackOk = false, isSampler = false, soundCountOk = false, notesOk = false,
+             idempotentReturnedFalse = false, idempotentStillEight = false, filesOk = false;
+        int  numSounds = -1, numSoundsAfter2nd = -1;
+
+        if (session.getEdit() != nullptr)
+        {
+            // A freshly appended audio track carries no head instrument -> the insert path runs.
+            auto* track = session.appendAudioTrack ("SelfTest DrumKit");
+            trackOk = track != nullptr;
+
+            if (track != nullptr)
+            {
+                const bool inserted = PluginHost::ensureDrumKitInstrument (*track);
+
+                te::SamplerPlugin* sampler = nullptr;
+                for (auto* p : track->pluginList)
+                    if ((sampler = dynamic_cast<te::SamplerPlugin*> (p)) != nullptr)
+                        break;
+
+                isSampler = inserted && sampler != nullptr;
+
+                if (sampler != nullptr)
+                {
+                    numSounds    = sampler->getNumSounds();
+                    soundCountOk = numSounds == 8;
+
+                    notesOk = numSounds == 8;
+                    for (int i = 0; i < sampler->getNumSounds() && i < 8; ++i)
+                        if (sampler->getKeyNote (i) != expectedNotes[i]
+                            || sampler->getMinKey (i) != expectedNotes[i]
+                            || sampler->getMaxKey (i) != expectedNotes[i])
+                            notesOk = false;
+
+                    // Idempotent: a 2nd call must no-op (return false) and leave exactly 8 sounds.
+                    const bool inserted2 = PluginHost::ensureDrumKitInstrument (*track);
+                    idempotentReturnedFalse = ! inserted2;
+                    numSoundsAfter2nd = sampler->getNumSounds();
+                    idempotentStillEight = numSoundsAfter2nd == 8;
+                }
+            }
+
+            // The 8 one-shots exist on disk and are non-trivially sized (> 1 KB).
+            const File libDir = File::getSpecialLocation (File::userApplicationDataDirectory)
+                                    .getChildFile ("Forge").getChildFile ("library");
+            filesOk = true;
+            for (int n : expectedNotes)
+            {
+                const File f = libDir.getChildFile ("drum_" + juce::String (n) + ".wav");
+                if (! (f.existsAsFile() && f.getSize() > 1024))
+                    filesOk = false;
+            }
+        }
+
+        // Non-silence leg (QC hardening): decode each generated drum one-shot and assert it holds real
+        // (non-silent) PCM. The structural checks above prove a Sampler with 8 mapped sounds + files that
+        // EXIST, not that the files contain AUDIO. (A full note-on -> engine-render leg stays parked, same
+        // class as the W09 Sampler-ingestion follow-up; this hermetic file-decode proves the generators
+        // produce audible one-shots — on a cold cache it exercises the generate path end to end.)
+        bool audioNonSilent = false;
+        {
+            const File libDir = File::getSpecialLocation (File::userApplicationDataDirectory)
+                                    .getChildFile ("Forge").getChildFile ("library");
+            WavAudioFormat wav;
+            int nonSilent = 0;
+            for (int n : expectedNotes)
+            {
+                const File f = libDir.getChildFile ("drum_" + juce::String (n) + ".wav");
+                if (auto* reader = wav.createReaderFor (f.createInputStream().release(), true))
+                {
+                    std::unique_ptr<AudioFormatReader> r (reader);
+                    const int len = (int) jmin ((juce::int64) 65536, r->lengthInSamples);
+                    AudioBuffer<float> buf (jmax (1, (int) r->numChannels), jmax (1, len));
+                    buf.clear();
+                    r->read (&buf, 0, buf.getNumSamples(), 0, true, false);
+                    if (buf.getMagnitude (0, buf.getNumSamples()) > 0.05f)
+                        ++nonSilent;
+                }
+            }
+            audioNonSilent = nonSilent == 8;
+        }
+
+        const bool pass = trackOk && isSampler && soundCountOk && notesOk
+                          && idempotentReturnedFalse && idempotentStillEight && filesOk && audioNonSilent;
+
+        String report;
+        report << "mode=drumkit" << newLine
+               << "trackOk="                 << (trackOk ? 1 : 0) << newLine
+               << "isSampler="               << (isSampler ? 1 : 0) << newLine
+               << "numSounds="               << numSounds << newLine
+               << "soundCountOk="            << (soundCountOk ? 1 : 0) << newLine
+               << "notesOk="                 << (notesOk ? 1 : 0) << newLine
+               << "idempotentReturnedFalse=" << (idempotentReturnedFalse ? 1 : 0) << newLine
+               << "numSoundsAfter2nd="       << numSoundsAfter2nd << newLine
+               << "idempotentStillEight="    << (idempotentStillEight ? 1 : 0) << newLine
+               << "filesOk="                 << (filesOk ? 1 : 0) << newLine
+               << "audioNonSilent="          << (audioNonSilent ? 1 : 0) << newLine
+               << "result="                  << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="                 << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write drum-kit selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Drum-kit selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " - report: " + reportFile.getFullPathName());
 
         JUCEApplication::getInstance()->systemRequestedQuit();
@@ -7062,6 +7347,8 @@ public:
                             : commandLine.contains ("--selftest-slotmove")       ? "selftest-slotmove"       // before bare --selftest (W3)
                             : commandLine.contains ("--selftest-quantise")       ? "selftest-quantise"       // before bare --selftest (W4)
                             : commandLine.contains ("--selftest-capture")        ? "selftest-capture"        // before bare --selftest (W7)
+                            : commandLine.contains ("--selftest-modifier")       ? "selftest-modifier"       // before bare --selftest (collision-free, W9)
+                            : commandLine.contains ("--selftest-drumkit")        ? "selftest-drumkit"        // before bare --selftest (collision-free, drum sampler)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -7132,6 +7419,8 @@ public:
                         : commandLine.contains ("--selftest-slotmove")       ? SelfTest::slotmove       // before bare --selftest (W3)
                         : commandLine.contains ("--selftest-quantise")       ? SelfTest::quantise       // before bare --selftest (W4)
                         : commandLine.contains ("--selftest-capture")        ? SelfTest::capture        // before bare --selftest (W7)
+                        : commandLine.contains ("--selftest-modifier")       ? SelfTest::modifier       // before bare --selftest (collision-free, W9)
+                        : commandLine.contains ("--selftest-drumkit")        ? SelfTest::drumkit        // before bare --selftest (collision-free, drum sampler)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

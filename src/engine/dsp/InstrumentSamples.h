@@ -33,4 +33,27 @@ namespace InstrumentSamples
         Deterministic (seeded self-owned PRNG for the strike transient, NOT juce::Random).
         Message-thread only. */
     juce::File ensurePianoOneShot();
+
+    //==============================================================================
+    // Drum kit — one self-rendered CC0 one-shot per GM drum note a StepClip channel triggers, so the
+    // 8-lane drum grid sounds like a kit (loaded into a te::SamplerPlugin, one voice per note) instead
+    // of 8 pitches of a synth. Same determinism/CC0 contract as the piano.
+
+    /** One rendered drum voice: the on-disk one-shot, the GM MIDI note it is mapped to, and a display
+        name. Returned in StepClip CHANNEL ORDER by ensureDrumKit(). */
+    struct DrumHit
+    {
+        juce::File   file;
+        int          midiNote = 0;
+        juce::String name;
+    };
+
+    /** Generates (if missing) the 8 CC0 drum one-shots into %APPDATA%\Forge\library\drum_<note>.wav and
+        returns them in StepClip channel order — GM notes 36 (kick), 38 (snare), 42 (closed hat),
+        46 (open hat), 39 (clap), 45 (low tom), 50 (high tom), 51 (ride). Idempotent + crash-safe PER
+        VOICE (looksValid reuse, temp-then-move, log on failure): a voice that fails to write is omitted,
+        never returned half-written, so the result holds only the voices actually on disk (0..8, in
+        order). Deterministic (a distinct seeded self-owned PRNG per voice, NOT juce::Random).
+        Message-thread only (file I/O). */
+    juce::Array<DrumHit> ensureDrumKit();
 }

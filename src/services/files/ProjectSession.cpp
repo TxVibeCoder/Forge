@@ -1028,7 +1028,7 @@ te::StepClip::Ptr ProjectSession::createStepClipInSlot (int trackIndex, int scen
 
     if (clip != nullptr)
     {
-        PluginHost::ensureDefaultInstrument (*track);   // born audible — default 4OSC at chain head
+        PluginHost::ensureDrumKitInstrument (*track);   // born audible — self-rendered CC0 drum kit at chain head
         edit->markAsChanged();                          // user mutation -> persist (Sf)
     }
     else

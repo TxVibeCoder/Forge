@@ -597,7 +597,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idRecordSlot, "Record into slot");
 
     // Wave 10: an empty slot can spawn a born-audible STEP clip (drum grid). Offered on any empty slot
-    // (createStepClipInSlot ensures the track + a default 4OSC); opens in the StepGrid drawer.
+    // (createStepClipInSlot ensures the track + a drum-kit Sampler); opens in the StepGrid drawer.
     if (! filled)
         menu.addItem (idNewStep, "New Step Clip");
 
