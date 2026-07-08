@@ -62,11 +62,12 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — THIRTY-EIGHT gates as of W20 + the MIDI-file-import feature:
-  W20 added `--selftest-stepclip` (the Step Clip drum-grid seam), and the post-W20 MIDI-file drag-and-drop
-  feature added `--selftest-midifile` (write a .mid → import into a slot + arrange → assert notes/position/
-  born-audible). Frontier Wave 9 (LFO modifiers) was SKIPPED — see the deferred recipe in
-  `docs/wave-9-lfo-recipe.local.md`):
+- **Selftest floor** (must pass after any change — FORTY gates as of W21 (frontier Wave 9 LFO + the drum
+  sampler): W20 added `--selftest-stepclip` (the Step Clip drum-grid seam); the post-W20 MIDI-file feature added
+  `--selftest-midifile`; and W21 added `--selftest-modifier` (the LFO / `ModifierHelpers` seam) +
+  `--selftest-drumkit` (the self-rendered CC0 drum-kit Sampler that Step Clips are now born with). **Frontier
+  Wave 9 (LFO modifiers) SHIPPED in W21** — the 10-wave frontier program is now COMPLETE (its recipe is archived
+  in `docs/wave-9-lfo-recipe.local.md`):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-midifile`, `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
@@ -76,8 +77,9 @@ conflict, surface it.
   `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
-  `--selftest-stepclip`;
-  (⚠ new gate names that CONTAIN an existing name must be
+  `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`;
+  (`-modifier`/`-drumkit` are collision-free — placed before bare `--selftest`.
+  ⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-midilearn`/`-midiinput`/`-midifile` ⊃ `-midi`,
   `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
   `-scenedelete`/`-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
@@ -207,6 +209,19 @@ conflict, surface it.
   now but acts on it later (spanning a live-editable window) must key its later action on a stable identity
   (`EditItemID`), never on a positional/index resolve that can silently point at different content by the time
   the action runs.**
+- **`AutomatableParameter::removeModifier(ModifierSource&)` fires `jassertfalse` in Debug on a no-op (W21).** The
+  by-source overload asserts if `source` has no assignment on that param — so an `unassign`-style wrapper (e.g.
+  `forge::modifier::unassign` in `src/engine/ModifierHelpers.h`) must guard on
+  `target.getModifiers().contains(&source)` before calling it, or a Debug build asserts. The seam does; a future
+  "Modulate" UI that unassigns arbitrary (source, target) pairs must keep the guard.
+- **Step Clips are born with a drum-kit `SamplerPlugin`, and head-instrument assignment is idempotent
+  "first-instrument-wins" (W21).** `createStepClipInSlot` calls `PluginHost::ensureDrumKitInstrument` (8
+  self-rendered CC0 one-shots mapped to the GM notes 36/38/42/46/39/45/50/51 the StepClip channels trigger);
+  like `ensureDefaultInstrument` it no-ops if the track already hosts a head synth. So a step clip and a melodic
+  MIDI clip that share a track do NOT each get their own instrument — whichever landed first wins, and because a
+  drum sound is a single-note key range, a melodic pitch played through a drum kit (or a drum note through a
+  4OSC) can be silent/wrong-timbre. A clip visibly on a track can be silent for this reason (v1; a per-clip
+  instrument is the follow-up).
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,
   never `setBounds(0,0,…)` (which yanks the scroll to the top on any relayout).
 - **JUCE lock types:** `juce::CriticalSection::ScopedLockType` / `ScopedUnlockType` (the bare `ScopedLock` is the

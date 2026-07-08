@@ -1,23 +1,27 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-07**, end of **"W20 — frontier program
-> Wave 10: Step Clips (the drum-grid clip type)"** — the CAPSTONE of the 10-wave **frontier build program**
-> ([[forge-frontier-program]] / `docs/frontier-program.local.md`). ✅ Forge gains a first-class in-app **drum
-> step-sequencer clip type**: right-click an empty Session slot → **New Step Clip** → a born-audible step clip
-> opens in a **16×8 drag-to-toggle grid** in the bottom drawer. **Frontier Wave 9 (LFO modifiers) was SKIPPED**
-> at the maintainer's call (its source-verified recipe is preserved in `docs/wave-9-lfo-recipe.local.md`), so the
-> program is complete bar Wave 9. **Built (2-role wave: a file-disjoint UI agent for `StepGridView` + orchestrator
-> for the seam/shell/gate) + gated (37/37 PASS) + adversarially QC'd — a 4-dimension swarm caught 3 real defects
-> (a conditional non-4/4 length bug, a high-severity raw-pointer UAF, and an undo-staleness display bug), ALL
-> FIXED + re-verified. **PUSHED to `origin/main`** (tip `9a1157a`, sanitize-clean).
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-08**, end of **"W21 — frontier Wave 9
+> (LFO modifiers) + a self-rendered drum sampler for Step Clips"** — which **completes the 10-wave frontier build
+> program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`); Wave 9 was the last one outstanding.
+> Two file-disjoint features in one **two-track wave** (two parallel build agents + orchestrator consolidation):
+> **(1) Wave 9 LFO** — a header-only `src/engine/ModifierHelpers.h` seam over the engine's unit-tested
+> `ModifierList` (create/config/assign/tear-down an LFO on any automatable param), gate `--selftest-modifier`;
+> **(2) drum sampler** — Step Clips are now born with a `te::SamplerPlugin` of 8 **self-rendered CC0** drum
+> one-shots (one per GM note a StepClip channel triggers: 36/38/42/46/39/45/50/51), so the grid sounds like a
+> **KIT** not 8 synth pitches (`InstrumentSamples::ensureDrumKit` + `PluginHost::ensureDrumKitInstrument` + a
+> one-line `createStepClipInSlot` reroute), gate `--selftest-drumkit`. Build **clean (0 warnings)** · **40/40
+> selftest floor** (floor 38 → 40) · 11/11 screenshots · a **2-dimension adversarial QC** — both **SHIP** (0
+> blocker/major), 4 minor/doc findings fixed (a `depth=0` config-sensitivity gate leg, an `unassign` Debug-assert
+> guard, a non-silence drum-decode gate leg, 2 stale comments). **COMMITTED LOCALLY — NOT pushed; held for the
+> maintainer's OK.** Prior CAPSTONE (W20): Step Clips, the drum-grid clip type (`--selftest-stepclip`).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W20 + the post-W20 MIDI-file-import feature are PUSHED to `origin/main`** (tip `9a1157a`,
-sanitize-clean; local `main` == `origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all
-THIRTY-EIGHT selftests PASS** (W20 added
-`--selftest-stepclip`; the MIDI-file-import feature added `--selftest-midifile`; floor **36 → 38**; plus an 11th
-`--screenshot` state `session_stepgrid`). ⚠ **History was rewritten in a prior session**
+**`main`**. **W07–W20 + the post-W20 MIDI-file-import feature are PUSHED to `origin/main`** (tip `cf0023d`,
+sanitize-clean). **W21 (this session) is COMMITTED LOCALLY but NOT pushed** — held for the maintainer's OK, so
+local `main` is ahead of `origin/main`. Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY selftests
+PASS** (W21 added `--selftest-modifier` + `--selftest-drumkit`; floor **38 → 40**; the 11-state `--screenshot`
+matrix unchanged). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
 pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
 Also landed (post-W20, a maintainer-requested feature — NOT a frontier wave): **MIDI-file drag-and-drop import**.
@@ -482,13 +486,15 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    gate (floor 36→37) + an 11th `--screenshot` state. **Built + gated (37/37 PASS) + 4-dim QC — 3 real defects
    caught + fixed** (non-4/4 length, a raw-pointer UAF, undo-staleness). **Frontier Wave 9 (LFO) SKIPPED** —
    recipe preserved in `docs/wave-9-lfo-recipe.local.md`.
-   **▶ NEXT: the frontier program is COMPLETE bar Wave 9.** Options: (a) pick up **frontier Wave 9 — Live
-   modulation** (plugin-param LFO modifiers; header-only `src/engine/ModifierHelpers.h` over the engine's
-   unit-tested `ModifierList` + a "Modulate" affordance + `--selftest-modifier` — the frozen recipe is ready in
-   `docs/wave-9-lfo-recipe.local.md`); (b) the documented **Step Clips follow-up** — a drum SAMPLER instrument
-   (v1's 4OSC gives 8 pitches, not drum timbres) so the grid sounds like real drums; (c) the standing
+   **▶ NEXT: the 10-wave frontier program is COMPLETE (W21 shipped Wave 9, the last one) and the Step Clips
+   drum-sampler follow-up is done.** Remaining options: (a) the **"Modulate" UI** for Wave 9's LFO seam (the
+   engine seam + `--selftest-modifier` shipped; a mixer-strip / plugin-param context affordance reusing the
+   MIDI-learn param picker is the deferred Fable follow-up); (b) **documented W21 follow-ups** — a full
+   engine-render / Sampler-ingestion gate leg (parked, W09/W10 class), a **per-clip instrument** so a step clip +
+   a melodic MIDI clip sharing a track each get their own voice (the "first-instrument-wins" v1 limitation — a
+   melodic pitch through a drum kit is silent), and fuller LFO config-matrix gate coverage; (c) the standing
    **`FourOscPlugin` redo-wipe engine defect** (a maintainer call — vendored engine patch); or (d) a new
-   direction from the maintainer. Full ordered program + the critic's corrections in
+   direction from the maintainer. Full record → [devlog/wave-21-lfo-drumkit.md](devlog/wave-21-lfo-drumkit.md). Full ordered program + the critic's corrections in
    `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render
    audibility leg for `--selftest-capture` (parked, same class as the W09/W10 render-leg follow-up); the
    reseal heuristic's dependency on `LaunchHandle::nudge`/`setLooping`/`playSynced` staying uncalled (see the
