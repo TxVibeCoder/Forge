@@ -1312,6 +1312,10 @@ private:
     // (valid only while its plugin lives — transient, rebuilt on every menu open).
     juce::Array<PluginHost::LearnableParam> midiLearnTargets;
 
+    // W22 "Modulate" picker (Ctrl+M): menu ids from showModulateMenu() index into this; each holds a live
+    // param pointer the selection attaches an LFO to (forge::modifier::addLFO + assign).
+    juce::Array<PluginHost::LearnableParam> modulateTargets;
+
     ViewMode viewMode = ViewMode::Session;
     BottomMode bottomMode = BottomMode::Detail;   // Detail (audio) vs PianoRoll (MIDI) in the drawer
     bool browserVisible = false;   // lean default; toggled on demand
@@ -1967,6 +1971,7 @@ private:
             if (letter == 'N') { if (controlBar.onNew)    controlBar.onNew();    return true; }
             if (letter == 'I') { if (controlBar.onImport) controlBar.onImport(); return true; }
             if (letter == 'L') { showMidiLearnMenu();                            return true; }   // MIDI-learn picker (P2)
+            if (letter == 'M') { showModulateMenu();                             return true; }   // LFO Modulate picker (W22)
 
             return false;   // unrecognised Ctrl combo: let it propagate
         }
@@ -2268,6 +2273,89 @@ private:
                                     self->setStatusMessage ("MIDI Learn armed: " + param->getParameterName()
                                                             + " — move a controller to bind");
                                 }
+                            });
+    }
+
+    // W22: the "Modulate" picker — a track ▸ plugin ▸ param cascade (cloned from showMidiLearnMenu, the
+    // Fable-approved MIDI-learn pattern) whose terminal action attaches an LFO (forge::modifier::addLFO) and
+    // assigns it to the chosen parameter. The engine seam is gated by --selftest-modifier; this is the UI
+    // entry point (Ctrl+M). Menu wording / placement + a "modulated" indicator are deferred to Fable.
+    void showModulateMenu()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr)
+            return;
+
+        modulateTargets.clearQuick();
+        PopupMenu menu;
+        int id = 1;
+
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            if (track == nullptr)
+                continue;
+
+            PopupMenu trackMenu;
+
+            for (auto* plugin : PluginHost::getTrackInserts (*track))
+            {
+                if (plugin == nullptr)
+                    continue;
+
+                PopupMenu pluginMenu;
+
+                for (auto& lp : PluginHost::getAutomatableParameters (*plugin))
+                {
+                    if (lp.param == nullptr)
+                        continue;
+
+                    modulateTargets.add (lp);
+                    pluginMenu.addItem (id++, lp.name);
+                }
+
+                if (pluginMenu.getNumItems() > 0)
+                    trackMenu.addSubMenu (plugin->getName(), pluginMenu);
+            }
+
+            if (trackMenu.getNumItems() > 0)
+                menu.addSubMenu (track->getName(), trackMenu);
+        }
+
+        if (modulateTargets.isEmpty())
+        {
+            setStatusMessage ("Modulate: no automatable plugin parameters — add a plugin first");
+            return;
+        }
+
+        Component::SafePointer<MainComponent> safeThis (this);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
+                            [safeThis] (int result)
+                            {
+                                auto* self = safeThis.getComponent();
+                                if (self == nullptr || result <= 0)
+                                    return;
+
+                                const int idx = result - 1;
+                                if (idx < 0 || idx >= self->modulateTargets.size())
+                                    return;
+
+                                auto* param = self->modulateTargets.getReference (idx).param;
+                                if (param == nullptr)
+                                    return;
+
+                                // AutomatableParameter::getTrack() == plugin->getOwnerTrack(); attach + assign a fresh LFO.
+                                if (auto* track = dynamic_cast<te::AudioTrack*> (param->getTrack()))
+                                {
+                                    if (auto lfo = forge::modifier::addLFO (*track))
+                                    {
+                                        forge::modifier::assign (*param, *lfo);
+                                        self->setStatusMessage ("Modulating " + param->getParameterName() + " with an LFO");
+                                    }
+                                    else
+                                        self->setStatusMessage ("Modulate: failed to create an LFO");
+                                }
+                                else
+                                    self->setStatusMessage ("Modulate: parameter has no host track");
                             });
     }
 
@@ -6092,7 +6180,7 @@ private:
 
         bool  trackCreated = false, lfoCreated = false, lfoOscillates = false;
         bool  hasVolParam = false, assigned = false, modifierActive = false, modifierValueVaries = false;
-        bool  unassignedCleanly = false, finalValueConstant = false;
+        bool  unassignedCleanly = false, finalValueConstant = false, paramResolvesTrack = false;
         float lfoSpread = 0.0f, modifierValueSpread = 0.0f, finalSpread = 0.0f;
 
         if (auto* edit = session.getEdit())
@@ -6125,6 +6213,10 @@ private:
                     auto* volPlugin = track->getVolumePlugin();
                     auto* volParam  = volPlugin != nullptr ? volPlugin->volParam.get() : nullptr;
                     hasVolParam = volParam != nullptr;
+
+                    // W22 Modulate path: showModulateMenu resolves the LFO's host track via param->getTrack().
+                    paramResolvesTrack = volParam != nullptr
+                                         && dynamic_cast<te::AudioTrack*> (volParam->getTrack()) == track;
 
                     if (volParam != nullptr)
                     {
@@ -6199,9 +6291,34 @@ private:
             }
         }
 
+        // Config-sensitivity leg 2 (QC): a UNIPOLAR depth=0 offset=0.7 LFO must read a constant ~0.7 —
+        // proves the offset + bipolar param writes take effect (out = sample*depth + offset, with the
+        // bipolar remap applied ONLY when bipolar=true; depth 0 + bipolar false => output is exactly offset).
+        bool  offsetApplied = false;
+        float offsetMean    = -1.0f;
+        if (auto* edit = session.getEdit())
+        {
+            if (auto* t3 = session.appendAudioTrack ("SelfTest Modifier Offset"))
+            {
+                if (auto off = addLFO (*t3, LFOConfig { 2.0f, 0.0f, /*bipolar*/ false, 0, false, /*offset*/ 0.7f }))
+                {
+                    double sum = 0.0;
+                    for (int i = 0; i < 30; ++i)
+                    {
+                        edit->updateModifierTimers ({}, 512);
+                        sum += (double) off->getCurrentValue();
+                    }
+                    offsetMean    = (float) (sum / 30.0);
+                    offsetApplied = std::abs (offsetMean - 0.7f) < 0.05f;
+                    removeLFO (*off);
+                }
+            }
+        }
+
         const bool pass = trackCreated && lfoCreated && lfoOscillates
                           && hasVolParam && assigned && modifierActive && modifierValueVaries
-                          && unassignedCleanly && finalValueConstant && depthZeroFlat;
+                          && unassignedCleanly && finalValueConstant && depthZeroFlat && offsetApplied
+                          && paramResolvesTrack;
 
         String report;
         report << "mode=modifier" << newLine
@@ -6219,6 +6336,9 @@ private:
                << "finalValueConstant="  << (finalValueConstant ? 1 : 0) << newLine
                << "depthZeroSpread="     << String (depthZeroSpread, 4) << newLine
                << "depthZeroFlat="       << (depthZeroFlat ? 1 : 0) << newLine
+               << "offsetMean="          << String (offsetMean, 4) << newLine
+               << "offsetApplied="       << (offsetApplied ? 1 : 0) << newLine
+               << "paramResolvesTrack="  << (paramResolvesTrack ? 1 : 0) << newLine
                << "result="              << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="             << forge::log::getLogFile().getFullPathName() << newLine;
 
