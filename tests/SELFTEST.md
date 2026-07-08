@@ -867,14 +867,14 @@ engine reader is tempo-INDEPENDENT (ticks→beats), so notes land on file beats 
 The acceptance gate for **Step Clips** (`ProjectSession::createStepClipInSlot` + the engine's `StepClip`). Creates
 a step clip in slot (0,0) and proves the whole chain headlessly. Synchronous. The StepClip constructor
 auto-builds the default grid (8 GM-drum channels × a 16-step pattern in 4/4), so the seam inserts + ensures the
-track's default 4OSC and nothing else.
+track's drum-kit Sampler (W21; a default 4OSC before then) and nothing else.
 
 | field | meaning | PASS requires |
 |---|---|---|
 | `clipCreated` | `createStepClipInSlot` returned a `StepClip` | 1 |
 | `numChannels` / `channelsOk` | the ctor auto-built 8 GM-drum channels | 8 / 1 |
 | `numSteps` / `stepsOk` | pattern[0] has 16 steps (`getBeatsPerBar()*4` in 4/4) | 16 / 1 |
-| `instrumentOk` | the seam's `ensureDefaultInstrument` put a synth on the track (born-audible) | 1 |
+| `instrumentOk` | the seam's `ensureDrumKitInstrument` put a synth (a drum-kit Sampler, W21) on the track (born-audible) | 1 |
 | `noteOnsWhenOff` / `midiEmptyWhenOff` | a fresh clip (all cells off) generates NO MIDI note-ons | 0 / 1 |
 | `cellToggleOn` | `setCell(0,0,0,true)` → `getCell` true | 1 |
 | `noteOnsWhenOn` / `midiWhenOn` | with a cell on, `generateMidiSequence` emits note-ons (the born-audible link) | >0 / 1 |
@@ -886,7 +886,53 @@ track's default 4OSC and nothing else.
 > verify `mode=stepclip`. **Floor is now 37 gates.** The 16×8 drag-to-toggle grid UI (`StepGridView`) + the
 > `BottomMode::StepGrid` drawer routing (the `isMidi()==false` gotcha — a StepClip is routed by an explicit
 > `dynamic_cast<te::StepClip*>` before the MidiClip cast) are proved by `--screenshot` + adversarial QC, not by a
-> gate. v1's 4OSC gives 8 distinct PITCHES; a drum sampler for real drum timbres is a documented follow-up.
+> gate. Step clips are now born with a **drum-kit Sampler** (W21) so they sound like a kit — see
+> `--selftest-drumkit` below (the "4OSC gives pitches, not drum timbres" follow-up is now done).
+
+## `Forge --selftest-modifier` (LFO plugin-param modifier seam, frontier Wave 9)
+
+The acceptance gate for **frontier Wave 9 — live modulation** (`src/engine/ModifierHelpers.h`, over the engine's
+unit-tested `ModifierList`). Synchronous, message-thread. Creates an LFO on a fresh track, sweeps it headlessly
+(`edit->updateModifierTimers({}, 512)` — `numSamples>0` is load-bearing: the free-running phase advances by
+numSamples, not editTime), assigns it to the track volume param, and tears it back down. Content-level asserts
+only (never `canUndo/canRedo` — the FourOsc redo-wipe defect). It does NOT render audio.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `lfoCreated` | `forge::modifier::addLFO` inserted a live `LFOModifier` | 1 |
+| `lfoSpread` / `lfoOscillates` | the default-config LFO genuinely oscillates over the sweep | spread > 0.3 / 1 |
+| `assigned` / `modifierActive` | `assign()` binds the LFO to `volParam`; `hasActiveModifierAssignments()` true | 1 / 1 |
+| `modifierValueVaries` | the param's `getCurrentModifierValue()` is non-constant while assigned | 1 |
+| `unassignedCleanly` / `finalValueConstant` | `unassign()`+`removeLFO()` leave `getAssignments()` empty and the param constant again | 1 / 1 |
+| `depthZeroFlat` (`depthZeroSpread`) | a `depth=0` LFO does NOT oscillate — proves `applyConfig`'s param writes take effect (the engine default also oscillates, so this catches an `applyConfig` regression) | 1 (≈0) |
+
+> `-modifier` is collision-free (no substring overlap) — placed before the bare `--selftest` in both ladders;
+> verify `mode=modifier`. **Floor is now 39 gates.** The engine seam + gate stand alone; the "Modulate" UI
+> affordance is deferred to Fable. Adversarial QC (SHIP) added the `depthZeroFlat` config-sensitivity leg and
+> guarded `unassign()` against the `removeModifier` Debug `jassertfalse` (a new CLAUDE.md gotcha).
+
+## `Forge --selftest-drumkit` (self-rendered CC0 drum-kit sampler)
+
+The acceptance gate for the **drum sampler** (`InstrumentSamples::ensureDrumKit` +
+`PluginHost::ensureDrumKitInstrument`) that Step Clips are now born with (via a one-line `createStepClipInSlot`
+reroute). Synchronous. Appends a fresh track, inserts the drum kit, and proves the whole chain structurally +
+non-silent.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `isSampler` | `ensureDrumKitInstrument` inserted a `te::SamplerPlugin` at the track head | 1 |
+| `numSounds` / `soundCountOk` | the Sampler holds 8 sounds (one per GM drum voice) | 8 / 1 |
+| `notesOk` | each sound is keyed (key==min==max) to its GM note in StepClip channel order (36/38/42/46/39/45/50/51) | 1 |
+| `idempotentReturnedFalse` / `idempotentStillEight` | a 2nd `ensureDrumKitInstrument` no-ops (returns false; still 8 sounds — never stacks) | 1 / 1 |
+| `filesOk` | the 8 `drum_<note>.wav` one-shots exist on disk > 1 KB | 1 |
+| `audioNonSilent` | each generated one-shot DECODES to non-silent PCM (peak > 0.05) — proves the generators produce real audio, not just valid files (on a cold cache this exercises the full generate path) | 1 |
+
+> `-drumkit` is collision-free (no substring overlap) — placed before the bare `--selftest` in both ladders;
+> verify `mode=drumkit`. **Floor is now 40 gates.** All audio is self-rendered CC0 into `%APPDATA%\Forge\library`
+> (no committed binaries; deterministic seeded synthesis; the piano one-shot is byte-identical after the
+> shared-writer refactor). A full note-on → engine-render (Sampler-ingestion) leg stays parked (W09/W10 class);
+> the mixed-clip "first-instrument-wins" limitation (a melodic pitch played through a drum kit is silent) is a
+> documented v1 behavior.
 
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
