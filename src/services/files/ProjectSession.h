@@ -192,6 +192,13 @@ public:
         success. */
     bool moveSlotClip (int srcTrack, int srcScene, int dstTrack, int dstScene);
 
+    /** Moves the clip in slot (trackIndex, sceneIndex) to a NEW audio track (appended at the end, same scene
+        row) and gives that track its OWN head instrument — a drum kit for a StepClip, else a default 4OSC.
+        The mixed-clip fix: a step clip and a melodic clip that shared a track (the engine is track-level only —
+        no per-clip instrument) each get their own voice. Returns the new track index, or -1 on failure.
+        Message-thread only. */
+    int moveSlotClipToOwnTrack (int trackIndex, int sceneIndex);
+
     /** Copies the clip in slot (trackIndex, sceneIndex) onto the SAME track's LINEAR (Arrange)
         timeline — the explicit, one-directional "Send to Arrangement" bridge (W5). The copy is
         APPENDED after that track's existing arrange content (track->getTotalRange().getEnd(), == 0

@@ -517,7 +517,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
     enum { idFollowBase = 100, idFollowRandomV2 = 160, idLoopToggle = 200,
            idModeTrigger = 300, idModeGate, idModeToggle,
            idLaunchQInherit = 400, idLaunchQBase = 401 };   // W2: 401.. = one per LaunchQType (enum order)
-    enum { idDuplicate = 50, idMoveToNext, idSendArrangeLoop, idNewStep };   // W3/Wave-7/Wave-10 slot ops (9..99 gap)
+    enum { idDuplicate = 50, idMoveToNext, idSendArrangeLoop, idNewStep, idMoveToOwnTrack };   // W3/Wave-7/Wave-10/W22 slot ops (9..99 gap)
 
     // The v1 follow-action vocabulary (deterministic set; trackAny/trackOther = "Random" deferred to v2). A
     // function-local static so the async dispatch lambda can index it by (result - idFollowBase).
@@ -549,6 +549,7 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         menu.addItem (idDelete,      "Delete clip");          // W07: empty the slot (filled-only); undoable via W05 global Undo
         menu.addItem (idDuplicate,   "Duplicate clip");       // W3: copy to the first empty slot below (auto-grow)
         menu.addItem (idMoveToNext,  "Move to next slot");    // W3: move to the first empty slot below (auto-grow)
+        menu.addItem (idMoveToOwnTrack, "Move to its own track"); // W22: split onto a NEW track with its own instrument (mixed-clip fix)
 
         // W1 launcher expressiveness: per-clip follow action / loop / launch mode.
         PopupMenu followMenu;
@@ -686,6 +687,12 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
                                     }
                                     break;
                                 }
+                                case idMoveToOwnTrack:
+                                    // W22: hand off to the shell, which owns the seam + the track-change
+                                    // fan-out (a NEW track appears -> save + rebuild grid/arrange/tray).
+                                    if (safeThis->onMoveToOwnTrack != nullptr)
+                                        safeThis->onMoveToOwnTrack (trackIdx, sceneIdx);
+                                    break;
                                 case idSendArrange:
                                 case idSendArrangeLoop:
                                     // W5 (+ the Wave 7 as-loop fast-follow): hand off to the shell, which

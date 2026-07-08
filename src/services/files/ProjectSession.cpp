@@ -1286,6 +1286,47 @@ bool ProjectSession::moveSlotClip (int srcTrack, int srcScene, int dstTrack, int
     return clearSlot (srcTrack, srcScene);
 }
 
+int ProjectSession::moveSlotClipToOwnTrack (int trackIndex, int sceneIndex)
+{
+    if (edit == nullptr)
+        return -1;
+
+    auto* srcSlot = getClipSlot (trackIndex, sceneIndex);
+    auto* srcClip = (srcSlot != nullptr) ? srcSlot->getClip() : nullptr;
+
+    if (srcClip == nullptr)
+    {
+        FORGE_LOG_WARN ("moveSlotClipToOwnTrack: slot " + juce::String (trackIndex) + "," + juce::String (sceneIndex) + " is empty");
+        return -1;
+    }
+
+    // A StepClip wants a drum kit on its new track; anything else (a melodic MidiClip / audio) a default 4OSC.
+    // The engine has no per-clip instrument (a ClipSlot has no plugin chain) — so "give the clip its own track
+    // + voice" IS the fix for the mixed-clip "first-instrument-wins" silence.
+    const bool isStep = dynamic_cast<te::StepClip*> (srcClip) != nullptr;
+
+    // One past the last track = a fresh appended track (copySlotClip's getOrInsertAudioTrackAt materialises it),
+    // so the absolute indices of existing tracks stay stable (mirrors appendAudioTrack / ensureAuxBus).
+    const int newIndex = te::getAudioTracks (*edit).size();
+
+    if (! moveSlotClip (trackIndex, sceneIndex, newIndex, sceneIndex))
+    {
+        FORGE_LOG_ERROR ("moveSlotClipToOwnTrack: move to new track " + juce::String (newIndex) + " failed");
+        return -1;
+    }
+
+    // copySlotClip clones only the clip, so the new track has no head instrument yet — give it its OWN voice
+    // (the whole point: the moved clip no longer shares the source track's instrument).
+    if (auto* newTrk = EngineHelpers::getOrInsertAudioTrackAt (*edit, newIndex))
+    {
+        if (isStep) PluginHost::ensureDrumKitInstrument (*newTrk);
+        else        PluginHost::ensureDefaultInstrument  (*newTrk);
+    }
+
+    edit->markAsChanged();
+    return newIndex;
+}
+
 te::AudioTrack* ProjectSession::appendAudioTrack (const juce::String& name)
 {
     if (edit == nullptr)

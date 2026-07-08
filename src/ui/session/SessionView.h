@@ -112,6 +112,10 @@ public:
         so the shell can open it in the StepGrid drawer (mirrors onMidiClipCreated). */
     std::function<void (te::StepClip::Ptr)> onStepClipCreated;
 
+    /** W22: invoked when the filled-slot "Move to its own track" action is chosen. The shell owns the
+        ProjectSession::moveSlotClipToOwnTrack seam + the track-change fan-out (a NEW track appears). */
+    std::function<void (int trackIdx, int sceneIdx)> onMoveToOwnTrack;
+
     /** Authoritative per-track arm query (engine truth), set by the shell. Drives the R indicator
         and the rec-armed pad tint. */
     std::function<bool (te::AudioTrack&)> isTrackArmed;

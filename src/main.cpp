@@ -57,7 +57,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -572,6 +572,20 @@ public:
             }
         };
 
+        // W22: "Move to its own track" — the mixed-clip per-clip-instrument fix. moveSlotClipToOwnTrack
+        // appends a NEW track + gives it its own voice, so fire onTracksChanged (save + rebuild grid/arrange/
+        // tray for the new column) and seal the whole move+create as ONE undo gesture.
+        sessionView.onMoveToOwnTrack = [this] (int trackIdx, int sceneIdx)
+        {
+            if (session.moveSlotClipToOwnTrack (trackIdx, sceneIdx) < 0)
+                return;   // empty slot / failure — already logged by the seam
+
+            sealUndoTransaction();
+            if (session.onTracksChanged != nullptr)
+                session.onTracksChanged();   // save + rebuild for the NEW track
+            reconcileDrawerClip();           // the moved clip may have been the drawer's bound clip
+        };
+
         sessionView.isTrackArmed = [this] (te::AudioTrack& t)
         {
             auto* ed = session.getEdit();
@@ -913,6 +927,11 @@ public:
         {
             // Piano-roll keyboard nudge: forge::midiedit::shiftNoteStarts group-clamped delta.
             MessageManager::callAsync ([this] { runNudgeSelftest(); });
+        }
+        else if (mode == SelfTest::movetotrack)
+        {
+            // Move a slot clip to its own new track (the mixed-clip per-clip-instrument fix).
+            MessageManager::callAsync ([this] { runMoveToTrackSelftest(); });
         }
         else if (mode == SelfTest::midifile)
         {
@@ -6571,6 +6590,83 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-movetotrack: ProjectSession::moveSlotClipToOwnTrack — the mixed-clip "first-instrument-wins"
+    // fix. A step clip in (0,0) gives track 0 a drum-kit Sampler; a melodic MIDI clip in (0,1) then SHARES it
+    // (createMidiClipInSlot's ensureDefaultInstrument no-ops on the existing synth) — the bug. Moving the
+    // melodic clip to its own track must land it on a NEW track with its OWN 4OSC (NOT the drum Sampler) and
+    // empty the source slot.
+    void runMoveToTrackSelftest()
+    {
+        bool stepCreated = false, midiCreated = false, sharedDrumKit = false, movedToNew = false,
+             srcEmptied = false, newHas4Osc = false, newNotSampler = false;
+        int  newIdx = -1, trackCountBefore = -1;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            auto step = session.createStepClipInSlot (0, 0, "STEP");   // track 0 -> drum-kit Sampler
+            stepCreated = step != nullptr;
+            auto midi = session.createMidiClipInSlot (0, 1, "MEL");     // shares track 0's Sampler (ensureDefault no-ops)
+            midiCreated = midi != nullptr;
+
+            auto tracksBefore = te::getAudioTracks (*ed);
+            trackCountBefore = tracksBefore.size();
+            if (! tracksBefore.isEmpty())
+            {
+                bool hasSampler = false, has4Osc = false;
+                for (auto* p : tracksBefore[0]->pluginList)
+                {
+                    if (dynamic_cast<te::SamplerPlugin*> (p))  hasSampler = true;
+                    if (dynamic_cast<te::FourOscPlugin*> (p))  has4Osc = true;
+                }
+                sharedDrumKit = hasSampler && ! has4Osc;   // the melodic clip is stuck on the drum kit
+            }
+
+            // Move the melodic clip (0,1) to its own new track.
+            newIdx = session.moveSlotClipToOwnTrack (0, 1);
+            movedToNew = newIdx == trackCountBefore && session.isSlotFilled (newIdx, 1);
+            srcEmptied = ! session.isSlotFilled (0, 1);
+
+            auto tracksAfter = te::getAudioTracks (*ed);
+            if (newIdx >= 0 && newIdx < tracksAfter.size())
+            {
+                bool sampler = false;
+                for (auto* p : tracksAfter[newIdx]->pluginList)
+                {
+                    if (dynamic_cast<te::FourOscPlugin*> (p))  newHas4Osc = true;
+                    if (dynamic_cast<te::SamplerPlugin*> (p))  sampler = true;
+                }
+                newNotSampler = ! sampler;   // the melodic clip now has its OWN 4OSC, not the shared drum kit
+            }
+        }
+
+        const bool pass = stepCreated && midiCreated && sharedDrumKit && movedToNew
+                          && srcEmptied && newHas4Osc && newNotSampler;
+
+        String report;
+        report << "mode=movetotrack" << newLine
+               << "stepCreated="   << (stepCreated ? 1 : 0) << newLine
+               << "midiCreated="   << (midiCreated ? 1 : 0) << newLine
+               << "sharedDrumKit=" << (sharedDrumKit ? 1 : 0) << newLine
+               << "newTrackIndex=" << newIdx << newLine
+               << "movedToNew="    << (movedToNew ? 1 : 0) << newLine
+               << "srcEmptied="    << (srcEmptied ? 1 : 0) << newLine
+               << "newHas4Osc="    << (newHas4Osc ? 1 : 0) << newLine
+               << "newNotSampler=" << (newNotSampler ? 1 : 0) << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write move-to-track selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Move-to-track selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-midifile: MIDI-file drag-and-drop import. Writes a real 4-note .mid to disk, then imports
     // it BOTH into a Session slot (importMidiIntoSlot) and onto an Arrange lane at a drop time
     // (importMidiFile), asserting: the clip is created, the note count survives, the arrange clip lands at
@@ -7759,6 +7855,7 @@ public:
                             : commandLine.contains ("--selftest-drumkit")        ? "selftest-drumkit"        // before bare --selftest (collision-free, drum sampler)
                             : commandLine.contains ("--selftest-nudge")          ? "selftest-nudge"          // before bare --selftest (collision-free)
                             : commandLine.contains ("--selftest-retrocapture")   ? "selftest-retrocapture"   // before bare --selftest (no substring collision with -capture)
+                            : commandLine.contains ("--selftest-movetotrack")    ? "selftest-movetotrack"    // before bare --selftest (collision-free)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -7833,6 +7930,7 @@ public:
                         : commandLine.contains ("--selftest-drumkit")        ? SelfTest::drumkit        // before bare --selftest (collision-free, drum sampler)
                         : commandLine.contains ("--selftest-nudge")          ? SelfTest::nudge          // before bare --selftest (collision-free)
                         : commandLine.contains ("--selftest-retrocapture")   ? SelfTest::retrocapture   // before bare --selftest (no substring collision with -capture)
+                        : commandLine.contains ("--selftest-movetotrack")    ? SelfTest::movetotrack    // before bare --selftest (collision-free)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 
