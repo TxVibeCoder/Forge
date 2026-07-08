@@ -62,12 +62,12 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY gates as of W21 (frontier Wave 9 LFO + the drum
-  sampler): W20 added `--selftest-stepclip` (the Step Clip drum-grid seam); the post-W20 MIDI-file feature added
-  `--selftest-midifile`; and W21 added `--selftest-modifier` (the LFO / `ModifierHelpers` seam) +
-  `--selftest-drumkit` (the self-rendered CC0 drum-kit Sampler that Step Clips are now born with). **Frontier
-  Wave 9 (LFO modifiers) SHIPPED in W21** — the 10-wave frontier program is now COMPLETE (its recipe is archived
-  in `docs/wave-9-lfo-recipe.local.md`):
+- **Selftest floor** (must pass after any change — FORTY-TWO gates as of W22 (buildable-backlog follow-ups):
+  W21 added `--selftest-modifier` (the LFO / `ModifierHelpers` seam) + `--selftest-drumkit` (the self-rendered
+  CC0 drum-kit Sampler that Step Clips are now born with); W22 added `--selftest-nudge` (piano-roll keyboard nudge,
+  `forge::midiedit::shiftNoteStarts`) + `--selftest-retrocapture` (`ProjectSession::commitRetrospectiveToSlot` —
+  "I wasn't recording but just played something" MIDI capture). **Frontier Wave 9 (LFO modifiers) SHIPPED in
+  W21** — the 10-wave frontier program is COMPLETE (its recipe is archived in `docs/wave-9-lfo-recipe.local.md`):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
   `--selftest-midifile`, `--selftest-controlsurface`, `--selftest-lufs`, `--selftest-automation`, `--selftest-sync`,
@@ -77,8 +77,9 @@ conflict, surface it.
   `--selftest-followaction`, `--selftest-launchmode`, `--selftest-duplicate`, `--selftest-slotmove`,
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
-  `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`;
-  (`-modifier`/`-drumkit` are collision-free — placed before bare `--selftest`.
+  `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture` are collision-free — placed before bare `--selftest`
+  (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).
   ⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-midilearn`/`-midiinput`/`-midifile` ⊃ `-midi`,
   `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
@@ -222,6 +223,14 @@ conflict, surface it.
   drum sound is a single-note key range, a melodic pitch played through a drum kit (or a drum note through a
   4OSC) can be silent/wrong-timbre. A clip visibly on a track can be silent for this reason (v1; a per-clip
   instrument is the follow-up).
+- **The engine's retrospective-record relocate-to-slot has a latent UAF outside its `playSlotClips` guard (W22).**
+  `InputDeviceInstance::applyRetrospectiveRecord` returns freshly-materialised clips on the ARRANGEMENT; relocating
+  one into a launcher slot via `removeFromParent()` + `slot->setClip()` FREES the clip (its owning `ClipList`
+  decRefCounts it on the child-removed listener) unless a `te::Clip::Ptr` is held across the two calls. The
+  engine's own relocation (`tracktion_MidiInputDevice.cpp:1463-1470`) only dodges this because it runs solely when
+  `track->playSlotClips` is already true; `ProjectSession::commitRetrospectiveToSlot` relocates UNCONDITIONALLY (a
+  first capture never has `playSlotClips` set) and so MUST hold the Ptr — QC-caught crash (`ClipSlot::setClip` →
+  `ValueTree::getParent` on freed state).
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,
   never `setBounds(0,0,…)` (which yanks the scroll to the top on any relayout).
 - **JUCE lock types:** `juce::CriticalSection::ScopedLockType` / `ScopedUnlockType` (the bare `ScopedLock` is the

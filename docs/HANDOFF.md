@@ -1,26 +1,27 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-08**, end of **"W21 — frontier Wave 9
-> (LFO modifiers) + a self-rendered drum sampler for Step Clips"** — which **completes the 10-wave frontier build
-> program** ([[forge-frontier-program]] / `docs/frontier-program.local.md`); Wave 9 was the last one outstanding.
-> Two file-disjoint features in one **two-track wave** (two parallel build agents + orchestrator consolidation):
-> **(1) Wave 9 LFO** — a header-only `src/engine/ModifierHelpers.h` seam over the engine's unit-tested
-> `ModifierList` (create/config/assign/tear-down an LFO on any automatable param), gate `--selftest-modifier`;
-> **(2) drum sampler** — Step Clips are now born with a `te::SamplerPlugin` of 8 **self-rendered CC0** drum
-> one-shots (one per GM note a StepClip channel triggers: 36/38/42/46/39/45/50/51), so the grid sounds like a
-> **KIT** not 8 synth pitches (`InstrumentSamples::ensureDrumKit` + `PluginHost::ensureDrumKitInstrument` + a
-> one-line `createStepClipInSlot` reroute), gate `--selftest-drumkit`. Build **clean (0 warnings)** · **40/40
-> selftest floor** (floor 38 → 40) · 11/11 screenshots · a **2-dimension adversarial QC** — both **SHIP** (0
-> blocker/major), 4 minor/doc findings fixed (a `depth=0` config-sensitivity gate leg, an `unassign` Debug-assert
-> guard, a non-silence drum-decode gate leg, 2 stale comments). **PUSHED to `origin/main`** (W21 tip `87225da`,
-> sanitize-clean). Prior CAPSTONE (W20): Step Clips, the drum-grid clip type (`--selftest-stepclip`).
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-08**, end of **"W22 — buildable-backlog
+> follow-ups"**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program
+> completed. **Shipped 4** (source-verify spikes → 2 file-disjoint build agents + orchestrator items → per-item
+> gate verification → adversarial QC): **(1) piano-roll keyboard nudge** (Shift+arrows, `forge::midiedit::
+> shiftNoteStarts`, gate `--selftest-nudge`); **(2) MIDI retrospective capture** (`ProjectSession::
+> commitRetrospectiveToSlot` — "I wasn't recording but just played something"; gate `--selftest-retrocapture`; a
+> QC-caught use-after-free in the relocate-to-slot step was fixed); **(3) the "Modulate" LFO UI** (Ctrl+M param
+> picker → `forge::modifier::addLFO`+`assign`, making the W21 LFO seam usable — menu placement + indicator deferred
+> to Fable); **(4) LFO config-coverage** gate legs (offset + track-resolution). Build **clean (0 warnings)** ·
+> **42/42 selftest floor** (floor 40 → 42) · 11/11 screenshots. **DEFERRED (with rationale):** capture count-in
+> (the spike found it needs a transport **record-mode** change that risks the carefully-timed W17 capture path —
+> deserves its own wave) + a drum-kit **render** gate leg (experimental/likely-SKIP; the documented W09/W10 render
+> leg class). **DECISION OWED to the maintainer:** per-clip instrument — see What's next. Full record →
+> [devlog/wave-22-followups.md](devlog/wave-22-followups.md). Prior: **W21 — frontier Wave 9 (LFO) + drum sampler**
+> (completed the 10-wave frontier program; PUSHED, tip `87225da`).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W21 are PUSHED to `origin/main`** (W21 tip `87225da`, sanitize-clean; local `main` ==
-`origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY selftests
-PASS** (W21 added `--selftest-modifier` + `--selftest-drumkit`; floor **38 → 40**; the 11-state `--screenshot`
-matrix unchanged). ⚠ **History was rewritten in a prior session**
+**`main`**. **W07–W21 are PUSHED to `origin/main`** (tip `87225da`, sanitize-clean). **W22 (this session) is
+COMMITTED LOCALLY but NOT pushed** — held for the maintainer's OK, so local `main` is ahead of `origin/main`.
+Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY-TWO selftests PASS** (W22 added `--selftest-nudge`
++ `--selftest-retrocapture`; floor **40 → 42**; the 11-state `--screenshot` matrix unchanged). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
 pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
 Also landed (post-W20, a maintainer-requested feature — NOT a frontier wave): **MIDI-file drag-and-drop import**.
@@ -485,15 +486,19 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    gate (floor 36→37) + an 11th `--screenshot` state. **Built + gated (37/37 PASS) + 4-dim QC — 3 real defects
    caught + fixed** (non-4/4 length, a raw-pointer UAF, undo-staleness). **Frontier Wave 9 (LFO) SKIPPED** —
    recipe preserved in `docs/wave-9-lfo-recipe.local.md`.
-   **▶ NEXT: the 10-wave frontier program is COMPLETE (W21 shipped Wave 9, the last one) and the Step Clips
-   drum-sampler follow-up is done.** Remaining options: (a) the **"Modulate" UI** for Wave 9's LFO seam (the
-   engine seam + `--selftest-modifier` shipped; a mixer-strip / plugin-param context affordance reusing the
-   MIDI-learn param picker is the deferred Fable follow-up); (b) **documented W21 follow-ups** — a full
-   engine-render / Sampler-ingestion gate leg (parked, W09/W10 class), a **per-clip instrument** so a step clip +
-   a melodic MIDI clip sharing a track each get their own voice (the "first-instrument-wins" v1 limitation — a
-   melodic pitch through a drum kit is silent), and fuller LFO config-matrix gate coverage; (c) the standing
-   **`FourOscPlugin` redo-wipe engine defect** (a maintainer call — vendored engine patch); or (d) a new
-   direction from the maintainer. Full record → [devlog/wave-21-lfo-drumkit.md](devlog/wave-21-lfo-drumkit.md). Full ordered program + the critic's corrections in
+   **▶ NEXT: the frontier program is COMPLETE (W21) and W22 knocked out most of the buildable follow-ups**
+   (piano-roll nudge, MIDI retrospective capture, the "Modulate" LFO UI, LFO config-coverage). **Remaining:**
+   (a) **DECISION — per-clip instrument:** the mixed step-clip + melodic-clip "first-instrument-wins" silence is
+   NOT fixable without an engine fork (a `ClipSlot` has no plugin list; slot playback routes through the owning
+   AudioTrack's chain — `tracktion_EditNodeBuilder.cpp:949,1091`). Realistic v1 = "a step clip landing on a track
+   that already hosts a melodic instrument auto-routes to its own NEW track" (and symmetrically) — a UX behaviour
+   change needing the maintainer's/Fable's sign-off before building. (b) **capture count-in** (deferred W22: the
+   only audible-count-in path puts the transport in record-mode for the whole Capture session, risking the W17
+   capture timing + lighting the Rec button — its own focused wave); (c) a **drum-kit render gate leg** (deferred
+   W22: experimental/likely-SKIP, the W09/W10 render-leg class; `--selftest-drumkit` already proves file-level
+   non-silence); (d) the Modulate UI's **Fable polish** (menu-bar placement, shortcut choice, a modulated-param
+   indicator); (e) the standing **`FourOscPlugin` redo-wipe engine defect** (maintainer call); or (f) a new
+   direction. Full record → [devlog/wave-22-followups.md](devlog/wave-22-followups.md). Full ordered program + the critic's corrections in
    `docs/frontier-program.local.md`. **W17 follow-ups (documented):** a pumped-render
    audibility leg for `--selftest-capture` (parked, same class as the W09/W10 render-leg follow-up); the
    reseal heuristic's dependency on `LaunchHandle::nudge`/`setLooping`/`playSynced` staying uncalled (see the

@@ -934,6 +934,45 @@ non-silent.
 > the mixed-clip "first-instrument-wins" limitation (a melodic pitch played through a drum kit is silent) is a
 > documented v1 behavior.
 
+## `Forge --selftest-nudge` (piano-roll keyboard nudge)
+
+The acceptance gate for **W22 — Shift+Left/Right note nudge** (`forge::midiedit::shiftNoteStarts`, driven directly,
+no PianoRollView). Synchronous. Seeds a 3-note chord (0.5-beat gaps) and drives the helper across four legs.
+
+| field | meaning | PASS |
+|---|---|---|
+| `seededNotes` | 3 notes seeded | 3 |
+| `rightNudged` | a +gridBeats nudge shifts every note by exactly +0.25 | 1 |
+| `undoReverts` | one `ed->undo()` reverts the nudge transaction | 1 |
+| `leftNudged` | a −gridBeats nudge shifts every note by −0.25 | 1 |
+| `clampedAtZero` / `gapsPreserved` | a large left nudge group-clamps the whole chord at beat 0 while preserving each internal gap (not a per-note clamp) | 1 / 1 |
+
+> `-nudge` is collision-free — before bare `--selftest`; verify `mode=nudge`. **Floor 40 → 41.** The live
+> `keyPressed` Shift+arrow path is UI (proven by the shared helper + adversarial review, not a gate). The
+> "snap off → 1-bar fallback" branch is currently unreachable through the shell (no piano-roll snap toggle yet).
+
+## `Forge --selftest-retrocapture` (MIDI retrospective capture)
+
+The acceptance gate for **W22 — `ProjectSession::commitRetrospectiveToSlot`** (over the engine's per-instance
+`InputDeviceInstance::applyRetrospectiveRecord`). Event-driven (mirrors `--selftest-midi`'s yield discipline).
+Creates a `VirtualMidiInputDevice`, arms **track 0** for MIDI, injects 4 notes with **NO transport roll anywhere**,
+then commits — proving capture works when the user was NOT recording.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `midiDeviceEnabled` / `trackArmed` | the virtual MIDI in is enabled + targets track 0 | 1 / 1 |
+| `neverRecorded` | `transport.isRecording()` is false before AND after commit (the whole point) | 1 |
+| `notesInjected` | 4 note-ons injected into the retrospective buffer (no record) | 4 |
+| `clipCreated` / `clipInSlot` | commit returns a MidiClip that landed in a launcher ClipSlot | 1 / 1 |
+| `capturedNoteCount` | the committed clip holds exactly the injected notes | 4 |
+
+> `-retrocapture` is collision-free — it does NOT contain the substring `--selftest-capture` (they diverge after
+> `--selftest-`), so no longest-first ordering vs `-capture`; before bare `--selftest`; verify `mode=retrocapture`.
+> **Floor 41 → 42.** A **use-after-free** in the relocate-to-slot step was caught by running this gate and fixed
+> (hold a `MidiClip::Ptr` across `removeFromParent`→`setClip`; see the CLAUDE.md gotcha). The `--selftest-modifier`
+> gate also gained W22 `offsetApplied` (offset/bipolar config-sensitivity) + `paramResolvesTrack` (the Modulate
+> menu's `param->getTrack()` resolution) legs — no new gate, floor unaffected.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC
