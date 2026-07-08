@@ -57,7 +57,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -762,6 +762,12 @@ public:
             // docs/devlog/midi-record-design.md.
             MessageManager::callAsync ([this] { beginSelfTestMidi(); });
         }
+        else if (mode == SelfTest::retrocapture)
+        {
+            // Retrospective MIDI capture: arm track 0 for MIDI, inject notes with NO transport roll,
+            // then commitRetrospectiveToSlot. Event-driven yields like --selftest-midi. See finishSelfTestRetroCapture().
+            MessageManager::callAsync ([this] { beginSelfTestRetroCapture(); });
+        }
         else if (mode == SelfTest::midilearn)
         {
             // Headless MIDI-learn gate (P2): prove the seam binds a CC to a plugin param over Tracktion's
@@ -902,6 +908,11 @@ public:
         {
             // Drum sampler: the ensureDrumKitInstrument seam — 8 CC0 drum voices mapped to GM notes.
             MessageManager::callAsync ([this] { runDrumKitSelftest(); });
+        }
+        else if (mode == SelfTest::nudge)
+        {
+            // Piano-roll keyboard nudge: forge::midiedit::shiftNoteStarts group-clamped delta.
+            MessageManager::callAsync ([this] { runNudgeSelftest(); });
         }
         else if (mode == SelfTest::midifile)
         {
@@ -1186,6 +1197,19 @@ private:
     int  miPreExistingNotes = -1;                       // notes in slot (0,0) BEFORE capture (must be 0)
     bool miClipCreated     = false;
     int  miCapturedNotes   = 0;
+
+    // --selftest-retrocapture state machine (event-driven; mirrors the --selftest-midi yield discipline).
+    // retro* prefix (NOT rc* — that's the --selftest-record gate's members) to avoid a collision.
+    int  retroPhase = 0;
+    te::VirtualMidiInputDevice* retroDevice = nullptr;
+    bool retroDeviceEnabled = false;
+    bool retroTrackArmed = false;
+    int  retroNotesInjected = 0;
+    bool retroClipCreated = false;
+    bool retroClipInSlot = false;
+    int  retroCapturedNotes = 0;
+    bool retroRecordingBeforeCommit = false;
+    bool retroRecordingAfterCommit = false;
 
     // W16 (owed W05 debt, dimension 2 — undo-record-gate-leg): a doUndo() attempt mid-take, via the
     // REAL shell wrapper (never ed->undo()), while genuinely (synthetically) recording.
@@ -3475,6 +3499,160 @@ private:
         FORGE_LOG_INFO ("MIDI-input selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
 
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    //==============================================================================
+    // --selftest-retrocapture: prove ProjectSession::commitRetrospectiveToSlot end-to-end, headless — the
+    // "I wasn't recording but just played something" case. Arms TRACK 0 for MIDI (never a slot —
+    // commitRetrospectiveToSlot resolves its source InputDeviceInstance by TRACK target), injects 4 notes
+    // with NO transport roll ANYWHERE in this gate, then calls commitRetrospectiveToSlot directly and
+    // verifies the returned clip landed in a launcher ClipSlot with exactly those notes.
+    void beginSelfTestRetroCapture()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr) { finishSelfTestRetroCapture(); return; }
+
+        FORGE_LOG_INFO ("selftest-retrocapture: creating virtual MIDI input + arming track 0 for MIDI");
+
+        if (auto* stale = findSelfTestMidiInput())
+            engine.getDeviceManager().deleteVirtualMidiDevice (*stale);
+
+        const auto r = engine.getDeviceManager().createVirtualMidiDevice (kSelfTestMidiName);
+        if (r.failed())
+            FORGE_LOG_ERROR ("selftest-retrocapture: createVirtualMidiDevice failed: " + r.getErrorMessage());
+
+        retroPhase = 1;
+        startTimer (300);   // YIELD: let the create's async rescan deliver the device
+    }
+
+    void retroCaptureSelftestEnableDevice()
+    {
+        retroDevice = findSelfTestMidiInput();
+
+        if (retroDevice != nullptr)
+        {
+            retroDevice->setEnabled (true);
+            retroDevice->setMonitorMode (te::InputDevice::MonitorMode::automatic);
+            retroDeviceEnabled = retroDevice->isEnabled();
+        }
+        else
+            FORGE_LOG_ERROR ("selftest-retrocapture: virtual MIDI input not found after create");
+
+        retroPhase = 2;
+        startTimer (300);   // YIELD: let setEnabled's async rescan settle before arming
+    }
+
+    // Arms TRACK 0 filtered to OUR device specifically (mirrors --selftest-midi's device filter): a bare
+    // recorder.armFirstMidiInputToTrack() would arm whichever MIDI input is FIRST enabled — non-deterministic
+    // if other MIDI devices are present on the test machine.
+    void retroCaptureSelftestArmTrack()
+    {
+        auto* edit = session.getEdit();
+        if (edit == nullptr || retroDevice == nullptr) { finishSelfTestRetroCapture(); return; }
+
+        edit->getTransport().ensureContextAllocated();
+
+        if (auto* track = te::getAudioTracks (*edit)[0])
+        {
+            for (auto* instance : edit->getAllInputDevices())
+            {
+                if (instance == nullptr || &instance->getInputDevice() != retroDevice)
+                    continue;
+
+                auto res = instance->setTarget (track->itemID, /*moveToTrack=*/true, &edit->getUndoManager(), 0);
+                if (res && res.value() != nullptr)
+                {
+                    instance->setRecordingEnabled (track->itemID, true);   // "MIDI-armed" — monitor, NOT record
+                    retroTrackArmed = true;
+                }
+            }
+        }
+
+        edit->restartPlayback();
+
+        retroPhase = 3;
+        startTimer (300);   // YIELD: targets live before we inject
+    }
+
+    void retroCaptureSelftestInjectOn()
+    {
+        if (retroDevice != nullptr)
+            for (int n : { 60, 64, 67, 72 })   // C4 E4 G4 C5
+            {
+                retroDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOn (1, n, 0.8f), retroDevice->getMPESourceID());
+                ++retroNotesInjected;
+            }
+
+        retroPhase = 4;
+        startTimer (300);   // hold the notes so each has real (non-zero) length
+    }
+
+    void retroCaptureSelftestInjectOff()
+    {
+        if (retroDevice != nullptr)
+            for (int n : { 60, 64, 67, 72 })
+                retroDevice->handleIncomingMidiMessage (juce::MidiMessage::noteOff (1, n), retroDevice->getMPESourceID());
+
+        retroPhase = 5;
+        startTimer (500);   // let the note-offs settle into the retrospective buffer before we commit
+    }
+
+    void finishSelfTestRetroCapture()
+    {
+        auto* edit = session.getEdit();
+
+        if (auto* t = session.getTransport())
+            retroRecordingBeforeCommit = t->isRecording();   // sanity: must be false — nothing here records
+
+        if (edit != nullptr)
+        {
+            auto retroClip = session.commitRetrospectiveToSlot (0);   // <-- the seam under test
+
+            if (retroClip != nullptr)
+            {
+                retroClipCreated   = true;
+                retroCapturedNotes = retroClip->getSequence().getNumNotes();
+                retroClipInSlot    = retroClip->getClipSlot() != nullptr;
+            }
+
+            if (auto* track = te::getAudioTracks (*edit)[0])
+                recorder.disarmMidiTrack (*edit, *track);
+        }
+
+        if (auto* t = session.getTransport())
+            retroRecordingAfterCommit = t->isRecording();
+
+        if (retroDevice != nullptr)   // MANDATORY cleanup — the name leaks in engine storage otherwise
+        {
+            engine.getDeviceManager().deleteVirtualMidiDevice (*retroDevice);
+            retroDevice = nullptr;
+        }
+
+        const bool neverRecorded = ! retroRecordingBeforeCommit && ! retroRecordingAfterCommit;
+
+        const bool pass = retroDeviceEnabled && retroTrackArmed && neverRecorded
+                          && retroNotesInjected >= 4
+                          && retroClipCreated && retroClipInSlot
+                          && retroCapturedNotes == retroNotesInjected;
+
+        String report;
+        report << "mode=retrocapture" << newLine
+               << "midiDeviceEnabled=" << (retroDeviceEnabled ? 1 : 0) << newLine
+               << "trackArmed="        << (retroTrackArmed ? 1 : 0) << newLine
+               << "neverRecorded="     << (neverRecorded ? 1 : 0) << newLine
+               << "notesInjected="     << retroNotesInjected << newLine
+               << "clipCreated="       << (retroClipCreated ? 1 : 0) << newLine
+               << "clipInSlot="        << (retroClipInSlot ? 1 : 0) << newLine
+               << "capturedNoteCount=" << retroCapturedNotes << newLine
+               << "result="            << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write retrocapture selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Retrocapture selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
@@ -6177,6 +6355,93 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-nudge: the Shift+Left/Right nudge seam (forge::midiedit::shiftNoteStarts). Seeds a 3-note
+    // chord with 0.5-beat gaps and drives the helper DIRECTLY (no PianoRollView/keyPressed) to prove: right
+    // nudge = +gridBeats per note; one ed->undo() reverts it; left nudge = -gridBeats per note; and a large
+    // left nudge group-clamps the WHOLE selection at beat 0 while preserving every gap (not a per-note clamp).
+    void runNudgeSelftest()
+    {
+        bool clipCreated = false, rightNudged = false, undoReverts = false,
+             leftNudged = false, clampedAtZero = false, gapsPreserved = false;
+        int seededNotes = 0;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            session.ensureScenes (16);
+
+            const double starts[3] = { 0.5, 1.0, 1.5 };   // 0.5-beat gaps between chord tones
+            const double gridBeats = 0.25;
+
+            if (auto mc = session.createMidiClipInSlot (0, 0, "NDG"))
+            {
+                clipCreated = true;
+                auto& seq = mc->getSequence();
+                um.beginNewTransaction();
+                for (int i = 0; i < 3; ++i)
+                    seq.addNote (60 + i * 4, te::BeatPosition::fromBeats (starts[i]),
+                                 te::BeatDuration::fromBeats (0.4), 100, 0, &um);
+                seededNotes = seq.getNumNotes();
+
+                std::vector<te::MidiNote*> notes;   // shiftNoteStarts wants std::vector; getNotes() is a juce::Array
+                for (auto* n : seq.getNotes())
+                    notes.push_back (n);
+
+                // Right leg (own transaction, sealing the seed).
+                um.beginNewTransaction();
+                forge::midiedit::shiftNoteStarts (notes, gridBeats, &um);
+                rightNudged = notes.size() == 3;
+                for (int i = 0; i < jmin ((int) notes.size(), 3); ++i)
+                    rightNudged = rightNudged && std::abs (notes[i]->getStartBeat().inBeats() - (starts[i] + gridBeats)) < 1.0e-6;
+
+                // Undo leg: reverts ONLY the right-nudge transaction.
+                ed->undo();
+                undoReverts = notes.size() == 3;
+                for (int i = 0; i < jmin ((int) notes.size(), 3); ++i)
+                    undoReverts = undoReverts && std::abs (notes[i]->getStartBeat().inBeats() - starts[i]) < 1.0e-6;
+
+                // Left leg, from the reverted (seeded) positions.
+                um.beginNewTransaction();
+                forge::midiedit::shiftNoteStarts (notes, -gridBeats, &um);
+                leftNudged = notes.size() == 3;
+                for (int i = 0; i < jmin ((int) notes.size(), 3); ++i)
+                    leftNudged = leftNudged && std::abs (notes[i]->getStartBeat().inBeats() - (starts[i] - gridBeats)) < 1.0e-6;
+
+                // Large-left leg: clamps the WHOLE group at beat 0, preserving each gap.
+                um.beginNewTransaction();
+                const double pre[3] = { notes[0]->getStartBeat().inBeats(), notes[1]->getStartBeat().inBeats(), notes[2]->getStartBeat().inBeats() };
+                forge::midiedit::shiftNoteStarts (notes, -100.0, &um);
+                clampedAtZero = notes.size() == 3 && std::abs (notes[0]->getStartBeat().inBeats()) < 1.0e-6;
+                gapsPreserved = notes.size() == 3
+                    && std::abs ((notes[1]->getStartBeat().inBeats() - notes[0]->getStartBeat().inBeats()) - (pre[1] - pre[0])) < 1.0e-6
+                    && std::abs ((notes[2]->getStartBeat().inBeats() - notes[1]->getStartBeat().inBeats()) - (pre[2] - pre[1])) < 1.0e-6;
+            }
+        }
+
+        const bool pass = clipCreated && seededNotes == 3 && rightNudged && undoReverts
+                          && leftNudged && clampedAtZero && gapsPreserved;
+
+        String report;
+        report << "mode=nudge" << newLine
+               << "clipCreated="   << (clipCreated ? 1 : 0) << newLine
+               << "seededNotes="   << seededNotes << newLine
+               << "rightNudged="   << (rightNudged ? 1 : 0) << newLine
+               << "undoReverts="   << (undoReverts ? 1 : 0) << newLine
+               << "leftNudged="    << (leftNudged ? 1 : 0) << newLine
+               << "clampedAtZero=" << (clampedAtZero ? 1 : 0) << newLine
+               << "gapsPreserved=" << (gapsPreserved ? 1 : 0) << newLine
+               << "result="        << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write nudge selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Nudge selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-midifile: MIDI-file drag-and-drop import. Writes a real 4-note .mid to disk, then imports
     // it BOTH into a Session slot (importMidiIntoSlot) and onto an Arrange lane at a drop time
     // (importMidiFile), asserting: the clip is created, the note count survives, the arrange clip lands at
@@ -6738,6 +7003,20 @@ private:
                 case 4:  midiSelftestInjectOn();     break;   // → inject note-ons, yield
                 case 5:  midiSelftestInjectOff();    break;   // → inject note-offs, yield
                 default: finishSelfTestMidi();       break;   // phase 6 → stop, verify, report, quit
+            }
+            return;
+        }
+
+        if (mode == SelfTest::retrocapture)
+        {
+            stopTimer();
+            switch (retroPhase)
+            {
+                case 1:  retroCaptureSelftestEnableDevice(); break;
+                case 2:  retroCaptureSelftestArmTrack();     break;
+                case 3:  retroCaptureSelftestInjectOn();     break;
+                case 4:  retroCaptureSelftestInjectOff();    break;
+                default: finishSelfTestRetroCapture();       break;
             }
             return;
         }
@@ -7349,6 +7628,8 @@ public:
                             : commandLine.contains ("--selftest-capture")        ? "selftest-capture"        // before bare --selftest (W7)
                             : commandLine.contains ("--selftest-modifier")       ? "selftest-modifier"       // before bare --selftest (collision-free, W9)
                             : commandLine.contains ("--selftest-drumkit")        ? "selftest-drumkit"        // before bare --selftest (collision-free, drum sampler)
+                            : commandLine.contains ("--selftest-nudge")          ? "selftest-nudge"          // before bare --selftest (collision-free)
+                            : commandLine.contains ("--selftest-retrocapture")   ? "selftest-retrocapture"   // before bare --selftest (no substring collision with -capture)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -7421,6 +7702,8 @@ public:
                         : commandLine.contains ("--selftest-capture")        ? SelfTest::capture        // before bare --selftest (W7)
                         : commandLine.contains ("--selftest-modifier")       ? SelfTest::modifier       // before bare --selftest (collision-free, W9)
                         : commandLine.contains ("--selftest-drumkit")        ? SelfTest::drumkit        // before bare --selftest (collision-free, drum sampler)
+                        : commandLine.contains ("--selftest-nudge")          ? SelfTest::nudge          // before bare --selftest (collision-free)
+                        : commandLine.contains ("--selftest-retrocapture")   ? SelfTest::retrocapture   // before bare --selftest (no substring collision with -capture)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

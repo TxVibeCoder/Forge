@@ -447,6 +447,19 @@ public:
     bool isSlotRecording (int trackIndex, int sceneIndex) const;
 
     //==============================================================================
+    // Retrospective MIDI capture. Message-thread only. Distinct from the slot-record seam above (which
+    // requires an explicit arm + transport roll): this reads whatever is ALREADY sitting in the MIDI
+    // input's own retrospective ring buffer, so the user only needs to have had the track MIDI-armed (for
+    // monitoring) — never to have pressed record.
+
+    /** Commits the MIDI input device's retrospective-record buffer (the "I wasn't recording but just
+        played something" case) into a born-audible MidiClip in a free ClipSlot on the given track, and
+        returns it. The track must already be MIDI-armed (the arm state the user needs anyway to monitor);
+        returns {} + logs if no MIDI input instance targets the track, or if the buffer was empty.
+        Message-thread only. */
+    te::MidiClip::Ptr commitRetrospectiveToSlot (int trackIndex);
+
+    //==============================================================================
     // Aux buses / sends seam (mixer buses/sends — P3). Message-thread only.
     //
     // An aux bus is modelled the Tracktion way: a plain te::AudioTrack hosting an AuxReturnPlugin

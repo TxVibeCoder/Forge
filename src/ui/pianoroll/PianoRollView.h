@@ -201,6 +201,14 @@ private:
         seam so no raw te::QuantisationType call lives in the view. */
     void quantiseSelectionOrClip();
 
+    /** Nudges every selected note by one grid step (gridBeats) — or, when no grid step is set, one bar
+        (the local time signature's numerator) — in the given direction (-1 = left/earlier, +1 =
+        right/later). Group-clamped so the whole selection moves together and never crosses beat 0; one
+        undoable step; non-structural (layoutNotes, NOT rebuildNotes — keeps the selection). Bound to
+        Shift+Left/Shift+Right; routes through MidiEditHelpers::shiftNoteStarts so no raw te::MidiNote
+        mutation lives in the view. No-op if no clip is bound or the selection is empty. */
+    void nudgeSelection (int direction);
+
     //==============================================================================
     TimelineView& timeline;                 // shared horizontal axis (not owned)
 

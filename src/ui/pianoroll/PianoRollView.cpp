@@ -493,6 +493,33 @@ void PianoRollView::quantiseSelectionOrClip()
     notifyMutated();
 }
 
+void PianoRollView::nudgeSelection (int direction)
+{
+    if (clip == nullptr)
+    {
+        FORGE_LOG_ERROR ("Cannot nudge: no MIDI clip is bound to the piano roll");
+        return;
+    }
+
+    if (selection.empty())
+        return;
+
+    // gridBeats when a snap grid is set; else one bar via the engine's own beats-per-bar idiom
+    // (mirrors ProjectSession.cpp's slot-clip content-length derivation) so a nudge with no visible
+    // grid still moves by a musically sensible amount instead of a hardcoded 4.
+    const double amount = gridBeats > 0.0
+        ? gridBeats
+        : (double) jmax (1, clip->edit.tempoSequence.getTimeSigAt (te::BeatPosition()).numerator.get());
+
+    auto* undo = &clip->edit.getUndoManager();
+    const double applied = forge::midiedit::shiftNoteStarts (selection, (double) direction * amount, undo);
+    juce::ignoreUnused (applied);
+
+    layoutNotes();
+    velocityLane.repaint();
+    notifyMutated();
+}
+
 void PianoRollView::setNoteVelocity (te::MidiNote& note, int velocity)
 {
     if (clip == nullptr)
@@ -589,6 +616,20 @@ bool PianoRollView::keyPressed (const juce::KeyPress& key)
 
         rebuildNotes();
         notifyMutated();
+        return true;
+    }
+
+    // Shift+Left / Shift+Right (no Ctrl/Cmd) -> nudge the selection by one grid step (or one bar when no
+    // grid step is set). Guard on !isCommandDown so a Cmd/Ctrl-modified chord isn't swallowed here, the
+    // same discipline as the bare-'Q' handler below (isKeyCode ignores modifiers, so a Shift+Cmd+Left
+    // combo would otherwise still match the bare arrow-key test).
+    if (key.getModifiers().isShiftDown() && ! key.getModifiers().isCommandDown()
+        && (key.isKeyCode (juce::KeyPress::leftKey) || key.isKeyCode (juce::KeyPress::rightKey)))
+    {
+        if (selection.empty())
+            return false;
+
+        nudgeSelection (key.isKeyCode (juce::KeyPress::leftKey) ? -1 : +1);
         return true;
     }
 

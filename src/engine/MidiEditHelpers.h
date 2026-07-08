@@ -16,6 +16,8 @@
 
 #include <functional>
 #include <cmath>
+#include <algorithm>
+#include <vector>
 
 namespace te = tracktion;
 
@@ -83,5 +85,28 @@ namespace forge::midiedit
         }
 
         return moved;
+    }
+
+    // Shifts every note in `notes` by the SAME beat delta, group-clamped so the whole set moves
+    // together and never crosses beat 0 (mirrors PianoRollView::commitMoveSelection's edge clamp,
+    // generalized to a FIXED delta rather than snapping a drag's absolute position). Returns the
+    // actual (clamped) delta applied. One undoable step. Caller ensures `notes` is non-empty.
+    inline double shiftNoteStarts (const std::vector<te::MidiNote*>& notes, double beatDelta, juce::UndoManager* undo)
+    {
+        if (notes.empty())
+            return 0.0;
+
+        double minStart = notes.front()->getStartBeat().inBeats();
+        for (auto* n : notes)
+            minStart = std::min (minStart, n->getStartBeat().inBeats());
+
+        const double clamped = std::max (beatDelta, -minStart);
+
+        if (clamped != 0.0)
+            for (auto* n : notes)
+                n->setStartAndLength (te::BeatPosition::fromBeats (std::max (0.0, n->getStartBeat().inBeats() + clamped)),
+                                      n->getLengthBeats(), undo);
+
+        return clamped;
     }
 }

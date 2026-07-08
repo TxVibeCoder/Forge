@@ -1824,6 +1824,143 @@ bool ProjectSession::isSlotRecording (int trackIndex, int sceneIndex) const
 }
 
 //==============================================================================
+// Retrospective MIDI capture. Distinct from the slot-record seam above: no explicit arm-slot + transport
+// roll is required — this reads whatever is ALREADY sitting in the MIDI input's own retrospective ring
+// buffer, so the user only needs to have had the track MIDI-armed (for monitoring).
+
+namespace
+{
+    // Verbatim copy of RecordController.cpp's file-local isMidiDeviceType (an anonymous-namespace helper,
+    // so it can't be shared via a header without promoting it to a public seam — out of scope here). The
+    // MIDI InputDeviceInstance device-type group; wave/trackWave are excluded. Keep in lockstep with
+    // RecordController's copy by convention.
+    inline bool isMidiDeviceType (te::InputDevice::DeviceType t) noexcept
+    {
+        return t == te::InputDevice::physicalMidiDevice
+            || t == te::InputDevice::virtualMidiDevice
+            || t == te::InputDevice::trackMidiDevice;
+    }
+}
+
+te::MidiClip::Ptr ProjectSession::commitRetrospectiveToSlot (int trackIndex)
+{
+    if (edit == nullptr || trackIndex < 0)
+        return {};
+
+    auto tracks = te::getAudioTracks (*edit);
+
+    if (trackIndex >= tracks.size())
+    {
+        FORGE_LOG_WARN ("commitRetrospectiveToSlot: track " + juce::String (trackIndex) + " out of range");
+        return {};
+    }
+
+    auto* track = tracks[trackIndex];
+
+    if (track == nullptr)
+        return {};
+
+    // Find the MIDI input instance that already targets this track (the arm the user needs anyway to
+    // monitor). Mirrors RecordController's enumerate + type-filter idiom exactly (isMidiDeviceType above)
+    // and its target-match idiom (RecordController::isTrackMidiArmed): getTargets().contains(track.itemID).
+    te::InputDeviceInstance* midiInstance = nullptr;
+
+    for (auto* instance : edit->getAllInputDevices())
+    {
+        if (instance == nullptr)
+            continue;
+
+        if (! isMidiDeviceType (instance->getInputDevice().getDeviceType()))
+            continue;
+
+        if (instance->getTargets().contains (track->itemID))
+        {
+            midiInstance = instance;
+            break;
+        }
+    }
+
+    if (midiInstance == nullptr)
+    {
+        FORGE_LOG_WARN ("commitRetrospectiveToSlot: no MIDI input targets track " + juce::String (trackIndex)
+                        + " (arm the track for MIDI first)");
+        return {};
+    }
+
+    // The per-INSTANCE overload (tracktion_InputDevice.h:259) — deliberately NOT the aggregate
+    // EditPlaybackContext::applyRetrospectiveRecord (which sweeps in every wave input under a cross-device
+    // lock). armedOnly=false is deliberate: retrospective capture should work whether or not this
+    // destination's recordEnabled flag happens to be set (a plain MIDI-arm-to-monitor is not
+    // "recordEnabled" — that flag means "actively punched in").
+    auto created = midiInstance->applyRetrospectiveRecord (false);
+
+    if (created.isEmpty())
+    {
+        FORGE_LOG_INFO ("commitRetrospectiveToSlot: retrospective buffer empty for track " + juce::String (trackIndex));
+        return {};
+    }
+
+    auto* mc = dynamic_cast<te::MidiClip*> (created[0]);
+
+    if (mc == nullptr)
+    {
+        FORGE_LOG_WARN ("commitRetrospectiveToSlot: retrospective record did not yield a MidiClip");
+        return {};
+    }
+
+    // Force the clip into a free Session slot. The engine's OWN relocation (tracktion_MidiInputDevice.cpp:
+    // 1457-1473) only does this when track->playSlotClips is ALREADY true, which it isn't on a first
+    // capture — so we mirror it UNCONDITIONALLY here. First empty slot on the track; else grow one new row
+    // (the same "first empty else grow" idiom as duplicateSlotClip, adapted to resolve a ClipSlot* directly
+    // instead of a scene index — InputDeviceInstance::getFreeSlot is protected, so we can't call the
+    // engine's own helper from here).
+    te::ClipSlot* slot = nullptr;
+
+    for (auto* s : track->getClipSlotList().getClipSlots())
+        if (s != nullptr && s->getClip() == nullptr)
+        {
+            slot = s;
+            break;
+        }
+
+    if (slot == nullptr)
+    {
+        const int newScene = getNumScenes();
+        ensureScenes (newScene + 1);
+        track->getClipSlotList().ensureNumberOfSlots (newScene + 1);
+        slot = getClipSlot (trackIndex, newScene);
+    }
+
+    if (slot == nullptr)
+    {
+        FORGE_LOG_ERROR ("commitRetrospectiveToSlot: could not resolve a free slot on track " + juce::String (trackIndex));
+        return {};
+    }
+
+    // Mirrors tracktion_MidiInputDevice.cpp:1463-1470 — BUT hold a refcounted Ptr across the reparent.
+    // removeFromParent() drops the clip from its owning track's ClipList, which decRefCounts it, so
+    // without this Ptr the clip is FREED before slot->setClip() dereferences it — a use-after-free
+    // (QC-caught crash: ClipSlot::setClip -> ValueTree::getParent on freed state). The engine's own
+    // snippet only dodges this by gating on playSlotClips (which a first capture never has set — the very
+    // reason we relocate unconditionally here).
+    te::MidiClip::Ptr clipHold (mc);
+
+    mc->setUsesProxy (false);
+    mc->setStart (te::TimePosition(), false, true);
+
+    if (! mc->isLooping())
+        mc->setLoopRangeBeats (mc->getEditBeatRange());
+
+    mc->removeFromParent();
+    slot->setClip (mc);
+
+    PluginHost::ensureDefaultInstrument (*track);   // idempotent belt-and-suspenders — born audible
+    edit->markAsChanged();
+
+    return clipHold;
+}
+
+//==============================================================================
 // Aux buses / sends seam (P3). Message-thread only.
 //
 // A bus is a plain te::AudioTrack hosting an AuxReturnPlugin; a per-track AuxSendPlugin with a
