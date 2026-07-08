@@ -13,13 +13,12 @@
 > one-line `createStepClipInSlot` reroute), gate `--selftest-drumkit`. Build **clean (0 warnings)** · **40/40
 > selftest floor** (floor 38 → 40) · 11/11 screenshots · a **2-dimension adversarial QC** — both **SHIP** (0
 > blocker/major), 4 minor/doc findings fixed (a `depth=0` config-sensitivity gate leg, an `unassign` Debug-assert
-> guard, a non-silence drum-decode gate leg, 2 stale comments). **COMMITTED LOCALLY — NOT pushed; held for the
-> maintainer's OK.** Prior CAPSTONE (W20): Step Clips, the drum-grid clip type (`--selftest-stepclip`).
+> guard, a non-silence drum-decode gate leg, 2 stale comments). **PUSHED to `origin/main`** (W21 tip `87225da`,
+> sanitize-clean). Prior CAPSTONE (W20): Step Clips, the drum-grid clip type (`--selftest-stepclip`).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W20 + the post-W20 MIDI-file-import feature are PUSHED to `origin/main`** (tip `cf0023d`,
-sanitize-clean). **W21 (this session) is COMMITTED LOCALLY but NOT pushed** — held for the maintainer's OK, so
-local `main` is ahead of `origin/main`. Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY selftests
+**`main`**. **W07–W21 are PUSHED to `origin/main`** (W21 tip `87225da`, sanitize-clean; local `main` ==
+`origin/main`). Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY selftests
 PASS** (W21 added `--selftest-modifier` + `--selftest-drumkit`; floor **38 → 40**; the 11-state `--screenshot`
 matrix unchanged). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
