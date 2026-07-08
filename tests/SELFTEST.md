@@ -973,6 +973,27 @@ then commits — proving capture works when the user was NOT recording.
 > gate also gained W22 `offsetApplied` (offset/bipolar config-sensitivity) + `paramResolvesTrack` (the Modulate
 > menu's `param->getTrack()` resolution) legs — no new gate, floor unaffected.
 
+## `Forge --selftest-movetotrack` (per-clip "Move to its own track")
+
+The acceptance gate for **W22 — `ProjectSession::moveSlotClipToOwnTrack`** (the maintainer-chosen fix for the
+mixed-clip "first-instrument-wins" silence — the engine is track-level only, no per-clip instrument). Synchronous.
+Reproduces the bug then proves the fix: a step clip in (0,0) gives track 0 a drum-kit Sampler; a melodic MIDI clip
+in (0,1) SHARES it (`ensureDefaultInstrument` no-ops on the existing synth); moving the melodic clip must land it
+on a NEW track with its OWN 4OSC.
+
+| field | meaning | PASS |
+|---|---|---|
+| `stepCreated` / `midiCreated` | both fixture clips exist on track 0 | 1 / 1 |
+| `sharedDrumKit` | track 0's head is the drum Sampler (no 4OSC) — the melodic clip is stuck sharing it | 1 |
+| `newTrackIndex` / `movedToNew` | the clip moved to a freshly-appended track (index == prior track count) and fills its slot | (n) / 1 |
+| `srcEmptied` | the source slot (0,1) is now empty (a move, not a copy) | 1 |
+| `newHas4Osc` / `newNotSampler` | the new track's head instrument is its OWN 4OSC, NOT the shared drum Sampler | 1 / 1 |
+
+> `-movetotrack` is collision-free — before bare `--selftest`; verify `mode=movetotrack`. **Floor 42 → 43.** The
+> filled-slot "Move to its own track" menu item is UI (wired to the shell's track-change fan-out). v1: undo
+> returns the clip to its source but leaves the auto-grown empty track (grow is off the undo stack, per W13);
+> moving a StepClip is symmetric but not gate-covered.
+
 ## `Forge --screenshot` (headless render — no PASS/FAIL)
 
 Not a pass/fail gate: builds a populated, NOTE-SEEDED 6-track demo (W09: per-track instrument presets — a 4OSC

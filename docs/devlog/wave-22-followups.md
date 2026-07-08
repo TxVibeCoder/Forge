@@ -3,11 +3,11 @@
 > Baseline **`87225da`** (W21 tip). A follow-up sweep through the "immediate follow-ups + buildable-now" backlog
 > (the items surfaced after the frontier program completed). Process: four read-only source-verify spikes → two
 > file-disjoint build agents (retrocapture seam · piano-roll nudge) + orchestrator-built items (Modulate UI · gate
-> legs) → per-item build + gate verification → one adversarial QC pass. Build **clean** (0 warnings) · **all FORTY-TWO
-> selftests PASS** (floor **40 → 42** via `--selftest-nudge` + `--selftest-retrocapture`) · 11/11 screenshots.
-> Committed in three scoped commits (`a728f20`, `f91a5c5`, + this docs commit); **push held for the maintainer's OK.**
+> legs) → per-item build + gate verification → adversarial QC. Build **clean** (0 warnings) · **all FORTY-THREE
+> selftests PASS** (floor **40 → 43** via `--selftest-nudge` + `--selftest-retrocapture` + `--selftest-movetotrack`) ·
+> 11/11 screenshots. Committed in scoped per-feature commits and **PUSHED to `origin/main`** (sanitize-clean).
 
-## What shipped (4 items)
+## What shipped (5 items)
 
 ### 1. Piano-roll keyboard nudge
 Shift+Left/Right nudges the selected notes by the snap division (`gridBeats`, 1-bar fallback via the null-safe
@@ -73,12 +73,17 @@ folded in (see the commit trail / this file's history for the verdict).
   `MidiClip`, not `StepClip` — a real editing gap when sending a looping step clip to the arrangement (harmless for
   a render leg). Its own follow-up.
 
-## Decision owed to the maintainer
-- **Per-clip instrument** (the mixed step-clip + melodic-clip "first-instrument-wins" silence): verified NOT
-  possible without an engine fork — `ClipSlot` has no plugin list and slot playback routes through the owning
-  AudioTrack's chain (`tracktion_EditNodeBuilder.cpp:949,1091`; `ClipSlot` has no plugin members). The realistic
-  v1 is "a step clip landing on a track that already hosts a melodic instrument auto-routes to its own new track"
-  (and symmetrically) — a **UX behaviour change** that needs the maintainer's/Fable's sign-off, so it was not built.
+## 5. Per-clip instrument — RESOLVED: "Move to its own track"
+Verified NOT possible without an engine fork — `ClipSlot` has no plugin list and slot playback routes through the
+owning AudioTrack's chain (`tracktion_EditNodeBuilder.cpp:949,1091`). The maintainer chose the **manual "Move to
+its own track"** approach (over auto-routing or leaving it a documented limitation). Shipped:
+`ProjectSession::moveSlotClipToOwnTrack` moves a slot clip to a NEW appended track (reusing the W13 `moveSlotClip`)
+and gives it its OWN head instrument — a drum kit for a StepClip, else a default 4OSC. A filled-slot right-click
+**"Move to its own track"** fires the shell's track-change fan-out (save + rebuild grid/arrange/tray) and seals one
+undo gesture. Gate `--selftest-movetotrack` (floor 42 → 43): reproduces the shared-drum-kit bug then proves the
+moved melodic clip lands on a new track with its OWN 4OSC (not the drum Sampler). **v1 notes:** undo returns the
+clip to its source but leaves the auto-grown empty track (grow is off the undo stack, per W13); moving a StepClip
+is symmetric but not gate-covered; a removal/menu-polish pass is a Fable follow-up.
 
 ## New gotcha (for CLAUDE.md)
 - **The engine's retrospective-record relocate-to-slot snippet has a latent UAF outside its `playSlotClips`

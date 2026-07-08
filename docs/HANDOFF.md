@@ -3,25 +3,27 @@
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-08**, end of **"W22 — buildable-backlog
 > follow-ups"**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program
-> completed. **Shipped 4** (source-verify spikes → 2 file-disjoint build agents + orchestrator items → per-item
+> completed. **Shipped 5** (source-verify spikes → 2 file-disjoint build agents + orchestrator items → per-item
 > gate verification → adversarial QC): **(1) piano-roll keyboard nudge** (Shift+arrows, `forge::midiedit::
 > shiftNoteStarts`, gate `--selftest-nudge`); **(2) MIDI retrospective capture** (`ProjectSession::
 > commitRetrospectiveToSlot` — "I wasn't recording but just played something"; gate `--selftest-retrocapture`; a
 > QC-caught use-after-free in the relocate-to-slot step was fixed); **(3) the "Modulate" LFO UI** (Ctrl+M param
 > picker → `forge::modifier::addLFO`+`assign`, making the W21 LFO seam usable — menu placement + indicator deferred
-> to Fable); **(4) LFO config-coverage** gate legs (offset + track-resolution). Build **clean (0 warnings)** ·
-> **42/42 selftest floor** (floor 40 → 42) · 11/11 screenshots. **DEFERRED (with rationale):** capture count-in
+> to Fable); **(4) LFO config-coverage** gate legs (offset + track-resolution); **(5) per-clip "Move to its own
+> track"** (`moveSlotClipToOwnTrack` + `--selftest-movetotrack` — the maintainer-chosen fix for the mixed-clip
+> "first-instrument-wins" silence, the engine being track-level only: split the clip onto a NEW track with its
+> own instrument). Build **clean (0 warnings)** · **43/43 selftest floor** (floor 40 → 43) · 11/11 screenshots.
+> **DEFERRED (with rationale):** capture count-in
 > (the spike found it needs a transport **record-mode** change that risks the carefully-timed W17 capture path —
 > deserves its own wave) + a drum-kit **render** gate leg (experimental/likely-SKIP; the documented W09/W10 render
-> leg class). **DECISION OWED to the maintainer:** per-clip instrument — see What's next. Full record →
+> leg class). Full record →
 > [devlog/wave-22-followups.md](devlog/wave-22-followups.md). Prior: **W21 — frontier Wave 9 (LFO) + drum sampler**
 > (completed the 10-wave frontier program; PUSHED, tip `87225da`).
 
 Repo: [github.com/TxVibeCoder/Forge](https://github.com/TxVibeCoder/Forge) (public, AGPLv3) · branch
-**`main`**. **W07–W21 are PUSHED to `origin/main`** (tip `87225da`, sanitize-clean). **W22 (this session) is
-COMMITTED LOCALLY but NOT pushed** — held for the maintainer's OK, so local `main` is ahead of `origin/main`.
-Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY-TWO selftests PASS** (W22 added `--selftest-nudge`
-+ `--selftest-retrocapture`; floor **40 → 42**; the 11-state `--screenshot` matrix unchanged). ⚠ **History was rewritten in a prior session**
+**`main`**. **W07–W22 are PUSHED to `origin/main`** (sanitize-clean; local `main` == `origin/main`).
+Last build **clean** (MSVC Debug, 0 warnings) · **all FORTY-THREE selftests PASS** (W22 added `--selftest-nudge`,
+`--selftest-retrocapture`, `--selftest-movetotrack`; floor **40 → 43**; the 11-state `--screenshot` matrix unchanged). ⚠ **History was rewritten in a prior session**
 (`git-filter-repo`) to scrub a real-identity leak from an earlier commit's HANDOFF prose, then force-pushed — all
 pre-`9cc7f04` commit hashes at/after the old `09c4928` changed (e.g. `09c4928` → `6ca11cd`).
 Also landed (post-W20, a maintainer-requested feature — NOT a frontier wave): **MIDI-file drag-and-drop import**.
@@ -488,11 +490,10 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
    recipe preserved in `docs/wave-9-lfo-recipe.local.md`.
    **▶ NEXT: the frontier program is COMPLETE (W21) and W22 knocked out most of the buildable follow-ups**
    (piano-roll nudge, MIDI retrospective capture, the "Modulate" LFO UI, LFO config-coverage). **Remaining:**
-   (a) **DECISION — per-clip instrument:** the mixed step-clip + melodic-clip "first-instrument-wins" silence is
-   NOT fixable without an engine fork (a `ClipSlot` has no plugin list; slot playback routes through the owning
-   AudioTrack's chain — `tracktion_EditNodeBuilder.cpp:949,1091`). Realistic v1 = "a step clip landing on a track
-   that already hosts a melodic instrument auto-routes to its own NEW track" (and symmetrically) — a UX behaviour
-   change needing the maintainer's/Fable's sign-off before building. (b) **capture count-in** (deferred W22: the
+   (a) ✅ **per-clip instrument — DONE (W22):** the maintainer chose "Move to its own track"; shipped as
+   `moveSlotClipToOwnTrack` + `--selftest-movetotrack` (the engine is track-level only — a `ClipSlot` has no
+   plugin list, slot playback routes through the owning AudioTrack's chain — so the fix splits a conflicting clip
+   onto its own new track with its own instrument, rather than a true per-clip instrument). (b) **capture count-in** (deferred W22: the
    only audible-count-in path puts the transport in record-mode for the whole Capture session, risking the W17
    capture timing + lighting the Rec button — its own focused wave); (c) a **drum-kit render gate leg** (deferred
    W22: experimental/likely-SKIP, the W09/W10 render-leg class; `--selftest-drumkit` already proves file-level
