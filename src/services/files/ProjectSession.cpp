@@ -1908,12 +1908,24 @@ te::MidiClip::Ptr ProjectSession::commitRetrospectiveToSlot (int trackIndex)
         return {};
     }
 
-    // Force the clip into a free Session slot. The engine's OWN relocation (tracktion_MidiInputDevice.cpp:
-    // 1457-1473) only does this when track->playSlotClips is ALREADY true, which it isn't on a first
-    // capture — so we mirror it UNCONDITIONALLY here. First empty slot on the track; else grow one new row
-    // (the same "first empty else grow" idiom as duplicateSlotClip, adapted to resolve a ClipSlot* directly
-    // instead of a scene index — InputDeviceInstance::getFreeSlot is protected, so we can't call the
-    // engine's own helper from here).
+    // QC: when track->playSlotClips is ALREADY latched true (a jam-then-capture flow — the W10 latch never
+    // clears), the engine's applyRetrospectiveRecord ALREADY relocated `mc` into a free slot (via getFreeSlot).
+    // Accept that placement rather than relocating a SECOND time (which would grow a spurious scene and land
+    // the clip rows past where the engine put it).
+    if (mc->getClipSlot() != nullptr)
+    {
+        PluginHost::ensureDefaultInstrument (*track);   // idempotent — born audible
+        edit->markAsChanged();
+        return te::MidiClip::Ptr (mc);
+    }
+
+    // Otherwise (a first capture, playSlotClips false) the engine left `mc` on the arrangement — relocate it
+    // into a free Session slot ourselves. First PAD this track's materialized slots up to the scene count (a
+    // no-op for full tracks) so the search doesn't miss an existing-but-unmaterialized empty row and grow a
+    // spurious scene (the W15 uneven-materialization footgun); then first-empty, else grow one new row.
+    // (InputDeviceInstance::getFreeSlot is protected, so we resolve a ClipSlot* via the public list ourselves.)
+    track->getClipSlotList().ensureNumberOfSlots (getNumScenes());
+
     te::ClipSlot* slot = nullptr;
 
     for (auto* s : track->getClipSlotList().getClipSlots())

@@ -2343,6 +2343,15 @@ private:
                                 if (param == nullptr)
                                     return;
 
+                                // Don't stack: addLFO never dedups, so repeated Ctrl+M on an already-modulated
+                                // param would pile on N independent LFOs. No removal UI exists yet (unassign/
+                                // removeLFO are unwired — a Fable follow-up), so guard here. (QC.)
+                                if (param->hasActiveModifierAssignments())
+                                {
+                                    self->setStatusMessage (param->getParameterName() + " is already modulated");
+                                    return;
+                                }
+
                                 // AutomatableParameter::getTrack() == plugin->getOwnerTrack(); attach + assign a fresh LFO.
                                 if (auto* track = dynamic_cast<te::AudioTrack*> (param->getTrack()))
                                 {
