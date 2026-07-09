@@ -45,6 +45,7 @@ target_sources(Forge PRIVATE
     src/ui/transport/TransportBar.cpp
     src/ui/transport/LcdDisplay.cpp
     src/ui/transport/TempoPopup.cpp
+    src/ui/transport/TimeSigPopup.cpp
     src/ui/tray/ChannelTray.cpp
     src/ui/menu/ForgeMenuModel.cpp
     src/ui/arrange/ArrangeView.cpp

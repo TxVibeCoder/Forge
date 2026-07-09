@@ -1,5 +1,6 @@
 #include "ui/transport/LcdDisplay.h"
 #include "ui/transport/TempoPopup.h"
+#include "ui/transport/TimeSigPopup.h"
 #include "ui/ForgeLookAndFeel.h"
 
 using namespace juce;
@@ -60,22 +61,35 @@ void LcdDisplay::setDemoState (const forge::lcd::LcdState& s)
 
 bool LcdDisplay::hitTest (int x, int y)
 {
-    // Clickable ONLY over the tempo readout, and only once the shell has wired the tempo seams —
-    // otherwise the whole LCD stays click-through exactly as before (the tempo zone is also empty
-    // at narrow widths, which sheds clickability with the readout).
-    return queryBpm != nullptr && onBpmChanged != nullptr && tempoZoneBounds.contains (x, y);
+    // Clickable ONLY over the tempo or signature readout, and only once the shell has wired that
+    // zone's seams — otherwise that part of the LCD stays click-through exactly as before (each
+    // zone is also empty at narrow widths / during count-in, which sheds its clickability).
+    const bool overTempo = queryBpm != nullptr && onBpmChanged != nullptr && tempoZoneBounds.contains (x, y);
+    const bool overSig   = querySig != nullptr && onSigChanged  != nullptr && sigZoneBounds.contains (x, y);
+    return overTempo || overSig;
 }
 
 void LcdDisplay::mouseUp (const MouseEvent& e)
 {
-    if (queryBpm == nullptr || onBpmChanged == nullptr || ! tempoZoneBounds.contains (e.getPosition()))
+    // Tempo zone -> tempo popup. Both seams must be wired and the click must land in the last-
+    // painted tempo readout (empty at narrow widths / during count-in, which sheds clickability).
+    // The popup owns the tap estimator and pushes edits back through our seams; the box anchors to
+    // the tempo zone and manages its own lifetime.
+    if (queryBpm != nullptr && onBpmChanged != nullptr && tempoZoneBounds.contains (e.getPosition()))
+    {
+        CallOutBox::launchAsynchronously (std::make_unique<TempoPopup> (queryBpm, onBpmChanged),
+                                          localAreaToGlobal (tempoZoneBounds),
+                                          nullptr);
         return;
+    }
 
-    // First CallOutBox in the codebase: the popup owns the tap estimator and pushes edits back
-    // through our seams; the box anchors to the tempo zone and manages its own lifetime.
-    CallOutBox::launchAsynchronously (std::make_unique<TempoPopup> (queryBpm, onBpmChanged),
-                                      localAreaToGlobal (tempoZoneBounds),
-                                      nullptr);
+    // Signature zone -> time-signature popup (a second branch beside the tempo one; same gating).
+    if (querySig != nullptr && onSigChanged != nullptr && sigZoneBounds.contains (e.getPosition()))
+    {
+        CallOutBox::launchAsynchronously (std::make_unique<TimeSigPopup> (querySig, onSigChanged),
+                                          localAreaToGlobal (sigZoneBounds),
+                                          nullptr);
+    }
 }
 
 void LcdDisplay::timerCallback()
@@ -176,9 +190,10 @@ void LcdDisplay::paint (Graphics& g)
 
     if (current.countInActive)
     {
-        // The count-in face has no tempo readout — clear the clickable zone so a mid-record
-        // click can't launch the popup over the count-in digit.
+        // The count-in face has no tempo/signature readout — clear both clickable zones so a
+        // mid-record click can't launch a popup over the count-in digit.
         tempoZoneBounds = {};
+        sigZoneBounds   = {};
 
         // Count-in face: one large centred digit over a recordRed underline whose alpha peaks
         // on the click (pulsePhase 0) and decays across the beat. The raw bars|beats never
@@ -233,13 +248,22 @@ void LcdDisplay::paint (Graphics& g)
                     Justification::centredLeft);
     }
 
-    // RIGHT — key + time signature.
+    // RIGHT — key + time signature. The whole "C · 4/4" readout is the clickable signature zone:
+    // latch it into sigZoneBounds for hitTest / mouseUp (mirrors the tempo strip below). When the
+    // key zone is shed (too narrow, or the count-in face above), the bounds are cleared so that
+    // part of the LCD becomes click-through again.
     if (showKey)
     {
+        const auto keyZone = inner.removeFromRight (jmin (56, inner.getWidth()));
+        sigZoneBounds = keyZone;
+
         g.setColour (Colour (ForgeLookAndFeel::textSec));
         g.setFont (Font (FontOptions (11.0f)));
-        g.drawText (current.keySigText, inner.removeFromRight (jmin (56, inner.getWidth())),
-                    Justification::centredRight);
+        g.drawText (current.keySigText, keyZone, Justification::centredRight);
+    }
+    else
+    {
+        sigZoneBounds = {};   // no key/sig readout painted -> nothing clickable there
     }
 
     // CENTRE — tempo, with a small BPM tag. The whole strip (readout + tag) is the clickable

@@ -9,6 +9,9 @@
 
 #pragma once
 
+#include <cstdlib>   // std::abs (int)              — nearestPowerOfTwoDenominator
+#include <limits>    // std::numeric_limits<int>    — nearestPowerOfTwoDenominator
+
 #include <JuceHeader.h>
 
 #include "core/Log.h"
@@ -373,5 +376,61 @@ namespace EngineHelpers
     inline void setTempoAt (te::Edit& edit, te::TimePosition pos, double bpm)
     {
         edit.tempoSequence.getTempoAt (pos).setBpm (juce::jlimit (20.0, 300.0, bpm));
+    }
+
+    //==============================================================================
+    // Time signature (hands-on: clickable LCD "· 4/4" zone)
+    //
+    // A time signature lives on a te::TimeSigSetting inside the Edit's tempo sequence:
+    //     TimeSigSetting::Ptr TempoSequence::insertTimeSig (BeatPosition);   // tracktion_TempoSequence.h:137
+    //     juce::CachedValue<int> TimeSigSetting::numerator, denominator;      // tracktion_TimeSigSetting.h:50
+    //     juce::String TimeSigSetting::getStringTimeSig() const;              // -> "n/d", TimeSigSetting.cpp:40-43
+    //
+    // insertTimeSig(BeatPosition) delegates to insertTimeSig(TimePosition, getUndoManager())
+    // (tracktion_TempoSequence.cpp:225-227 -> 230-257), so the write is UM-bound / undoable just like
+    // setTempoAt. Two behaviours the callers rely on (source-traced there):
+    //   - AT an existing break (beat 0 always has the Edit's initial sig): it returns the EXISTING
+    //     setting rather than stacking a second one at the same beat (cpp:248-249) — so a beat-0 call
+    //     mutates the initial time signature in place.
+    //   - ELSEWHERE: it rounds to the nearest beat (cpp:241) and inserts a NEW break (a copy of the
+    //     previous sig, cpp:245) which we then overwrite.
+    // The numerator/denominator CachedValues are referTo'd with the edit's UndoManager in the
+    // TimeSigSetting ctor (tracktion_TimeSigSetting.cpp:18-22), so assigning them is a single undoable
+    // step. Only powers of two are valid meter denominators; the numerator is clamped to [1, 32] to
+    // match the popup's editable range.
+    //
+    // Message-thread only.
+
+    /** Snaps `d` to the nearest valid meter denominator (a power of two in {1,2,4,8,16,32}); ties
+        resolve to the SMALLER power of two (the {1,2,4,...} scan keeps the first-seen minimum, so
+        3 -> 2, not 4). Used to sanitise a typed/garbage denominator before it reaches the engine. */
+    inline int nearestPowerOfTwoDenominator (int d)
+    {
+        static const int valid[] = { 1, 2, 4, 8, 16, 32 };
+        int best = 4, bestErr = std::numeric_limits<int>::max();
+        for (int v : valid) { const int e = std::abs (v - d); if (e < bestErr) { bestErr = e; best = v; } }
+        return best;
+    }
+
+    /** Sets (or inserts) the time signature in force at `pos`. At beat 0 this mutates the Edit's
+        initial sig; elsewhere it inserts a change rounded to the nearest beat. UM-bound (undoable)
+        like setTempoAt. The numerator is clamped to [1, 32]; the denominator is snapped to the
+        nearest power of two (the only valid meter denominators). */
+    inline void setTimeSigAt (te::Edit& edit, te::BeatPosition pos, int numerator, int denominator)
+    {
+        if (auto sig = edit.tempoSequence.insertTimeSig (pos))   // existing sig at pos, or a new one; UM-bound
+        {
+            sig->numerator   = juce::jlimit (1, 32, numerator);
+            sig->denominator = nearestPowerOfTwoDenominator (denominator);
+        }
+        else
+            FORGE_LOG_ERROR ("setTimeSigAt: insertTimeSig returned null at beat "
+                             + juce::String (pos.inBeats()));
+    }
+
+    /** The time signature in force at `pos` as "n/d" (for seeding the popup / reading back). */
+    inline juce::String getTimeSigStringAt (te::Edit& edit, te::BeatPosition pos)
+    {
+        return edit.tempoSequence.getTimeSigAt (pos).getStringTimeSig();
     }
 }

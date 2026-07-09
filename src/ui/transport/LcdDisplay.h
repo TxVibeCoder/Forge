@@ -80,20 +80,26 @@ public:
 
     void paint (juce::Graphics&) override;
 
-    /** The tempo zone is the only clickable part of the LCD — hitTest returns true ONLY inside
-        the last-painted tempoZoneBounds, so every other part of the face stays click-through to
-        the crowded control bar underneath exactly as before (W?? 1.4). */
+    /** The tempo and time-signature readouts are the clickable parts of the LCD — hitTest returns
+        true ONLY inside the last-painted tempoZoneBounds or sigZoneBounds, so every other part of
+        the face stays click-through to the crowded control bar underneath exactly as before. */
     bool hitTest (int x, int y) override;
 
-    /** Clicking the tempo zone launches the tempo popup (a CallOutBox) anchored to that zone. */
+    /** Clicking the tempo zone launches the tempo popup; clicking the signature zone launches the
+        time-signature popup (each a CallOutBox anchored to its own zone). */
     void mouseUp (const juce::MouseEvent&) override;
 
     //==============================================================================
     // Tempo-edit seams, wired by the shell (see main.cpp). Both must be set for the tempo zone
     // to become clickable at runtime; hitTest also requires them so the click-through behaviour
     // is unchanged until they are wired.
-    std::function<double()>       queryBpm;       // current BPM, seeds the popup
+    std::function<double()>       queryBpm;       // current BPM, seeds the tempo popup
     std::function<void (double)>  onBpmChanged;   // apply an edited BPM to the engine
+
+    // Time-signature-edit seams, wired by the shell alongside the tempo pair. Both must be set for
+    // the signature zone to become clickable; hitTest/mouseUp gate on them the same way.
+    std::function<juce::String()>   querySig;       // current signature as "n/d", seeds the sig popup
+    std::function<void (int, int)>  onSigChanged;   // apply an edited (numerator, denominator) to the engine
 
 private:
     void timerCallback() override;
@@ -114,10 +120,12 @@ private:
     int  latchedCountInTotal = 0;      // edit.getNumCountInBeats() at the record trigger, else 0
     bool latchedFromStopped  = false;  // that trigger came from a stopped transport
 
-    // The last-painted tempo readout rectangle (local coords). Set every paint() so hitTest /
-    // mouseUp know where the (only) clickable zone is; empty when the tempo zone is shed at a
-    // narrow width, which correctly makes the whole LCD click-through again.
+    // The last-painted clickable readout rectangles (local coords). Set every paint() so hitTest /
+    // mouseUp know where the clickable zones are; each is emptied when its readout is shed at a
+    // narrow width (or the count-in face replaces the zones), which correctly makes that part of
+    // the LCD click-through again.
     juce::Rectangle<int> tempoZoneBounds;
+    juce::Rectangle<int> sigZoneBounds;   // the "· 4/4" signature part of the key/sig readout
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LcdDisplay)
 };

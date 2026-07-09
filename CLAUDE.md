@@ -62,12 +62,15 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY-THREE gates as of W22 (buildable-backlog follow-ups):
+- **Selftest floor** (must pass after any change — FORTY-SIX gates as of W23 (hands-on follow-ups):
   W21 added `--selftest-modifier` (the LFO / `ModifierHelpers` seam) + `--selftest-drumkit` (the self-rendered
   CC0 drum-kit Sampler that Step Clips are now born with); W22 added `--selftest-nudge` (piano-roll keyboard nudge,
   `forge::midiedit::shiftNoteStarts`) + `--selftest-retrocapture` (`ProjectSession::commitRetrospectiveToSlot` —
   "I wasn't recording but just played something" MIDI capture) + `--selftest-movetotrack` (the per-clip "Move to
-  its own track" mixed-clip fix — `moveSlotClipToOwnTrack`). **Frontier Wave 9 (LFO modifiers) SHIPPED in
+  its own track" mixed-clip fix — `moveSlotClipToOwnTrack`); W23 added `--selftest-pianoroll` (the roll's own
+  zoomable beat→pixel axis + playhead + the global-undo `onUnhandledKey` fallback) + `--selftest-timesig`
+  (`EngineHelpers::setTimeSigAt`) + `--selftest-trim` (`forge::midiedit::trimLeadingSilence`), plus a
+  `windowDropsStale` leg on `--selftest-taptempo`. **Frontier Wave 9 (LFO modifiers) SHIPPED in
   W21** — the 10-wave frontier program is COMPLETE (its recipe is archived in `docs/wave-9-lfo-recipe.local.md`):
   `--selftest` (playback),
   `--selftest-record`, `--selftest-session`, `--selftest-midi`, `--selftest-midilearn`, `--selftest-midiinput`,
@@ -79,15 +82,17 @@ conflict, surface it.
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`,
-  `--selftest-movetotrack`;
-  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack` are collision-free — placed before bare `--selftest`
+  `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim` are collision-free —
+  placed before bare `--selftest`
   (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).
   ⚠ new gate names that CONTAIN an existing name must be
   ordered longest-first in the ladders — `-midilearn`/`-midiinput`/`-midifile` ⊃ `-midi`,
   `-sessionmixer`/`-sessionmaster` ⊃ `-session`, and `-scenerename`/
   `-scenedelete`/`-scenereorder`/`-scenesend` ⊃ `-scene`; verify the report's `mode=` line)
-  `--screenshot` renders the 11-state matrix (incl. the window-level `shell_window`, the >16-scene
-  `session_scenes`, and the W20 `session_stepgrid` drawer) to `%TEMP%\forge_shot_*.png`. Full contract:
+  `--screenshot` renders the 12-state matrix (incl. the window-level `shell_window`, the >16-scene
+  `session_scenes`, the W20 `session_stepgrid` drawer, and the W23 `session_pianoroll` drawer — the zoomable
+  grid + nav strip + playhead) to `%TEMP%\forge_shot_*.png`. Full contract:
   `tests/SELFTEST.md`. Reports →
   `%TEMP%\forge_phase0_selftest.log`. First clone: `git submodule update --init --recursive`.
 - **In a multi-CLI wave, CLIs DO NOT build.** One build dir + a device lock means concurrent builds collide.

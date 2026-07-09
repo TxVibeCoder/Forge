@@ -109,4 +109,32 @@ namespace forge::midiedit
 
         return clamped;
     }
+
+    // Trims leading silence on an ARRANGE MidiClip: moves the clip's LEFT edge forward to its first
+    // event (note/CC/sysex via MidiList::getFirstBeatNumber), keeping every event at its absolute
+    // timeline position (Clip::setStart preserveSync=true, keepLength=false — the boundary moves, the
+    // content does not) and DELETING NOTHING (the skipped lead-in is absorbed into the clip offset,
+    // reversible by dragging the edge back). No-op (returns false) when the clip is empty, already
+    // tight (first event at/behind the visible start), or LOOPING (an arrange one-shot is the target;
+    // W5/W13: a looping/slot clip re-normalises). Undoable via the clip's Edit UndoManager (setStart
+    // is UM-bound); the caller seals the gesture. Message-thread only. Returns true iff the clip
+    // start was moved.
+    inline bool trimLeadingSilence (te::MidiClip& clip)
+    {
+        if (clip.isLooping())                          // arrange one-shot only — never a looping/slot clip
+            return false;
+
+        auto& seq = clip.getSequence();                // NEVER getSequenceLooped() (edits there are discarded)
+        if (seq.getNumNotes() == 0)
+            return false;
+
+        const auto firstBeat    = seq.getFirstBeatNumber();                                   // earliest event, content-relative
+        const auto visStartBeat = clip.getContentBeatAtTime (clip.getPosition().getStart());  // current visible content start
+        if (firstBeat <= visStartBeat + te::BeatDuration::fromBeats (1.0e-6))                  // already tight
+            return false;
+
+        const auto newStart = clip.getTimeOfContentBeat (firstBeat);   // absolute edit time the 1st event plays at now
+        clip.setStart (newStart, /*preserveSync*/ true, /*keepLength*/ false);   // move left edge, keep notes + end
+        return true;
+    }
 }

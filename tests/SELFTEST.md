@@ -407,6 +407,7 @@ writes a tempo through `EngineHelpers::setTempoAt` and reads it back off `tempoS
 | `bpm120` | four taps 500 ms apart → 120.0 | 1 |
 | `gapReset` | a >2000 ms gap clears the sequence | 1 |
 | `clampHigh` | a too-fast tap clamps to 300 | 1 |
+| `windowDropsStale` (W23) | five taps (0, 1000, 1300, 1700, 2000 ms) → the `t=0` lead-in is evicted from the capacity-4 ring; the mean of the last 3 intervals `(300+400+300)/3` → **180.0 BPM** (rules out the unbounded-average 120 and last-2-taps 200 models) | 1 |
 | `engineWrite` | `setTempoAt(…,140)` reads back 140 | 1 |
 | `engineClamp` | `setTempoAt(…,5)` reads back the 20 BPM floor | 1 |
 
@@ -1008,7 +1009,71 @@ PNG in `%TEMP%` via `createComponentSnapshot`, so the UI can be inspected withou
 | `forge_shot_session_top.png` / `forge_shot_session_scrolled.png` | **vertical-scroll proof** — the grid at a short (1040×360) window, snapped at the top then scrolled to the bottom. Comparing them confirms all 16 scene rows are reachable (not clipped), pads stay ~46 px (no stretch), and the pinned scene column stays aligned with the pads while scrolling. |
 | `forge_shot_session_scenes.png` | **dynamic scene-count proof (W07)** — the demo grid grown to **20 scenes** via `ensureScenes`, scrolled to the bottom: rows 16–20 render, stay row-aligned with the pinned scene column (the `rowBand` equal-height invariant — a QC-fixed drift), and scroll. |
 | `forge_shot_session_stepgrid.png` | **Step Grid drawer proof (W20)** — a step clip created + populated with a drum pattern (kick on the beats, snare on 2 & 4, hat on eighths), opened in the `BottomMode::StepGrid` drawer: the 16×8 grid paints with the 8 GM-drum lane names in the gutter, active cells in `playGreen`, beat grouping every 4 steps. Proves the drag-to-toggle grid renders + a StepClip routes to the StepGrid drawer (the `isMidi()==false` gotcha). |
+| `forge_shot_session_pianoroll.png` | **Piano-roll drawer proof (W23)** — a note-seeded MIDI clip opened in the roll, fitted to view: the zoomable grid (bar/beat/sub-beat line hierarchy + mini black/white keybed), the bottom nav strip (Time −/+, Pitch −/+, Fit + horizontal scrollbar), and the moving playhead (transport parked at content beat 2, so the `timeTempo` line is in-frame). Proves the render the `--selftest-pianoroll` model gate can't show. |
 
 > Verified 2026-06-30: `session_scrolled` shows scenes 10–16 with the scene column aligned to the pads,
 > confirming the Session-grid vertical scroll. This is the headless stand-in for the one check that still
 > needs a human: a live mouse/keyboard GUI smoke pass.
+
+## `Forge --selftest-pianoroll` (W23 — piano-roll zoom / playhead / global undo)
+
+The acceptance gate for the **W23 piano-roll** work (design:
+[../docs/devlog/wave-23-handson-followups.md](../docs/devlog/wave-23-handson-followups.md)). Binds the real
+docked `pianoRoll` to a slot clip at a deterministic 800×400 size and drives the actual seams (no mocks).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clipBound` | the roll bound the created MIDI clip | 1 |
+| `roundTrips` | `xToBeat(beatToX(b)) == b` (integer-x tolerance) — the roll's own beat↔pixel axis | 1 |
+| `zoomInWidensBeat` / `zoomAnchorHeld` | a time zoom-in widens the per-beat span AND keeps the beat under the pointer fixed | 1 / 1 |
+| `zoomOutNarrowsBeat` | a time zoom-out narrows the per-beat span again | 1 |
+| `pitchZoomWidensRow` | a pitch zoom widens the semitone row height (`pitchToY` delta) | 1 |
+| `playheadTracks` | the playhead x is ≥ gutter and increases as the transport moves forward | 1 |
+| `playheadOffscreen` | the playhead reads −1 when the transport sits outside the visible time window | 1 |
+| `undoViaRollKey` | **the reported bug** — a Ctrl+Z dispatched through the roll's OWN `keyPressed` (→ `onUnhandledKey` → shell `doUndo`) reverts a seeded note (count 1 → 0) | 1 |
+| `localKeyNotForwarded` / `ctrlZForwarded` | routing discipline — a local key (`q` quantise) is consumed locally and NOT forwarded; Ctrl+Z IS forwarded to the shell | 1 / 1 |
+
+> The mouse-wheel zoom itself is interaction-territory (no synthetic-wheel driver) — the buttons, scrollbar,
+> Fit, zoom math, playhead, and the undo key-fallback are all gated; the `session_pianoroll` screenshot shows
+> the render. Collision-free; before bare `--selftest`; verify `mode=pianoroll`.
+
+## `Forge --selftest-timesig` (W23 — time-signature seam)
+
+The acceptance gate for the **W23 time-signature** feature. Drives the real `EngineHelpers::setTimeSigAt` /
+`getTimeSigStringAt` seam on the live edit and reads back through the engine (models `--selftest-taptempo`'s
+engine-write legs).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `initialRoundTrip` | `setTimeSigAt(beat 0, 3/4)` reads back "3/4"; `→ 6/8` reads "6/8" | 1 |
+| `numDenDistinct` | after 6/8, numerator == 6 AND denominator == 8 (stored independently, not conflated) | 1 |
+| `midInsertReadsBack` | a change inserted at beat 16 (5/4) reads back there while beat 0 keeps its own sig — resolves by position | 1 |
+| `denominatorClamp` | a non-power-of-two denominator (3) snaps to a valid power of two | 1 |
+| `undoRestores` | a fresh-transaction meter change is reverted by `Edit::undo` — asserts the sig STRING (content), never `canUndo/canRedo` (the W16 4OSC redo-wipe gotcha) | 1 |
+
+> v1 UI edits the song's initial (beat-0) meter via the LCD "· 4/4" popup; the seam supports mid-arrangement
+> changes (proven by `midInsertReadsBack`) but the placing UI is a follow-up. The LCD-click→popup is
+> interaction-territory (mirrors the tempo popup). Collision-free; before bare `--selftest`; verify `mode=timesig`.
+
+## `Forge --selftest-trim` (W23 — trim silent start)
+
+The acceptance gate for **W23 "Trim silent start"**. Builds an 8-beat one-shot Arrange MIDI clip via
+`ProjectSession::createMidiClip` (born non-looping — NOT slot-normalized, per the W10/W13 gotchas) with a
+single note at content beat 2 (2 beats of leading silence), then drives `forge::midiedit::trimLeadingSilence`
+directly.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `clipCreated` / `seededNote` | the arrange clip exists; one note at beat 2 | 1 / 1 |
+| `trimmed` | the helper returned true (it moved the edge) | 1 |
+| `startMovedForward` | the clip's start advanced on the timeline | 1 |
+| `notePosPreserved` | the note's ABSOLUTE timeline play-time is unchanged (`getTimeOfContentBeat(firstBeat)` < 1e-6) — the `preserveSync` invariant | 1 |
+| `noLeadingSilence` | the visible content start is now the first note (`getContentBeatAtTime(start)` ≈ 2 beats) | 1 |
+| `offsetIncreased` | the lead-in was absorbed into the clip offset (offset > 0), not deleted | 1 |
+| `endPreserved` | the clip's end is unchanged (`keepLength=false` moved only the left edge) | 1 |
+| `undoReverts` | one `Edit::undo` restores start AND offset (content-level, never `canRedo` — W16 gotcha) | 1 |
+| `noOpWhenTight` | a second trim on the now-tight clip returns false and leaves the start alone | 1 |
+
+> Trims to the first *note*; a controller-only clip (no notes) no-ops (narrow edge). The UI trigger is the
+> Arrange clip right-click "Trim silent start" (MIDI-only); a piano-roll trigger + an audio-clip variant are
+> follow-ups. Collision-free; before bare `--selftest`; verify `mode=trim`.

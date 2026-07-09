@@ -1,6 +1,7 @@
 #include "ui/arrange/ArrangeView.h"
 #include "ui/ForgeLookAndFeel.h"
 #include "core/Log.h"
+#include "engine/MidiEditHelpers.h"   // forge::midiedit::trimLeadingSilence
 
 #include <array>
 #include <cmath>
@@ -1444,6 +1445,16 @@ void ArrangeView::showClipContextMenu (ClipComponent& cc, const MouseEvent&)
             safeThis->deleteClip (*clip);
     });
 
+    // MIDI-only: trims the clip's left edge forward to its first event (note/CC/sysex), absorbing
+    // the skipped lead-in into the clip offset — deletes nothing, reversible by dragging the edge
+    // back out. A wave/audio clip has no MIDI content to trim against, so the item is withheld.
+    if (clip->isMidi())
+        menu.addItem ("Trim silent start", [safeThis, clip]
+        {
+            if (safeThis != nullptr && clip != nullptr)
+                safeThis->trimClipStart (*clip);
+        });
+
     PopupMenu colours;
     for (size_t i = 0; i < kSwatchPalette.size(); ++i)
     {
@@ -1577,6 +1588,21 @@ void ArrangeView::deleteClip (te::Clip& clip)
 
     notifyEditMutated();
     rebuild();
+}
+
+void ArrangeView::trimClipStart (te::Clip& clip)
+{
+    if (edit == nullptr)
+        return;
+
+    if (auto* mc = dynamic_cast<te::MidiClip*> (&clip))
+    {
+        if (forge::midiedit::trimLeadingSilence (*mc))   // helper guards empty/tight/looping — false is a clean no-op
+        {
+            notifyEditMutated();   // shell seals the per-gesture undo transaction + autosaves (same path as delete/rename)
+            rebuild();             // ArrangeView has no clip-mutation listener — manual refresh, mirrors deleteClip
+        }
+    }
 }
 
 void ArrangeView::addTrack (te::AudioTrack* after)

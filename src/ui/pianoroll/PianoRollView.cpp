@@ -5,15 +5,13 @@
 #include "engine/MidiEditHelpers.h"   // W4: forge::midiedit::quantiseNoteStarts
 
 #include <algorithm>   // std::find for the selection set
+#include <cmath>       // std::llround / std::floor / std::round
 
 using namespace juce;
 
 namespace
 {
     using namespace PianoRollLayout;
-
-    // Full canvas height: every MIDI pitch gets a row.
-    constexpr int kCanvasHeight = numKeys * keyHeight;
 
     // Default pitch window centred on bind when the clip has no notes (~C3..C5). MIDI note 60 = C4.
     constexpr int kDefaultLowPitch  = 48;   // C3
@@ -31,22 +29,52 @@ namespace
 }
 
 //==============================================================================
-PianoRollView::PianoRollView (TimelineView& sharedTimeline)
-    : timeline (sharedTimeline)
+PianoRollView::PianoRollView()
 {
-    canvas.setSize (1, kCanvasHeight);
+    canvas.setSize (1, canvasHeight());
     viewport.setViewedComponent (&canvas, false);
-    viewport.setScrollBarsShown (true, false);   // vertical only; the time axis never scrolls here
+    viewport.setScrollBarsShown (true, false);   // vertical only; the time axis uses our own hScrollBar
     addAndMakeVisible (viewport);
 
+    addAndMakeVisible (playhead);                 // OVER the grid (added after the viewport), mouse-transparent
     addAndMakeVisible (velocityLane);             // fixed bottom strip, sized in resized()
 
-    // Take keyboard focus on any click inside the roll so Delete / Copy / Paste land here. The roll
-    // wants focus itself; the canvas + lane forward clicks up via the standard focus-on-click path.
+    // --- Bottom nav strip: zoom buttons + a horizontal (time) scrollbar --------------------------
+    auto initZoomButton = [this] (TextButton& b, const String& text, const String& tip)
+    {
+        b.setButtonText (text);
+        b.setTooltip (tip);
+        b.setWantsKeyboardFocus (false);          // never steal focus from the roll (keeps Ctrl+Z live)
+        b.setColour (TextButton::buttonColourId, Colour (ForgeLookAndFeel::raisedBg));
+        b.setColour (TextButton::textColourOffId, Colour (ForgeLookAndFeel::textPrim));
+        addAndMakeVisible (b);
+    };
+    initZoomButton (zoomOutTimeBtn,  "-", "Zoom out (time)  \xe2\x80\x94  Ctrl+Scroll");
+    initZoomButton (zoomInTimeBtn,   "+", "Zoom in (time)  \xe2\x80\x94  Ctrl+Scroll");
+    initZoomButton (zoomOutPitchBtn, "-", "Zoom out (pitch)  \xe2\x80\x94  Ctrl+Shift+Scroll");
+    initZoomButton (zoomInPitchBtn,  "+", "Zoom in (pitch)  \xe2\x80\x94  Ctrl+Shift+Scroll");
+    initZoomButton (fitBtn,       "Fit", "Fit the whole clip to the view");
+
+    zoomOutTimeBtn.onClick  = [this] { zoomTime  (0.8,  gutterW + timeAxisWidth() / 2); };
+    zoomInTimeBtn.onClick   = [this] { zoomTime  (1.25, gutterW + timeAxisWidth() / 2); };
+    zoomOutPitchBtn.onClick = [this] { zoomPitch (0.8,  viewport.getMaximumVisibleHeight() / 2); };
+    zoomInPitchBtn.onClick  = [this] { zoomPitch (1.25, viewport.getMaximumVisibleHeight() / 2); };
+    fitBtn.onClick          = [this] { fitClipToView(); };
+
+    hScrollBar.setWantsKeyboardFocus (false);
+    hScrollBar.setAutoHide (false);
+    hScrollBar.addListener (this);
+    addAndMakeVisible (hScrollBar);
+
+    // Take keyboard focus on any click inside the roll so Delete / Copy / Paste / Ctrl+Z land here.
+    // The canvas, notes and lane forward clicks up via the standard focus-on-click path.
     setWantsKeyboardFocus (true);
 }
 
-PianoRollView::~PianoRollView() = default;
+PianoRollView::~PianoRollView()
+{
+    hScrollBar.removeListener (this);
+}
 
 //==============================================================================
 void PianoRollView::setMidiClip (te::MidiClip* c)
@@ -54,6 +82,7 @@ void PianoRollView::setMidiClip (te::MidiClip* c)
     clip = c;
     clipboard.clear();          // a fresh clip starts with an empty clipboard
     rebuildNotes();             // clears the selection too
+    fitClipToView();            // horizontal fit (defers to resized() if the width isn't known yet)
     scrollToClipPitchRange();
     repaint();
 }
@@ -88,35 +117,94 @@ void PianoRollView::refreshAfterExternalEdit()
         rebuildNotes();
     else
         layoutNotes();
+
+    playhead.repaint();
 }
 
 void PianoRollView::resized()
 {
-    // Split off a fixed-height velocity strip at the bottom (outside the Viewport so it never
-    // scrolls with the pitch axis); the remainder hosts the scrolling grid Viewport.
     auto area = getLocalBounds();
-    const int laneH = jmin (VelocityLaneLayout::laneHeight, area.getHeight() / 2);
-    velocityLane.setBounds (area.removeFromBottom (laneH));
-    viewport.setBounds (area);
 
-    // The canvas spans the gutter + the full visible time axis, and the full pitch height.
-    const int w = jmax (1, viewport.getMaximumVisibleWidth());
-    canvas.setSize (w, kCanvasHeight);
-    layoutNotes();
+    // Fixed velocity strip at the very bottom (outside the Viewport so it never scrolls with pitch);
+    // then a compact nav strip (zoom buttons + horizontal scrollbar); the remainder hosts the grid.
+    const int laneH = jmin (VelocityLaneLayout::laneHeight, area.getHeight() / 3);
+    velocityLane.setBounds (area.removeFromBottom (laneH));
+
+    navBounds = area.removeFromBottom (PianoRollLayout::navStripH);
+    layoutNavStrip (navBounds);
+
+    viewport.setBounds (area);
+    playhead.setBounds (area);   // exactly over the grid viewport (mouse-transparent)
+
+    canvas.setSize (jmax (1, viewport.getMaximumVisibleWidth()), canvasHeight());
+
+    if (pendingFit && timeAxisWidth() > 0)
+    {
+        fitClipToView();
+    }
+    else
+    {
+        // Re-clamp the offset to the (possibly changed) width and resync scrollbar + notes.
+        const double maxOff = jmax (0.0, contentLengthBeats() - visibleBeats());
+        hOffsetBeats = jlimit (0.0, maxOff, hOffsetBeats);
+        updateHScrollBar();
+        layoutNotes();
+    }
+
     velocityLane.repaint();
+    playhead.repaint();
+}
+
+void PianoRollView::layoutNavStrip (juce::Rectangle<int> strip)
+{
+    strip.reduce (3, 2);
+
+    auto place = [&strip] (Component& c, int w)
+    {
+        c.setBounds (strip.removeFromLeft (w).reduced (0, 0));
+        strip.removeFromLeft (3);
+    };
+
+    strip.removeFromLeft (34);   // "Time" caption (drawn in paint())
+    place (zoomOutTimeBtn, 22);
+    place (zoomInTimeBtn,  22);
+    strip.removeFromLeft (8);
+    strip.removeFromLeft (36);   // "Pitch" caption (drawn in paint())
+    place (zoomOutPitchBtn, 22);
+    place (zoomInPitchBtn,  22);
+    strip.removeFromLeft (8);
+    place (fitBtn, 34);
+    strip.removeFromLeft (6);
+
+    hScrollBar.setBounds (strip.withTrimmedTop (3).withTrimmedBottom (3));   // fills the rest
 }
 
 void PianoRollView::paint (Graphics& g)
 {
-    // The canvas paints the grid; this only fills behind the (possibly shorter) viewport.
+    // The canvas paints the grid; this fills behind the (possibly shorter) viewport + the nav strip.
     g.fillAll (Colour (ForgeLookAndFeel::shellBg));
+
+    if (! navBounds.isEmpty())
+    {
+        g.setColour (Colour (ForgeLookAndFeel::panelBg));
+        g.fillRect (navBounds);
+        g.setColour (Colour (ForgeLookAndFeel::hairline));
+        g.fillRect (navBounds.getX(), navBounds.getY(), navBounds.getWidth(), 1);
+
+        // Axis captions to the left of each zoom pair (buttons are laid out already).
+        g.setColour (Colour (ForgeLookAndFeel::textSec));
+        g.setFont (FontOptions (10.0f));
+        const auto tb = zoomOutTimeBtn.getBounds();
+        const auto pb = zoomOutPitchBtn.getBounds();
+        g.drawText ("Time",  tb.getX() - 34, tb.getY(), 31, tb.getHeight(), Justification::centredRight, false);
+        g.drawText ("Pitch", pb.getX() - 36, pb.getY(), 33, pb.getHeight(), Justification::centredRight, false);
+    }
 }
 
 //==============================================================================
 int PianoRollView::timeAxisWidth() const
 {
-    // Mirror AudioClipComponent::clipAreaWidth: subtract the gutter (the vertical analogue of the
-    // arrange track header) from the canvas width so time maps over the playable strip only.
+    // The playable strip: the canvas width minus the left keybed gutter.
     return jmax (0, canvas.getWidth() - PianoRollLayout::gutterW);
 }
 
@@ -131,22 +219,13 @@ double PianoRollView::clipStartBeat() const
 
 int PianoRollView::beatToX (double contentBeat) const
 {
-    if (clip == nullptr)
-        return PianoRollLayout::gutterW;
-
-    auto& ts = clip->edit.tempoSequence;
-    const auto editTime = ts.toTime (te::BeatPosition::fromBeats (clipStartBeat() + contentBeat));
-    return timeline.timeToX (editTime, timeAxisWidth()) + PianoRollLayout::gutterW;
+    // Pure linear beat -> pixel scale, independent of the arrange timeline (W23). beat 0 = clip start.
+    return PianoRollLayout::gutterW + (int) std::llround ((contentBeat - hOffsetBeats) * pxPerBeat);
 }
 
 double PianoRollView::xToBeat (int x) const
 {
-    if (clip == nullptr)
-        return 0.0;
-
-    auto& ts = clip->edit.tempoSequence;
-    const auto editTime = timeline.xToTime (x - PianoRollLayout::gutterW, timeAxisWidth());
-    return ts.toBeats (editTime).inBeats() - clipStartBeat();
+    return hOffsetBeats + (double) (x - PianoRollLayout::gutterW) / jmax (1.0e-6, pxPerBeat);
 }
 
 double PianoRollView::snapBeat (double contentBeat) const
@@ -169,6 +248,153 @@ double PianoRollView::snapBeat (double contentBeat) const
         return contentBeat;
 
     return jmax (0.0, std::round (contentBeat / gridBeats) * gridBeats);
+}
+
+double PianoRollView::contentLengthBeats() const
+{
+    if (clip == nullptr)
+        return 4.0;
+
+    double noteExtent = 0.0;
+    for (auto* n : clip->getSequence().getNotes())
+        noteExtent = jmax (noteExtent, n->getEndBeat().inBeats());
+
+    auto& ts = clip->edit.tempoSequence;
+    const double clipLen = jmax (0.0, ts.toBeats (clip->getPosition().getEnd()).inBeats() - clipStartBeat());
+
+    return jmax (noteExtent, jmax (clipLen, 4.0));
+}
+
+double PianoRollView::visibleBeats() const
+{
+    return pxPerBeat > 0.0 ? (double) timeAxisWidth() / pxPerBeat : 0.0;
+}
+
+int PianoRollView::beatsPerBar() const
+{
+    if (clip == nullptr)
+        return 4;
+
+    // Time signature numerator at the clip start (mirrors ProjectSession's beats-per-bar idiom).
+    return jmax (1, clip->edit.tempoSequence.getTimeSigAt (
+                        te::BeatPosition::fromBeats (clipStartBeat())).numerator.get());
+}
+
+//==============================================================================
+void PianoRollView::zoomTime (double factor, int focusX)
+{
+    const double focalBeat = xToBeat (focusX);
+    const double newPx = jlimit (PianoRollLayout::minPxPerBeat, PianoRollLayout::maxPxPerBeat, pxPerBeat * factor);
+    if (newPx == pxPerBeat)   // already at a zoom clamp — nothing to do
+        return;
+
+    // Keep focalBeat fixed under focusX: focusX = gutter + (focalBeat - hOffset') * newPx.
+    hOffsetBeats = focalBeat - (double) (focusX - PianoRollLayout::gutterW) / newPx;
+    pxPerBeat = newPx;
+    applyViewChange();
+}
+
+void PianoRollView::zoomPitch (double factor, int focusY)
+{
+    const int oldH = keyHeight;
+    const int newH = jlimit (PianoRollLayout::minKeyH, PianoRollLayout::maxKeyH,
+                             (int) std::llround (keyHeight * factor));
+    if (newH == oldH)
+        return;
+
+    // Canvas-space y under the pointer (focusY is viewport-local), split into pitch row + fraction so
+    // the exact spot under the pointer stays put across the zoom.
+    const int    canvasY = viewport.getViewPositionY() + focusY;
+    const int    rowsDown = jlimit (0, PianoRollLayout::numKeys - 1, canvasY / jmax (1, oldH));
+    const double frac    = (double) (canvasY - rowsDown * oldH) / (double) jmax (1, oldH);
+
+    keyHeight = newH;
+    canvas.setSize (jmax (1, viewport.getMaximumVisibleWidth()), canvasHeight());
+
+    const int newCanvasY = (int) std::llround ((rowsDown + frac) * newH);
+    const int targetTop  = jlimit (0, jmax (0, canvasHeight() - viewport.getMaximumVisibleHeight()),
+                                   newCanvasY - focusY);
+    viewport.setViewPosition (0, targetTop);
+
+    layoutNotes();
+    canvas.repaint();
+    velocityLane.repaint();
+    playhead.repaint();
+}
+
+void PianoRollView::panTime (double deltaBeats)
+{
+    hOffsetBeats += deltaBeats;
+    applyViewChange();
+}
+
+void PianoRollView::fitClipToView()
+{
+    const double len = jmax (1.0, contentLengthBeats());
+    const int w = timeAxisWidth();
+    if (w <= 0)
+    {
+        pendingFit = true;   // width not known yet — resized() will re-run this
+        return;
+    }
+
+    pxPerBeat = jlimit (PianoRollLayout::minPxPerBeat, PianoRollLayout::maxPxPerBeat, (double) w / len);
+    hOffsetBeats = 0.0;
+    pendingFit = false;
+
+    applyViewChange();
+    scrollToClipPitchRange();
+}
+
+void PianoRollView::applyViewChange()
+{
+    // Clamp the horizontal offset to the content span, then resync canvas size, note layout,
+    // scrollbar and repaint. Shared tail of every zoom/pan/scroll path.
+    const double maxOff = jmax (0.0, contentLengthBeats() - visibleBeats());
+    hOffsetBeats = jlimit (0.0, maxOff, hOffsetBeats);
+
+    canvas.setSize (jmax (1, viewport.getMaximumVisibleWidth()), canvasHeight());
+    layoutNotes();
+    updateHScrollBar();
+
+    canvas.repaint();
+    velocityLane.repaint();
+    playhead.repaint();
+}
+
+void PianoRollView::updateHScrollBar()
+{
+    const double total = jmax (contentLengthBeats(), visibleBeats());
+    hScrollBar.setRangeLimits (0.0, total, juce::dontSendNotification);
+    hScrollBar.setCurrentRange (hOffsetBeats, jmax (0.0, visibleBeats()), juce::dontSendNotification);
+}
+
+void PianoRollView::scrollBarMoved (juce::ScrollBar* sb, double newRangeStart)
+{
+    if (sb != &hScrollBar)
+        return;
+
+    hOffsetBeats = jmax (0.0, newRangeStart);
+    layoutNotes();
+    canvas.repaint();
+    velocityLane.repaint();
+    playhead.repaint();
+}
+
+int PianoRollView::playheadX() const
+{
+    if (clip == nullptr)
+        return -1;
+
+    auto& ts = clip->edit.tempoSequence;
+    const double edtBeat     = ts.toBeats (clip->edit.getTransport().getPosition()).inBeats();
+    const double contentBeat = edtBeat - clipStartBeat();
+    const int x = beatToX (contentBeat);
+
+    if (x < PianoRollLayout::gutterW || x > canvas.getWidth())
+        return -1;
+
+    return x;
 }
 
 //==============================================================================
@@ -208,7 +434,7 @@ void PianoRollView::layoutNotes()
         const int x2 = beatToX (startBeat + lenBeats);
         const int y  = pitchToY (pitch);
 
-        nc->setBounds (x1, y, jmax (2, x2 - x1), PianoRollLayout::keyHeight - 1);
+        nc->setBounds (x1, y, jmax (2, x2 - x1), jmax (2, keyHeight - 1));
     }
 }
 
@@ -226,9 +452,9 @@ void PianoRollView::scrollToClipPitchRange()
     // Centre the range: the lower pitch sits lower on screen (larger y), so the visible band runs
     // from pitchToY(highPitch) down to pitchToY(lowPitch). Scroll so its midpoint is centred.
     const int yTop    = pitchToY (highPitch);
-    const int yBottom = pitchToY (lowPitch) + PianoRollLayout::keyHeight;
+    const int yBottom = pitchToY (lowPitch) + keyHeight;
     const int mid     = (yTop + yBottom) / 2;
-    const int targetY = jlimit (0, jmax (0, kCanvasHeight - viewport.getMaximumVisibleHeight()),
+    const int targetY = jlimit (0, jmax (0, canvasHeight() - viewport.getMaximumVisibleHeight()),
                                 mid - viewport.getMaximumVisibleHeight() / 2);
 
     viewport.setViewPosition (0, targetY);
@@ -600,62 +826,58 @@ void PianoRollView::pasteClipboard()
 //==============================================================================
 bool PianoRollView::keyPressed (const juce::KeyPress& key)
 {
-    if (clip == nullptr)
-        return false;
-
-    // Delete / Backspace -> remove the whole selection in one undo transaction.
-    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
+    // Local editing keys apply only with a bound clip; each returns true when it consumes the key.
+    if (clip != nullptr)
     {
-        if (selection.empty())
-            return false;
-
-        auto targets = selection;   // snapshot (removeNote + rebuild invalidate the selection)
-        auto* undo = &clip->edit.getUndoManager();
-        for (auto* n : targets)
-            clip->getSequence().removeNote (*n, undo);
-
-        rebuildNotes();
-        notifyMutated();
-        return true;
-    }
-
-    // Shift+Left / Shift+Right (no Ctrl/Cmd) -> nudge the selection by one grid step (or one bar when no
-    // grid step is set). Guard on !isCommandDown so a Cmd/Ctrl-modified chord isn't swallowed here, the
-    // same discipline as the bare-'Q' handler below (isKeyCode ignores modifiers, so a Shift+Cmd+Left
-    // combo would otherwise still match the bare arrow-key test).
-    if (key.getModifiers().isShiftDown() && ! key.getModifiers().isCommandDown()
-        && (key.isKeyCode (juce::KeyPress::leftKey) || key.isKeyCode (juce::KeyPress::rightKey)))
-    {
-        if (selection.empty())
-            return false;
-
-        nudgeSelection (key.isKeyCode (juce::KeyPress::leftKey) ? -1 : +1);
-        return true;
-    }
-
-    // Ctrl/Cmd + C / V -> copy / paste the selection.
-    if (key.getModifiers().isCommandDown())
-    {
-        if (key.isKeyCode ('C') || key.isKeyCode ('c'))
+        // Delete / Backspace -> remove the whole selection in one undo transaction.
+        if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
         {
-            copySelection();
+            if (! selection.empty())
+            {
+                auto targets = selection;   // snapshot (removeNote + rebuild invalidate the selection)
+                auto* undo = &clip->edit.getUndoManager();
+                for (auto* n : targets)
+                    clip->getSequence().removeNote (*n, undo);
+
+                rebuildNotes();
+                notifyMutated();
+                return true;
+            }
+        }
+
+        // Shift+Left / Shift+Right (no Ctrl/Cmd) -> nudge the selection by one grid step (or one bar when
+        // no grid step is set). Guard on !isCommandDown so a Cmd/Ctrl-modified chord isn't swallowed here.
+        else if (key.getModifiers().isShiftDown() && ! key.getModifiers().isCommandDown()
+                 && (key.isKeyCode (juce::KeyPress::leftKey) || key.isKeyCode (juce::KeyPress::rightKey)))
+        {
+            if (! selection.empty())
+            {
+                nudgeSelection (key.isKeyCode (juce::KeyPress::leftKey) ? -1 : +1);
+                return true;
+            }
+        }
+
+        // Ctrl/Cmd + C / V -> copy / paste the selection. (Ctrl/Cmd+Z falls through to the shell below.)
+        else if (key.getModifiers().isCommandDown())
+        {
+            if (key.isKeyCode ('C') || key.isKeyCode ('c')) { copySelection();  return true; }
+            if (key.isKeyCode ('V') || key.isKeyCode ('v')) { pasteClipboard(); return true; }
+        }
+
+        // Q (no modifier) -> quantise note starts to the grid: the selection, or the whole clip when nothing
+        // is selected. Guard on !isCommandDown so Ctrl+Q (File > Exit) propagates instead of being swallowed.
+        else if (! key.getModifiers().isCommandDown() && (key.isKeyCode ('Q') || key.isKeyCode ('q')))
+        {
+            quantiseSelectionOrClip();
             return true;
         }
-        if (key.isKeyCode ('V') || key.isKeyCode ('v'))
-        {
-            pasteClipboard();
-            return true;
-        }
     }
 
-    // Q (no modifier) -> quantise note starts to the grid: the selection, or the whole clip when nothing is
-    // selected. Guard on !isCommandDown so Ctrl+Q (File > Exit) / Cmd+Q propagate instead of being swallowed
-    // here — isKeyCode ignores modifiers, so a bare-'Q' test also matches Ctrl+Q (QC-caught).
-    if (! key.getModifiers().isCommandDown() && (key.isKeyCode ('Q') || key.isKeyCode ('q')))
-    {
-        quantiseSelectionOrClip();
+    // Anything the roll didn't consume -> hand to the shell so app-wide shortcuts (Undo/Redo Ctrl+Z/Y,
+    // Save, view/transport toggles) fire from inside the roll regardless of which sub-component holds
+    // focus. Mirrors PopoutWindow::onUnhandledKey; the shell returns true only if it acted on the key.
+    if (onUnhandledKey && onUnhandledKey (key))
         return true;
-    }
 
     return false;
 }
@@ -670,69 +892,98 @@ void PianoRollView::notifyMutated()
 void PianoRollView::GridCanvas::paint (Graphics& g)
 {
     const auto bounds = getLocalBounds();
+    const int  w  = bounds.getWidth();
+    const int  h  = bounds.getHeight();
+    const int  kh = jmax (1, owner.keyHeight);
 
     g.fillAll (Colour (ForgeLookAndFeel::panelBg));
 
-    // --- Pitch rows: alternating shading for white / black keys ----------------------------------
+    // --- Pitch rows: white / black key shading + per-row + octave separators ---------------------
     for (int pitch = 0; pitch < PianoRollLayout::numKeys; ++pitch)
     {
-        const int y = PianoRollView::pitchToY (pitch);
+        const int y = owner.pitchToY (pitch);
+        if (y + kh < 0 || y > h)
+            continue;   // cull rows outside the visible band
 
-        g.setColour (isBlackKey (pitch) ? Colour (ForgeLookAndFeel::panelBg)
+        // Black-key rows sit a touch darker than the shell so the white/black banding reads clearly;
+        // white-key rows are the raised panel tone.
+        g.setColour (isBlackKey (pitch) ? Colour (ForgeLookAndFeel::panelBg).darker (0.25f)
                                         : Colour (ForgeLookAndFeel::raisedBg));
-        g.fillRect (PianoRollLayout::gutterW, y,
-                    jmax (0, bounds.getWidth() - PianoRollLayout::gutterW),
-                    PianoRollLayout::keyHeight);
+        g.fillRect (PianoRollLayout::gutterW, y, jmax (0, w - PianoRollLayout::gutterW), kh);
 
-        // A slightly stronger hairline on each octave boundary (C row) reads as the major gridline.
-        if (pitch % 12 == 0)
-        {
-            g.setColour (Colour (ForgeLookAndFeel::hairline));
-            g.fillRect (PianoRollLayout::gutterW, y, bounds.getWidth() - PianoRollLayout::gutterW, 1);
-        }
+        // Row separators in textSec (clearly legible against the dark rows — hairline is too close to
+        // raisedBg to read): a faint line under every row + a distinct line on each octave (C) boundary.
+        const bool octave = (pitch % 12 == 0);
+        g.setColour (Colour (ForgeLookAndFeel::textSec).withAlpha (octave ? 0.42f : 0.12f));
+        g.fillRect (PianoRollLayout::gutterW, y + kh - 1, jmax (0, w - PianoRollLayout::gutterW), 1);
     }
 
-    // --- Vertical beat lines: walk the tempo sequence across the visible time window -------------
+    // --- Vertical time grid: sub-beat / beat / bar hierarchy -------------------------------------
     if (owner.clip != nullptr && owner.timeAxisWidth() > 0)
     {
-        auto& ts = owner.clip->edit.tempoSequence;
-        const int w = owner.timeAxisWidth();
+        const int    bpb = owner.beatsPerBar();
+        const double px  = owner.pxPerBeat;
+        const double sub = owner.gridBeats;
+        const bool drawSub  = sub > 0.0 && sub * px >= 6.0;   // hide sub-beat lines when too dense
+        const bool drawBeat = px >= 5.0;
 
-        // Map the visible time window to a beat range, then draw a line at each whole beat.
-        const double startBeat = owner.xToBeat (PianoRollLayout::gutterW) + owner.clipStartBeat();
-        const double endBeat   = owner.xToBeat (PianoRollLayout::gutterW + w) + owner.clipStartBeat();
+        const double startBeat = jmax (0.0, owner.hOffsetBeats);
+        const double endBeat   = owner.hOffsetBeats + owner.visibleBeats();
+        const double step      = (drawSub ? sub : 1.0);
 
-        const int firstBeat = (int) std::floor (jmax (0.0, startBeat));
-        const int lastBeat  = (int) std::ceil  (jmax (0.0, endBeat));
-
-        for (int beat = firstBeat; beat <= lastBeat; ++beat)
+        for (double b = std::floor (startBeat / step) * step; b <= endBeat + step; b += step)
         {
-            const auto t = ts.toTime (te::BeatPosition::fromBeats ((double) beat));
-            const int x  = owner.timeline.timeToX (t, w) + PianoRollLayout::gutterW;
-
-            if (x < PianoRollLayout::gutterW || x > bounds.getWidth())
+            if (b < -1.0e-6)
                 continue;
 
-            g.setColour (Colour (ForgeLookAndFeel::hairline).withAlpha (0.7f));
-            g.fillRect (x, 0, 1, bounds.getHeight());
+            const int x = owner.beatToX (b);
+            if (x < PianoRollLayout::gutterW || x > w)
+                continue;
+
+            const bool onBeat = std::abs (b - std::round (b)) < 1.0e-6;
+            const bool onBar  = onBeat && ((long long) std::llround (b) % jmax (1, bpb) == 0);
+
+            // Graduated textSec hierarchy (one colour, alpha carries the rank): bars boldest, then
+            // beats, then the faint sub-beat grid — all clearly legible against the dark rows.
+            float alpha; int thick;
+            if      (onBar)  { alpha = 0.55f; thick = 2; }
+            else if (onBeat) { if (! drawBeat) continue; alpha = 0.30f; thick = 1; }
+            else             { if (! drawSub)  continue; alpha = 0.12f; thick = 1; }
+
+            g.setColour (Colour (ForgeLookAndFeel::textSec).withAlpha (alpha));
+            g.fillRect (x, 0, thick, h);
         }
     }
 
-    // --- Left keybed gutter: octave labels (C1, C2, ...) -----------------------------------------
+    // --- Left keybed gutter: a mini piano (black/white keys) + octave labels ----------------------
     g.setColour (Colour (ForgeLookAndFeel::shellBg));
-    g.fillRect (0, 0, PianoRollLayout::gutterW, bounds.getHeight());
+    g.fillRect (0, 0, PianoRollLayout::gutterW, h);
+
+    for (int pitch = 0; pitch < PianoRollLayout::numKeys; ++pitch)
+    {
+        const int y = owner.pitchToY (pitch);
+        if (y + kh < 0 || y > h)
+            continue;
+
+        g.setColour (isBlackKey (pitch) ? Colour (ForgeLookAndFeel::panelBg).darker (0.35f)
+                                        : Colour (ForgeLookAndFeel::raisedBg).brighter (0.06f));
+        g.fillRect (1, y, PianoRollLayout::gutterW - 2, jmax (1, kh - 1));
+    }
+
     g.setColour (Colour (ForgeLookAndFeel::hairline));
-    g.fillRect (PianoRollLayout::gutterW - 1, 0, 1, bounds.getHeight());
+    g.fillRect (PianoRollLayout::gutterW - 1, 0, 1, h);
 
     g.setFont (FontOptions (9.0f));
     for (int pitch = 0; pitch < PianoRollLayout::numKeys; pitch += 12)
     {
-        const int y = PianoRollView::pitchToY (pitch);
-        const int octave = pitch / 12 - 1;   // MIDI: note 0 = C-1, note 60 = C4
+        const int y = owner.pitchToY (pitch);
+        if (y + kh < 0 || y > h)
+            continue;
 
+        const int octave = pitch / 12 - 1;   // MIDI: note 0 = C-1, note 60 = C4
         g.setColour (Colour (ForgeLookAndFeel::textSec));
         g.drawText ("C" + String (octave),
-                    Rectangle<int> (2, y, PianoRollLayout::gutterW - 3, PianoRollLayout::keyHeight),
+                    Rectangle<int> (2, y, PianoRollLayout::gutterW - 3, jmax (kh, 10)),
                     Justification::centredLeft, false);
     }
 
@@ -764,7 +1015,7 @@ void PianoRollView::GridCanvas::paint (Graphics& g)
 
 void PianoRollView::GridCanvas::mouseDown (const MouseEvent& e)
 {
-    // The roll grabs keyboard focus on any grid press so Delete / Copy / Paste land here.
+    // The roll grabs keyboard focus on any grid press so Delete / Copy / Paste / Ctrl+Z land here.
     owner.grabKeyboardFocus();
 
     pressOnEmpty = false;
@@ -830,7 +1081,7 @@ void PianoRollView::GridCanvas::mouseUp (const MouseEvent& e)
     pressOnEmpty = false;
 
     const double startBeat = owner.snapBeat (owner.xToBeat (e.x));
-    const int pitch = jlimit (0, 127, PianoRollView::yToPitch (e.y));
+    const int pitch = jlimit (0, 127, owner.yToPitch (e.y));
 
     auto* undo = &owner.clip->edit.getUndoManager();
     owner.clip->getSequence().addNote (pitch,
@@ -840,4 +1091,75 @@ void PianoRollView::GridCanvas::mouseUp (const MouseEvent& e)
 
     owner.rebuildNotes();
     owner.notifyMutated();
+}
+
+void PianoRollView::GridCanvas::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& wheel)
+{
+    const auto& m = e.mods;
+
+    // Ctrl/Cmd -> zoom (time, or pitch with Shift), anchored under the pointer. Sign of deltaY picks
+    // in vs out; a fixed step keeps it predictable across mice with different wheel resolutions.
+    if (m.isCtrlDown() || m.isCommandDown())
+    {
+        const double f = (wheel.deltaY >= 0.0f) ? 1.25 : 0.8;
+        if (m.isShiftDown())
+            owner.zoomPitch (f, e.y - owner.viewport.getViewPositionY());   // e.y canvas-space -> viewport-local
+        else
+            owner.zoomTime (f, e.x);
+        return;
+    }
+
+    // Shift -> pan the time axis. Some mice report the horizontal delta, others the vertical.
+    if (m.isShiftDown())
+    {
+        const double d = (wheel.deltaX != 0.0f ? (double) wheel.deltaX : (double) wheel.deltaY);
+        owner.panTime (-d * jmax (1.0, owner.visibleBeats()) * 0.2);
+        return;
+    }
+
+    // Plain wheel -> the Viewport's native vertical (pitch) scroll.
+    owner.viewport.useMouseWheelMoveIfNeeded (e.getEventRelativeTo (&owner.viewport), wheel);
+}
+
+//==============================================================================
+PianoRollView::PlayheadOverlay::PlayheadOverlay (PianoRollView& o)
+    : owner (o)
+{
+    setInterceptsMouseClicks (false, false);   // never block note editing / scrolling underneath
+    startTimerHz (30);
+}
+
+void PianoRollView::PlayheadOverlay::paint (Graphics& g)
+{
+    const int x = owner.playheadX();
+    if (x < 0)
+        return;
+
+    // timeTempo (the transport-clock colour family), NOT accent — the playhead is a clock element,
+    // mirroring the arrange PlayheadComponent; amber accent stays selection-only. A 1px dark edge
+    // either side separates the bright 2px line from grid content it crosses.
+    g.setColour (Colour (ForgeLookAndFeel::shellBg).withAlpha (0.8f));
+    g.fillRect (x - 1, 0, 1, getHeight());
+    g.fillRect (x + 2, 0, 1, getHeight());
+    g.setColour (Colour (ForgeLookAndFeel::timeTempo).brighter (0.35f));
+    g.fillRect (x, 0, 2, getHeight());
+}
+
+void PianoRollView::PlayheadOverlay::timerCallback()
+{
+    const int x = owner.playheadX();
+    if (x == lastX)
+        return;
+
+    // Repaint only the thin band spanning the old + new positions (both may be -1 = off-screen).
+    const int a = (lastX < 0 ? x : lastX);
+    const int b = (x < 0 ? lastX : x);
+    lastX = x;
+
+    if (a < 0 && b < 0)
+        return;
+
+    const int lo = jmin (a < 0 ? b : a, b < 0 ? a : b) - 2;
+    const int hi = jmax (a, b) + 3;
+    repaint (lo, 0, hi - lo, getHeight());
 }

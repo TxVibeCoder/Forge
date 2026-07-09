@@ -57,7 +57,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -386,6 +386,11 @@ public:
         detailView.onEditMutated = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
         pianoRoll.onEditMutated  = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };
         stepGrid.onEditMutated   = [this] { sealUndoTransaction(); if (! session.save()) FORGE_LOG_ERROR ("Failed to save project — I/O error"); };   // W10
+
+        // W23: keys the roll doesn't consume locally (Ctrl+Z/Y undo-redo, Save, view/transport) route
+        // to the shell so global shortcuts fire from inside the roll (docked OR torn off) regardless of
+        // which sub-component holds focus — the same escape hatch the mixer/roll popouts use.
+        pianoRoll.onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
 
         // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
         // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
@@ -933,6 +938,21 @@ public:
             // Move a slot clip to its own new track (the mixed-clip per-clip-instrument fix).
             MessageManager::callAsync ([this] { runMoveToTrackSelftest(); });
         }
+        else if (mode == SelfTest::pianoroll)
+        {
+            // W23: piano-roll zoom math + playhead x-mapping + the global-undo key fallback.
+            MessageManager::callAsync ([this] { runPianoRollSelftest(); });
+        }
+        else if (mode == SelfTest::timesig)
+        {
+            // W23: EngineHelpers::setTimeSigAt seam — num/den round-trip + mid-insert + undo, synchronous.
+            MessageManager::callAsync ([this] { runTimeSigSelftest(); });
+        }
+        else if (mode == SelfTest::trim)
+        {
+            // W23: forge::midiedit::trimLeadingSilence — crop an arrange MIDI clip's silent lead-in.
+            MessageManager::callAsync ([this] { runTrimSelftest(); });
+        }
         else if (mode == SelfTest::midifile)
         {
             // MIDI-file drag-drop import — write a .mid, import into a slot + arrange, assert notes/position.
@@ -1300,7 +1320,7 @@ private:
     BrowserView browserPanel;   // left region: real file browser (name kept for layout call sites)
     DetailView  detailView;     // bottom drawer: audio-clip inspector
     ChannelTray channelTray { session };   // left sidebar Channel tab: selected-track strip (W04a)
-    PianoRollView pianoRoll { timelineView };   // bottom drawer: MIDI-clip editor (shares the time axis)
+    PianoRollView pianoRoll;    // bottom drawer: MIDI-clip editor (own zoomable time axis, W23)
     StepGridView  stepGrid;     // bottom drawer: step-clip (drum-grid) editor (W10)
 
     // W04b tear-off windows. Declared AFTER mixerView/pianoRoll (reverse destruction kills the
@@ -1424,6 +1444,26 @@ private:
                                 return e != nullptr ? e->tempoSequence.getBpmAt (e->getTransport().getPosition()) : 120.0; };
         lcd.onBpmChanged = [this] (double bpm) { if (auto* e = session.getEdit())
                                                      EngineHelpers::setTempoAt (*e, e->getTransport().getPosition(), bpm); };
+
+        // W23: clickable time signature — the LCD's "· 4/4" zone opens a CallOutBox picker (numerator +
+        // power-of-two denominator). querySig seeds from the beat-0 (initial) sig — the same target
+        // onSigChanged writes — so the popup always shows the meter it will edit. onSigChanged writes via
+        // the clamped EngineHelpers::setTimeSigAt seam, seals one undo step, saves, then nudges the two
+        // grids that read the sig only on repaint (arrange + piano-roll; the LCD self-polls at 25 Hz).
+        lcd.querySig = [this] { auto* e = session.getEdit();
+                                return e != nullptr ? EngineHelpers::getTimeSigStringAt (*e, te::BeatPosition())
+                                                    : juce::String ("4/4"); };
+        lcd.onSigChanged = [this] (int n, int d)
+        {
+            if (auto* e = session.getEdit())
+            {
+                EngineHelpers::setTimeSigAt (*e, te::BeatPosition(), n, d);
+                sealUndoTransaction();
+                if (! session.save()) FORGE_LOG_ERROR ("Failed to save project after time-signature change");
+                arrangeView.repaint();
+                pianoRoll.repaint();
+            }
+        };
     }
 
     // Menu-bar model (W04a): the same commands the buttons/keys already run, exposed as a
@@ -2726,6 +2766,21 @@ private:
         fast.tap (0.0); fast.tap (10.0);                          // 6000 BPM raw -> clamps to 300
         const bool clampHigh = fast.currentBpm().has_value() && std::abs (*fast.currentBpm() - 300.0) < 1e-6;
 
+        // Rolling-window leg: the estimator averages only the last (up to) 4 buffered taps, not an
+        // unbounded average since the last reset and not a last-2-taps-only reading. Two slow taps set a
+        // stale 1000 ms lead-in interval; three fast taps then push the ring buffer past capacity (4) so
+        // the 5th tap EVICTS the 1st -- the stale interval must drop out of the mean. Window-only mean is
+        // (300+400+300)/3 = 333.33 ms -> 180.0 BPM. An unbounded 4-interval average (incl. the lead-in)
+        // would read 120.0; a last-2-taps-only average would read 200.0 -- both ruled out by 180.0.
+        forge::transport::TapTempo rolling;
+        rolling.tap (0.0);
+        rolling.tap (1000.0);   // stale lead-in interval (1000 ms) -- must be evicted
+        rolling.tap (1300.0);   // window interval 1: 300 ms
+        rolling.tap (1700.0);   // window interval 2: 400 ms
+        rolling.tap (2000.0);   // window interval 3: 300 ms -- 5th tap, evicts the t=0 lead-in
+        const bool windowDropsStale = rolling.currentBpm().has_value()
+                                       && std::abs (*rolling.currentBpm() - 180.0) < 1e-6;
+
         bool engineWrite = false, engineClamp = false;
         if (auto* ed = session.getEdit())
         {
@@ -2735,18 +2790,19 @@ private:
             engineClamp = std::abs (ed->tempoSequence.getBpmAt (te::TimePosition()) - 20.0) < 1e-3;
         }
 
-        const bool pass = oneTapNull && bpm120 && gapReset && clampHigh && engineWrite && engineClamp;
+        const bool pass = oneTapNull && bpm120 && gapReset && clampHigh && windowDropsStale && engineWrite && engineClamp;
 
         String report;
         report << "mode=taptempo" << newLine
-               << "oneTapNull="  << (oneTapNull ? 1 : 0) << newLine
-               << "bpm120="      << (bpm120 ? 1 : 0) << newLine
-               << "gapReset="    << (gapReset ? 1 : 0) << newLine
-               << "clampHigh="   << (clampHigh ? 1 : 0) << newLine
-               << "engineWrite=" << (engineWrite ? 1 : 0) << newLine
-               << "engineClamp=" << (engineClamp ? 1 : 0) << newLine
-               << "result="      << (pass ? "PASS" : "FAIL") << newLine
-               << "logFile="     << forge::log::getLogFile().getFullPathName() << newLine;
+               << "oneTapNull="       << (oneTapNull ? 1 : 0) << newLine
+               << "bpm120="           << (bpm120 ? 1 : 0) << newLine
+               << "gapReset="         << (gapReset ? 1 : 0) << newLine
+               << "clampHigh="        << (clampHigh ? 1 : 0) << newLine
+               << "windowDropsStale=" << (windowDropsStale ? 1 : 0) << newLine
+               << "engineWrite="      << (engineWrite ? 1 : 0) << newLine
+               << "engineClamp="      << (engineClamp ? 1 : 0) << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
 
         const auto reportFile = File::getSpecialLocation (File::tempDirectory)
                                     .getChildFile ("forge_phase0_selftest.log");
@@ -6667,6 +6723,291 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-pianoroll (W23): the piano-roll's OWN zoomable time axis + moving playhead + the
+    // global-undo key fallback. Binds the real docked pianoRoll to a slot clip at a deterministic
+    // 800x400 size and drives the actual seams (no mocks): (1) beatToX/xToBeat round-trip; (2) a time
+    // zoom-in widens the per-beat span and holds the beat under the pointer, zoom-out narrows it; (3) a
+    // pitch zoom widens the row height; (4) the playhead x tracks the transport forward and reads -1 when
+    // the transport sits outside the visible window; (5) END-TO-END — a Ctrl+Z dispatched through the
+    // roll's OWN keyPressed reverts a seeded note via the shell (roll.keyPressed -> onUnhandledKey ->
+    // MainComponent::keyPressed -> doUndo), the user-reported "Ctrl+Z didn't work in the piano roll" fix;
+    // (6) routing discipline — a local key ('q' quantise) is NOT forwarded to the shell, while Ctrl+Z is.
+    void runPianoRollSelftest()
+    {
+        bool clipBound = false, roundTrips = false, zoomInWidensBeat = false, zoomAnchorHeld = false,
+             zoomOutNarrowsBeat = false, pitchZoomWidensRow = false, playheadTracks = false,
+             playheadOffscreen = false, undoViaRollKey = false, localKeyNotForwarded = false,
+             ctrlZForwarded = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            session.ensureScenes (16);
+
+            if (auto mc = session.createMidiClipInSlot (0, 0, "PR"))
+            {
+                auto& ts        = ed->tempoSequence;
+                auto& transport = ed->getTransport();
+
+                // Deterministic geometry: force a real size so timeAxisWidth() > 0 and the fit runs now.
+                pianoRoll.setBounds (0, 0, 800, 400);
+                pianoRoll.setMidiClip (mc.get());
+                clipBound = pianoRoll.getClip() == mc.get();
+
+                // (1) Forward/inverse mapping round-trips (integer-x rounding tolerance).
+                const double b = 2.0;
+                const int    x0 = pianoRoll.beatToX (b);
+                roundTrips = std::abs (pianoRoll.xToBeat (x0) - b) < 0.05;
+
+                // (2) Time zoom in around beat b: the per-beat span widens and b stays under the pointer.
+                const int focus      = pianoRoll.beatToX (b);
+                const int spanBefore = pianoRoll.beatToX (b + 1.0) - focus;
+                pianoRoll.zoomTime (2.0, focus);
+                const int spanAfter  = pianoRoll.beatToX (b + 1.0) - pianoRoll.beatToX (b);
+                zoomInWidensBeat = spanAfter > spanBefore;
+                zoomAnchorHeld   = std::abs (pianoRoll.beatToX (b) - focus) <= 3;
+
+                // ...and zoom out narrows it again.
+                pianoRoll.zoomTime (0.25, pianoRoll.beatToX (b));
+                zoomOutNarrowsBeat = (pianoRoll.beatToX (b + 1.0) - pianoRoll.beatToX (b)) < spanAfter;
+
+                // (3) Pitch zoom widens a semitone row (pitchToY delta == keyHeight).
+                const int rowBefore = pianoRoll.pitchToY (60) - pianoRoll.pitchToY (61);
+                pianoRoll.zoomPitch (2.0, 200);
+                const int rowAfter  = pianoRoll.pitchToY (60) - pianoRoll.pitchToY (61);
+                pitchZoomWidensRow = rowAfter > rowBefore;
+
+                // (4) Playhead tracks the transport forward; -1 when the transport is off-window.
+                pianoRoll.fitClipToView();   // whole clip visible again
+                const double clipStartB = ts.toBeats (mc->getPosition().getStart()).inBeats();
+                transport.setPosition (ts.toTime (te::BeatPosition::fromBeats (clipStartB + 1.0)));
+                const int ph1 = pianoRoll.playheadX();
+                transport.setPosition (ts.toTime (te::BeatPosition::fromBeats (clipStartB + 3.0)));
+                const int ph3 = pianoRoll.playheadX();
+                playheadTracks = ph1 >= PianoRollLayout::gutterW && ph3 > ph1;
+
+                transport.setPosition (ts.toTime (te::BeatPosition::fromBeats (clipStartB + 100.0)));
+                playheadOffscreen = pianoRoll.playheadX() < 0;
+
+                // (5) END-TO-END undo via the roll's OWN keyPressed (uses the ctor-wired onUnhandledKey ->
+                // the shell's real doUndo). Seed one note in its own sealed transaction, then Ctrl+Z.
+                auto& um = ed->getUndoManager();
+                um.clearUndoHistory();
+                um.beginNewTransaction();
+                mc->getSequence().addNote (60, te::BeatPosition::fromBeats (1.0),
+                                           te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+                um.beginNewTransaction();   // seal the add as its own step
+                const int before = mc->getSequence().getNumNotes();
+                const bool zConsumed = pianoRoll.keyPressed (
+                    KeyPress ((int) 'Z', ModifierKeys (ModifierKeys::commandModifier), (juce_wchar) 'Z'));
+                const int after = mc->getSequence().getNumNotes();
+                undoViaRollKey = zConsumed && before == 1 && after == 0;
+
+                // (6) Routing discipline via a probe: a LOCAL key must NOT reach the shell; Ctrl+Z must.
+                bool probeFired = false;
+                pianoRoll.onUnhandledKey = [&probeFired] (const KeyPress&) { probeFired = true; return true; };
+
+                probeFired = false;
+                const bool qConsumed = pianoRoll.keyPressed (
+                    KeyPress ((int) 'Q', ModifierKeys(), (juce_wchar) 'q'));   // quantise: consumed locally
+                localKeyNotForwarded = qConsumed && ! probeFired;
+
+                probeFired = false;
+                const bool zFwd = pianoRoll.keyPressed (
+                    KeyPress ((int) 'Z', ModifierKeys (ModifierKeys::commandModifier), (juce_wchar) 'Z'));
+                ctrlZForwarded = zFwd && probeFired;
+            }
+        }
+
+        const bool pass = clipBound && roundTrips && zoomInWidensBeat && zoomAnchorHeld
+                          && zoomOutNarrowsBeat && pitchZoomWidensRow && playheadTracks
+                          && playheadOffscreen && undoViaRollKey && localKeyNotForwarded && ctrlZForwarded;
+
+        String report;
+        report << "mode=pianoroll" << newLine
+               << "clipBound="            << (clipBound ? 1 : 0) << newLine
+               << "roundTrips="           << (roundTrips ? 1 : 0) << newLine
+               << "zoomInWidensBeat="     << (zoomInWidensBeat ? 1 : 0) << newLine
+               << "zoomAnchorHeld="       << (zoomAnchorHeld ? 1 : 0) << newLine
+               << "zoomOutNarrowsBeat="   << (zoomOutNarrowsBeat ? 1 : 0) << newLine
+               << "pitchZoomWidensRow="   << (pitchZoomWidensRow ? 1 : 0) << newLine
+               << "playheadTracks="       << (playheadTracks ? 1 : 0) << newLine
+               << "playheadOffscreen="    << (playheadOffscreen ? 1 : 0) << newLine
+               << "undoViaRollKey="       << (undoViaRollKey ? 1 : 0) << newLine
+               << "localKeyNotForwarded=" << (localKeyNotForwarded ? 1 : 0) << newLine
+               << "ctrlZForwarded="       << (ctrlZForwarded ? 1 : 0) << newLine
+               << "result="               << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="              << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write piano-roll selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Piano-roll selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-timesig (W23): the EngineHelpers::setTimeSigAt / getTimeSigStringAt engine-write seam,
+    // headless. Every leg drives the REAL seam on the live edit and reads back through the engine.
+    void runTimeSigSelftest()
+    {
+        bool initialRoundTrip = false, numDenDistinct = false, midInsertReadsBack = false,
+             denominatorClamp = false, undoRestores = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            // initialRoundTrip: the beat-0 (initial) sig round-trips through the seam for two meters.
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 3, 4);
+            const bool r34 = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "3/4";
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 6, 8);
+            const bool r68 = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "6/8";
+            initialRoundTrip = r34 && r68;
+
+            // numDenDistinct: numerator and denominator are stored separately (6 and 8, not conflated).
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 6, 8);
+            const auto s   = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition());
+            const int  num = s.upToFirstOccurrenceOf ("/", false, false).getIntValue();
+            const int  den = s.fromLastOccurrenceOf  ("/", false, false).getIntValue();
+            numDenDistinct = (num == 6 && den == 8);
+
+            // midInsertReadsBack: a change at beat 16 (reset beat 0 to 4/4 first) reads back there, and
+            // beat 0 still reads its OWN sig — the mid-timeline insert is independent (resolves by position).
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 4, 4);                    // beat 0 = 4/4
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition::fromBeats (16.0), 5, 4);    // beat 16 = 5/4
+            const bool at16 = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition::fromBeats (16.0)) == "5/4";
+            const bool at0  = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "4/4";
+            midInsertReadsBack = at16 && at0;
+
+            // denominatorClamp: a non-power-of-two denominator snaps to a valid power of two.
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 4, 3);   // den 3 -> nearest power of two
+            const int clampedDen = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition())
+                                       .fromLastOccurrenceOf ("/", false, false).getIntValue();
+            denominatorClamp = (clampedDen == 1 || clampedDen == 2 || clampedDen == 4
+                                || clampedDen == 8 || clampedDen == 16 || clampedDen == 32);
+
+            // undoRestores: a single undoable step — the STRING round-trips. Asserts on CONTENT (the sig
+            // string), never um.canUndo()/canRedo() (the W16 4OSC phantom-flush defect makes UM flags
+            // unreliable). Seal prior legs, apply in a fresh transaction, revert via Edit::undo (bypasses
+            // session.save(), so no phantom flush) and confirm the pre-change string is back.
+            auto& um = ed->getUndoManager();
+            um.beginNewTransaction();
+            const auto before  = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition());
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 7, 8);
+            const bool applied = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "7/8";
+            ed->undo();
+            undoRestores = applied && EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == before;
+        }
+
+        const bool pass = initialRoundTrip && numDenDistinct && midInsertReadsBack
+                          && denominatorClamp && undoRestores;
+
+        String report;
+        report << "mode=timesig" << newLine
+               << "initialRoundTrip="   << (initialRoundTrip ? 1 : 0) << newLine
+               << "numDenDistinct="     << (numDenDistinct ? 1 : 0) << newLine
+               << "midInsertReadsBack=" << (midInsertReadsBack ? 1 : 0) << newLine
+               << "denominatorClamp="   << (denominatorClamp ? 1 : 0) << newLine
+               << "undoRestores="       << (undoRestores ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write time-sig selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Time-sig selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+    // --selftest-trim (W23): forge::midiedit::trimLeadingSilence — "Trim silent start" on an Arrange MIDI
+    // clip. Builds a one-shot arrange clip via ProjectSession::createMidiClip (NOT createMidiClipInSlot,
+    // so it is born non-looping rather than slot-normalized per the W10/W13 gotchas) with a single note at
+    // content beat 2 (2 beats of leading silence), then drives the helper directly: the trim must move the
+    // clip start forward, absorb the gap into the offset, preserve the note's absolute timeline position
+    // and the clip's end, no-op on a second (already-tight) call, and revert via undo.
+    void runTrimSelftest()
+    {
+        bool clipCreated = false, seededNote = false, trimmed = false, startMovedForward = false,
+             notePosPreserved = false, noLeadingSilence = false, offsetIncreased = false,
+             endPreserved = false, undoReverts = false, noOpWhenTight = false;
+
+        if (auto* ed = session.getEdit())
+        {
+            auto& um = ed->getUndoManager();
+            um.clearUndoHistory();
+            ed->ensureNumberOfAudioTracks (1);   // createMidiClip targets track 0 — guarantee it exists
+
+            // An 8-beat one-shot arrange clip with a single note at content beat 2 — 2 beats of leading
+            // silence for the trim to absorb, well clear of the clip's own end (beat 8).
+            const auto clipEnd  = ed->tempoSequence.toTime (te::BeatPosition::fromBeats (8.0));
+            const auto noteBeat = te::BeatPosition::fromBeats (2.0);
+
+            if (auto mc = session.createMidiClip (0, { te::TimePosition(), clipEnd }, "TRIM"))
+            {
+                clipCreated = true;
+
+                um.beginNewTransaction();
+                auto& seq = mc->getSequence();
+                seq.addNote (60, noteBeat, te::BeatDuration::fromBeats (1.0), 100, 0, &um);
+                seededNote = seq.getNumNotes() == 1;
+
+                const auto startBefore        = mc->getPosition().getStart();
+                const auto endBefore          = mc->getPosition().getEnd();
+                const auto notePlayTimeBefore = mc->getTimeOfContentBeat (seq.getFirstBeatNumber());
+
+                // Trim leg (own transaction, sealing the seed).
+                um.beginNewTransaction();
+                trimmed = forge::midiedit::trimLeadingSilence (*mc);
+
+                const auto posAfterTrim = mc->getPosition();
+                startMovedForward = posAfterTrim.getStart().inSeconds() > startBefore.inSeconds();
+                offsetIncreased   = posAfterTrim.getOffset().inSeconds() > 0.0;
+                endPreserved      = std::abs (posAfterTrim.getEnd().inSeconds() - endBefore.inSeconds()) < 1.0e-6;
+                notePosPreserved  = std::abs (mc->getTimeOfContentBeat (seq.getFirstBeatNumber()).inSeconds()
+                                              - notePlayTimeBefore.inSeconds()) < 1.0e-6;
+                noLeadingSilence  = std::abs (mc->getContentBeatAtTime (posAfterTrim.getStart()).inBeats() - 2.0) < 1.0e-6;
+
+                // No-op leg: the clip is now tight — a second trim must decline and leave the start alone.
+                um.beginNewTransaction();
+                const bool secondTrim = forge::midiedit::trimLeadingSilence (*mc);
+                noOpWhenTight = ! secondTrim
+                               && std::abs (mc->getPosition().getStart().inSeconds() - posAfterTrim.getStart().inSeconds()) < 1.0e-6;
+
+                // Undo leg: reverts the trim transaction. Content-level assert (start AND offset), never
+                // canRedo() — the FourOsc mod-matrix flush wipes redo on every save (CLAUDE.md W16 gotcha).
+                ed->undo();
+                const auto posUndone = mc->getPosition();
+                undoReverts = std::abs (posUndone.getStart().inSeconds() - startBefore.inSeconds()) < 1.0e-6
+                             && std::abs (posUndone.getOffset().inSeconds()) < 1.0e-6;
+            }
+        }
+
+        const bool pass = clipCreated && seededNote && trimmed && startMovedForward && notePosPreserved
+                          && noLeadingSilence && offsetIncreased && endPreserved && undoReverts && noOpWhenTight;
+
+        String report;
+        report << "mode=trim" << newLine
+               << "clipCreated="       << (clipCreated ? 1 : 0) << newLine
+               << "seededNote="        << (seededNote ? 1 : 0) << newLine
+               << "trimmed="           << (trimmed ? 1 : 0) << newLine
+               << "startMovedForward=" << (startMovedForward ? 1 : 0) << newLine
+               << "notePosPreserved="  << (notePosPreserved ? 1 : 0) << newLine
+               << "noLeadingSilence="  << (noLeadingSilence ? 1 : 0) << newLine
+               << "offsetIncreased="   << (offsetIncreased ? 1 : 0) << newLine
+               << "endPreserved="      << (endPreserved ? 1 : 0) << newLine
+               << "undoReverts="       << (undoReverts ? 1 : 0) << newLine
+               << "noOpWhenTight="     << (noOpWhenTight ? 1 : 0) << newLine
+               << "result="            << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write trim selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Trim selftest " + juce::String (pass ? "PASS" : "FAIL") + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-midifile: MIDI-file drag-and-drop import. Writes a real 4-note .mid to disk, then imports
     // it BOTH into a Session slot (importMidiIntoSlot) and onto an Arrange lane at a drop time
     // (importMidiFile), asserting: the clip is created, the note count survives, the arrange clip lands at
@@ -7102,6 +7443,30 @@ private:
         sessionView.getViewport().setViewPosition (0, 0);
         setViewMode (ViewMode::Session);
         captureView ("session_stepgrid");
+
+        // W23: the Piano Roll drawer — a note-seeded MIDI clip opened in the roll, fitted to view, so the
+        // snapshot shows the new zoomable grid (bar/beat/sub-beat line hierarchy + mini-keybed), the bottom
+        // nav strip (zoom buttons + horizontal scrollbar), and the moving playhead (transport parked at
+        // content beat 2 so the timeTempo line is visibly in-frame). Proves the render the model gate
+        // (--selftest-pianoroll) can't show.
+        if (auto mc = session.createMidiClipInSlot (2, 11, "ROLL"))
+        {
+            seedDemoNotes (*mc, 2);          // Cm-Ab-Bb-Cm chord stabs — a legible multi-pitch pattern
+            pianoRoll.setMidiClip (mc.get());
+            bottomMode    = BottomMode::PianoRoll;
+            drawerVisible = true;
+            drawerSlide   = -1;
+
+            if (auto* ed = session.getEdit())
+            {
+                auto& ts = ed->tempoSequence;
+                ed->getTransport().stop (false, false);
+                const double startB = ts.toBeats (mc->getPosition().getStart()).inBeats();
+                ed->getTransport().setPosition (ts.toTime (te::BeatPosition::fromBeats (startB + 2.0)));
+            }
+        }
+        setViewMode (ViewMode::Session);
+        captureView ("session_pianoroll");
 
         FORGE_LOG_INFO ("Screenshots written to " + File::getSpecialLocation (File::tempDirectory).getFullPathName());
 
@@ -7856,6 +8221,9 @@ public:
                             : commandLine.contains ("--selftest-nudge")          ? "selftest-nudge"          // before bare --selftest (collision-free)
                             : commandLine.contains ("--selftest-retrocapture")   ? "selftest-retrocapture"   // before bare --selftest (no substring collision with -capture)
                             : commandLine.contains ("--selftest-movetotrack")    ? "selftest-movetotrack"    // before bare --selftest (collision-free)
+                            : commandLine.contains ("--selftest-pianoroll")      ? "selftest-pianoroll"      // before bare --selftest (collision-free, W23)
+                            : commandLine.contains ("--selftest-timesig")        ? "selftest-timesig"        // before bare --selftest (collision-free, W23)
+                            : commandLine.contains ("--selftest-trim")           ? "selftest-trim"           // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -7931,6 +8299,9 @@ public:
                         : commandLine.contains ("--selftest-nudge")          ? SelfTest::nudge          // before bare --selftest (collision-free)
                         : commandLine.contains ("--selftest-retrocapture")   ? SelfTest::retrocapture   // before bare --selftest (no substring collision with -capture)
                         : commandLine.contains ("--selftest-movetotrack")    ? SelfTest::movetotrack    // before bare --selftest (collision-free)
+                        : commandLine.contains ("--selftest-pianoroll")      ? SelfTest::pianoroll      // before bare --selftest (collision-free, W23)
+                        : commandLine.contains ("--selftest-timesig")        ? SelfTest::timesig        // before bare --selftest (collision-free, W23)
+                        : commandLine.contains ("--selftest-trim")           ? SelfTest::trim           // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

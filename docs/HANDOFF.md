@@ -1,8 +1,32 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-08**, end of **"W22 — buildable-backlog
-> follow-ups"**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-09**, end of **"W23 — hands-on
+> follow-ups"**: four maintainer requests from driving the built app, all shipped + headless-verified.
+> **(1) Piano roll** — the drawer roll gained its OWN zoomable beat→pixel time axis (decoupled from the
+> shared arrange `TimelineView`; Ctrl/Shift+wheel + Time/Pitch/Fit buttons + a horizontal scrollbar), a
+> **moving playhead** overlay (30 Hz, `timeTempo` clock colour), a clearer **grid** (bar/beat/sub-beat
+> hierarchy + a mini black/white keybed), and a **global-undo fix** — the roll forwards unconsumed keys to
+> the shell (`PianoRollView::onUnhandledKey`) so Ctrl+Z fires from inside it regardless of keyboard focus.
+> **(2) Trim silent start** — right-click an arrange MIDI clip → crop the silent lead-in to the first note
+> (`forge::midiedit::trimLeadingSilence` over `Clip::setStart(preserveSync)`; notes keep absolute position,
+> nothing deleted, one-Ctrl+Z undo). **(3) Tap tempo** — source-verified as ALREADY a rolling 4-tap average;
+> no functional change, added a `windowDropsStale` gate leg proving stale-tap eviction. **(4) Time signature**
+> — click the LCD "· 4/4" zone → a new `TimeSigPopup`; new `EngineHelpers::setTimeSigAt` seam; the arrange
+> ruler/snap grid + piano-roll bars follow the meter live. Built via a **research fan-out (3 agents) → a
+> 2-agent file-disjoint implementation → orchestrator consolidation** (disjoint territories: trim in a
+> header-only helper, time-sig in `EngineHelpers` + a NEW `TimeSigPopup`, so all three stayed off each
+> other's files). Build **clean (0 warnings)** · **46/46 selftest floor** (43 → 46: `+pianoroll` `+timesig`
+> `+trim`) · **12/12 screenshots** (`+session_pianoroll`). ⚠ **NOT pushed to `origin` — the whole W23 batch
+> is committed locally on `main`, push HELD for the maintainer's OK.** Full record →
+> [devlog/wave-23-handson-followups.md](devlog/wave-23-handson-followups.md). **Known follow-ups:** a
+> piano-roll trim trigger + audio-clip trim; a ruler UI to place mid-arrangement time-sig changes (the seam
+> supports them, gate-proven); optionally require ≥3 taps before tap-tempo applies. **Interaction-only (not
+> headlessly gated):** the LCD-click→time-sig popup + the piano-roll mouse-wheel zoom (buttons/scrollbar/
+> keys/playhead/undo ARE gated).
+
+> The prior wave, **W22 — buildable-backlog
+> follow-ups**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program
 > completed. **Shipped 5** (source-verify spikes → 2 file-disjoint build agents + orchestrator items → per-item
 > gate verification → adversarial QC): **(1) piano-roll keyboard nudge** (Shift+arrows, `forge::midiedit::
 > shiftNoteStarts`, gate `--selftest-nudge`); **(2) MIDI retrospective capture** (`ProjectSession::

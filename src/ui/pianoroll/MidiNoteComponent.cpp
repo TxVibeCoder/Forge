@@ -125,7 +125,7 @@ void MidiNoteComponent::mouseDrag (const MouseEvent& e)
         // note's origin, then let the owner reposition the WHOLE selection by that same delta (the
         // dragged note is always in the selection — mouseDown selected it). Commit re-snaps on up.
         const double newStartBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
-        const int    newPitch     = PianoRollView::yToPitch (pointerY);
+        const int    newPitch     = owner.yToPitch (pointerY);
         const double beatDelta  = newStartBeat - dragOriginStartBeat;
         const int    pitchDelta = newPitch - dragOriginPitch;
         owner.previewMoveSelection (note, beatDelta, pitchDelta);
@@ -153,7 +153,7 @@ void MidiNoteComponent::mouseUp (const MouseEvent& e)
         // Commit the whole selection by the dragged note's (beat, pitch) delta. The owner snaps the
         // dragged note's start and applies the SAME beat delta to the rest (see commitMoveSelection).
         const double newStartBeat = owner.xToBeat (pointerX) - (owner.xToBeat (dragAnchorX) - dragOriginStartBeat);
-        const int    newPitch     = PianoRollView::yToPitch (pointerY);
+        const int    newPitch     = owner.yToPitch (pointerY);
         owner.commitMoveSelection (note, newStartBeat - dragOriginStartBeat, newPitch - dragOriginPitch);
     }
 }

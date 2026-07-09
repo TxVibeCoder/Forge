@@ -409,6 +409,9 @@ private:
     void renameClip (te::Clip&);
     void renameTrack (te::AudioTrack&);
     void deleteClip (te::Clip&);
+    /** MIDI-only: moves the clip's left edge forward to its first event via
+        forge::midiedit::trimLeadingSilence (no-op on empty/tight/looping clips). */
+    void trimClipStart (te::Clip&);
     void addTrack (te::AudioTrack* after);
     void deleteTrack (te::AudioTrack&);
 
