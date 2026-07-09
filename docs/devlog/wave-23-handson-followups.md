@@ -83,9 +83,69 @@ initial (beat-0) meter; the seam supports mid-arrangement changes but there's no
 ruler right-click is the follow-up). **Documented limitation:** existing Step Clips do not retro-resize on a
 meter change (their length is baked from the numerator at creation — the W20 design).
 
-## Verification
+## Verification (round 2)
 Single integration build (0 warnings) · **46/46 selftest floor** · 12/12 screenshots. The two
 implementation agents' files were disjoint, so consolidation was collision-free; each proposed its
-`main.cpp`/CMake wiring, applied by the orchestrator. Interaction-only surfaces not headlessly gated (same
-class as the existing tempo popup): the LCD-click→time-sig popup, and the piano-roll mouse-wheel zoom
-(buttons/scrollbar/keys/playhead/undo-fallback **are** gated).
+`main.cpp`/CMake wiring, applied by the orchestrator.
+
+---
+
+## Round 3 — the follow-ups
+
+The maintainer asked for the documented follow-ups to be knocked out. Three parallel implementation agents
+on disjoint territories (ArrangeView + a new audio helper / PianoRollView / TapTempo + LcdDisplay), with
+`main.cpp` + the build + the floor owned by the orchestrator. **No new gates** — all five items extend
+existing ones, so the floor stays **46**.
+
+### Time-signature: place a change from the arrange ruler
+`TimeRulerComponent` now intercepts a **right-click** → `PopupMenu` "Insert time signature change here…" →
+a `TimeSigPopup` in a `CallOutBox` anchored at the click. New public
+`ArrangeView::insertTimeSigAtBar(TimePosition, num, den) -> BeatPosition`: **floor-snaps to the bar
+containing the click** (`toBarsAndBeats(t).bars → toBeats({bar, 0})`), writes via `EngineHelpers::setTimeSigAt`,
+then `notifyEditMutated()` + repaint, and returns the snapped beat so the gate can assert the snap. Gate leg
+`rulerInsertAtBar` (a mid-bar beat 9.5 lands on beat 8, reads "7/8"). The ruler's `setInterceptsMouseClicks`
+flipped to true — left-clicks are ignored, so no scrub/selection regression.
+
+### Trim: audio clips + a piano-roll trigger
+New header-only `src/engine/AudioEditHelpers.h` — `forge::audioedit::trimLeadingSilence(te::AudioClipBase&,
+float thresholdDb = -60.0f)`: opens a `juce::AudioFormatReader` on the source and uses `searchForLevel`
+(all-channel, block-buffered, bounded to the clip's source span) to find the first supra-threshold frame,
+then applies the same `setStart(preserveSync=true, keepLength=false)` crop. `ArrangeView::trimClipStart` now
+dispatches MIDI → `midiedit`, audio → `audioedit`, and the menu item shows for both.
+
+> **A real source-verification catch.** The spec I handed the agent said the advance is
+> `Δ = (Ts − offset) / speed`. Tracing the engine's own waveform draw (`sourceStartSecs * speed`) showed the
+> clip **offset is in edit-seconds** while the silence scan yields a **source-second**, so the correct
+> advance is `Δ = Ts/speed − offset` — the two agree only at `speed == 1`. Rather than ship a subtly wrong
+> formula, the helper **guards on `speed == 1` and declines otherwise** (every non-stretched import/recording,
+> i.e. everything the UI offers this on). Documented, not hidden.
+
+The piano roll gained a **Trim** button in its nav strip. It fires a new `onTrimClipRequested` callback
+rather than trimming itself: a trim is a **clip/arrange-level** edit (unlike the roll's note-level edits), so
+the shell performs it, seals one undo step, saves, `arrangeView.rebuild()`s and re-fits the roll.
+
+### Tap tempo: a true 3–4-tap average
+`currentBpm()` now returns `nullopt` until **three** taps exist, so the first reported value always averages
+≥2 intervals instead of a single-interval guess (`count < 2` → `count < 3`; capacity, gap-reset and clamps
+unchanged). This **broke an existing gate leg** — `clampHigh` tapped only twice — which the gate caught: it
+now taps three times (0/10/20 ms → 6000 BPM raw → clamps to 300). New `twoTapsNull` leg pins the raised floor
+(`oneTapNull` alone can't distinguish a ≥2 floor from a ≥3 one). `TempoPopup.h`'s doc comment was corrected.
+
+### Both proof gaps closed
+- **Wheel routing.** `GridCanvas::mouseWheelMove`'s decode was extracted into a public
+  `PianoRollView::handleWheel(mods, deltaX, deltaY, canvasX, canvasY) -> bool` (true = consumed; false = plain,
+  caller forwards to the Viewport). Four new legs drive it directly: `wheelCtrlZoomsTime`,
+  `wheelCtrlShiftZoomsPitch`, `wheelShiftPansTime`, `wheelPlainNotConsumed`. Real-mouse behaviour is unchanged.
+- **LCD sig zone.** `LcdDisplay` exposes `getTempoZoneBounds()` / `getSigZoneBounds()`. The gate widens the
+  LCD past its `keyZoneMinWidth` gate, forces a **synchronous** paint via `createComponentSnapshot` (the
+  `--screenshot` idiom — `setSize` alone only marks it dirty), then asserts `sigZoneNonEmpty` + `sigSeamsWired`
+  + `hitTest` at the zone centre. Only the `CallOutBox` launch itself remains interaction-territory.
+
+## Verification (round 3)
+Single integration build (0 warnings) · **46/46 floor** (every new leg green, incl. `audioStartMovedForward`
+landing on the 1 s sine onset, `rulerInsertAtBar`'s bar snap, and all four wheel legs) · 12/12 screenshots
+(the roll's nav strip renders the new Trim button without overflow).
+
+**Residual (documented):** audio trim declines on a non-unity speed ratio; MIDI trim keys on the first
+*note* (a controller-only clip no-ops); the `CallOutBox` launch and OS wheel delivery remain the only
+interaction-territory surfaces.

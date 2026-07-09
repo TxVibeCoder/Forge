@@ -7,8 +7,10 @@
     >2000 ms gap starts a fresh sequence).
 
     Keeps the last up-to-4 tap timestamps and averages the adjacent intervals; currentBpm()
-    is nullopt until at least two taps exist. Deterministic — no clock reads of its own; the
-    caller supplies the timestamp (the real UI passes juce::Time::getMillisecondCounterHiRes()).
+    is nullopt until at least three taps exist, so the first reported estimate already averages
+    two intervals rather than reporting a single-interval guess. Deterministic — no clock reads
+    of its own; the caller supplies the timestamp (the real UI passes
+    juce::Time::getMillisecondCounterHiRes()).
 
     Header-only. Not thread-safe: message-thread use only (the popup owns one instance).
 */
@@ -39,10 +41,11 @@ public:
     }
 
     /** Mean-interval BPM across the buffered adjacent taps, clamped to [20, 300]; nullopt
-        until at least two taps have been recorded. */
+        until at least three taps have been recorded (so the estimate always averages at
+        least two intervals, never a single-interval guess). */
     std::optional<double> currentBpm() const
     {
-        if (count < 2)
+        if (count < 3)
             return std::nullopt;
 
         // Sum the adjacent intervals in chronological order. The buffer is a ring of `count`

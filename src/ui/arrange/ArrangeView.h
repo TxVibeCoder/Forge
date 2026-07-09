@@ -89,6 +89,13 @@ public:
     void setSubBeatTicks (int ticksPerBeat);
 
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    /** Fired on a right-click: the clicked edit-time (mapped through the shared TimelineView, whose
+        width IS the ruler's) and the screen-space click point, so ArrangeView can offer "insert a
+        time-signature change at this bar" and anchor the popup at the click. Set by ArrangeView during
+        rebuild(); the ruler owns no menu / engine logic of its own (mirrors ClipComponent::onRightClicked). */
+    std::function<void (te::TimePosition clickedTime, juce::Point<int> screenPos)> onRightClicked;
 
 private:
     TimelineView& view;
@@ -368,6 +375,10 @@ public:
         the expanded lane is renderable without a mouse; out-of-range indices are a no-op. */
     void setAutomationLaneExpanded (int trackIndex, bool shouldShow);
 
+    /** Inserts a time-sig change at the BAR containing `t` (the ruler right-click seam, exposed so the
+        headless gate can drive the same snap+write path the menu does). Returns the snapped beat. */
+    te::BeatPosition insertTimeSigAtBar (te::TimePosition t, int numerator, int denominator);
+
     //==============================================================================
     // Optional callbacks the shell can set to drive Inspector / persistence.
     // Default null => no-op. Selection state itself is owned here.
@@ -405,12 +416,18 @@ private:
     /** Shows the empty-clip-area context menu (a "New MIDI Clip" affordance at the clicked time). */
     void showClipAreaContextMenu (TrackLaneComponent& lane, int clipAreaX, int clipAreaW,
                                   const juce::MouseEvent&);
+    /** Shows the ruler's right-click menu (one item: insert a time-signature change), opening a
+        TimeSigPopup CallOutBox anchored at the click on selection. clickedTime is the ruler x mapped to
+        edit time; screenPos anchors both the menu and the popup. */
+    void showRulerContextMenu (te::TimePosition clickedTime, juce::Point<int> screenPos);
 
     void renameClip (te::Clip&);
     void renameTrack (te::AudioTrack&);
     void deleteClip (te::Clip&);
-    /** MIDI-only: moves the clip's left edge forward to its first event via
-        forge::midiedit::trimLeadingSilence (no-op on empty/tight/looping clips). */
+    /** Trims the clip's left edge forward to its first content, dispatching by type: a MidiClip to its
+        first event (forge::midiedit::trimLeadingSilence), an audio clip to its first above-threshold
+        sample (forge::audioedit::trimLeadingSilence). No-op on empty/tight/looping clips (and, for audio,
+        an unreadable source or a non-unity speed ratio). */
     void trimClipStart (te::Clip&);
     void addTrack (te::AudioTrack* after);
     void deleteTrack (te::AudioTrack&);

@@ -16,8 +16,9 @@
     clip and the Viewport auto-scrolls to centre its note range.
 
     Navigation: Ctrl+wheel zooms time, Ctrl+Shift+wheel zooms pitch, Shift+wheel pans time, plain
-    wheel scrolls pitch (the Viewport). A compact bottom nav strip carries the same zoom via buttons
-    (time -/+, pitch -/+, Fit) plus a horizontal scrollbar. A moving playhead overlay (30 Hz, drawn
+    wheel scrolls pitch (the Viewport) — the routing is decoded by the public handleWheel() seam so
+    it is testable headlessly. A compact bottom nav strip carries the same zoom via buttons (time
+    -/+, pitch -/+, Fit, Trim) plus a horizontal scrollbar. A moving playhead overlay (30 Hz, drawn
     in the timeTempo clock colour, mouse-transparent) sweeps across while the transport runs.
 
     Global shortcuts: keys the roll doesn't consume locally (Ctrl+Z/Y, save, etc.) are forwarded to
@@ -101,6 +102,12 @@ public:
         if the shell handled the key. */
     std::function<bool (const juce::KeyPress&)> onUnhandledKey;
 
+    /** Fired when the user asks to trim the bound clip's silent lead-in (nav-strip Trim button). The SHELL
+        performs the trim (forge::midiedit::trimLeadingSilence), seals the undo transaction, saves, rebuilds
+        the arrange surface (the clip's timeline position changes) and re-fits this roll. Left to the shell
+        because a trim is a CLIP-level (arrange) edit, unlike the roll's note-level edits. No-op if unset. */
+    std::function<void()> onTrimClipRequested;
+
     /** Optional: maps a candidate note-start time to a snapped time. The orchestrator MAY set this;
         when null (the default) PianoRollView snaps internally to its own beat grid (gridBeats). */
     std::function<te::TimePosition (te::TimePosition)> snapStartTime;
@@ -179,6 +186,12 @@ public:
     /** Fits the whole clip's beat span across the time axis and centres its pitch range. */
     void fitClipToView();
 
+    /** Applies a wheel gesture to the roll's zoom/pan, given the modifiers, wheel deltas and the pointer in
+        CANVAS coordinates. Returns true when the gesture was consumed (a zoom or a time pan); false for a
+        plain wheel, which the caller must forward to the Viewport for native vertical (pitch) scrolling.
+        Public so the headless gate can drive the exact routing the mouse takes. */
+    bool handleWheel (const juce::ModifierKeys& mods, float deltaX, float deltaY, int canvasX, int canvasY);
+
     /** The current playhead x on the grid canvas, or -1 when there is no clip or the playhead sits
         outside the visible time window. Read by the playhead overlay each paint. */
     int playheadX() const;
@@ -192,8 +205,10 @@ private:
         starts a marquee (rubber-band) selection painted as an overlay; a release WITHOUT a drag
         draws a note as before. So a plain click still draws; a click-drag selects.
 
-        Wheel (W23): Ctrl -> zoom time, Ctrl+Shift -> zoom pitch, Shift -> pan time, plain -> the
-        Viewport's native vertical scroll (forwarded to the parent). */
+        Wheel (W23): the modifier decode itself lives in the owner's handleWheel() (a public seam so
+        the routing is testable headlessly) — Ctrl -> zoom time, Ctrl+Shift -> zoom pitch, Shift ->
+        pan time, plain -> not consumed, and this forwards it to the Viewport's native vertical
+        scroll. */
     class GridCanvas : public juce::Component
     {
     public:
@@ -310,7 +325,7 @@ private:
     VelocityLane velocityLane { *this };     // fixed bottom strip, OUTSIDE the viewport
 
     // Bottom nav strip: zoom buttons + a horizontal scrollbar for the time axis.
-    juce::TextButton zoomOutTimeBtn, zoomInTimeBtn, zoomOutPitchBtn, zoomInPitchBtn, fitBtn;
+    juce::TextButton zoomOutTimeBtn, zoomInTimeBtn, zoomOutPitchBtn, zoomInPitchBtn, fitBtn, trimBtn;
     juce::ScrollBar  hScrollBar { false };   // false = horizontal
     juce::Rectangle<int> navBounds;          // nav-strip rect (for the paint() background + captions)
 

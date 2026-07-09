@@ -396,17 +396,19 @@ transaction isolation and that `reconcileDrawerClip()` fires on the real path.
 The acceptance gate for **hands-on 1.4 — the clickable tempo popup** (design:
 [../docs/devlog/wave-06-handson.md](../docs/devlog/wave-06-handson.md)). Two headless legs. **Leg 1**
 (pure): drives the engine-free `forge::transport::TapTempo` estimator with synthetic timestamps —
-`<2` taps yield no estimate, four taps 500 ms apart read **120.0 BPM**, a `>2000 ms` gap starts a fresh
-sequence (no estimate), and two taps 10 ms apart clamp to the **300 BPM** ceiling. **Leg 2** (engine):
-writes a tempo through `EngineHelpers::setTempoAt` and reads it back off `tempoSequence.getBpmAt` — a
-`140.0` write round-trips, and a below-floor `5.0` write clamps to **20.0**.
+`<3` taps yield no estimate (**W23**: raised from `<2`, so the first reported value always averages at
+least two intervals rather than a single-interval guess), four taps 500 ms apart read **120.0 BPM**, a
+`>2000 ms` gap starts a fresh sequence (no estimate), and three taps 10 ms apart clamp to the **300 BPM**
+ceiling. **Leg 2** (engine): writes a tempo through `EngineHelpers::setTempoAt` and reads it back off
+`tempoSequence.getBpmAt` — a `140.0` write round-trips, and a below-floor `5.0` write clamps to **20.0**.
 
 | field | meaning | PASS requires |
 |---|---|---|
 | `oneTapNull` | a single tap yields no BPM | 1 |
+| `twoTapsNull` (W23) | TWO taps still yield no BPM — the leg that actually pins the ≥3-tap contract (`oneTapNull` alone can't distinguish a ≥2 floor from a ≥3 one) | 1 |
 | `bpm120` | four taps 500 ms apart → 120.0 | 1 |
 | `gapReset` | a >2000 ms gap clears the sequence | 1 |
-| `clampHigh` | a too-fast tap clamps to 300 | 1 |
+| `clampHigh` | three taps 10 ms apart (two 10 ms intervals → 6000 BPM raw) clamp to 300 | 1 |
 | `windowDropsStale` (W23) | five taps (0, 1000, 1300, 1700, 2000 ms) → the `t=0` lead-in is evicted from the capacity-4 ring; the mean of the last 3 intervals `(300+400+300)/3` → **180.0 BPM** (rules out the unbounded-average 120 and last-2-taps 200 models) | 1 |
 | `engineWrite` | `setTempoAt(…,140)` reads back 140 | 1 |
 | `engineClamp` | `setTempoAt(…,5)` reads back the 20 BPM floor | 1 |
@@ -1032,10 +1034,15 @@ docked `pianoRoll` to a slot clip at a deterministic 800×400 size and drives th
 | `playheadOffscreen` | the playhead reads −1 when the transport sits outside the visible time window | 1 |
 | `undoViaRollKey` | **the reported bug** — a Ctrl+Z dispatched through the roll's OWN `keyPressed` (→ `onUnhandledKey` → shell `doUndo`) reverts a seeded note (count 1 → 0) | 1 |
 | `localKeyNotForwarded` / `ctrlZForwarded` | routing discipline — a local key (`q` quantise) is consumed locally and NOT forwarded; Ctrl+Z IS forwarded to the shell | 1 / 1 |
+| `wheelCtrlZoomsTime` (W23 f/u) | `handleWheel(Ctrl, +deltaY)` is consumed AND widens the per-beat span | 1 |
+| `wheelCtrlShiftZoomsPitch` (W23 f/u) | `handleWheel(Ctrl+Shift, +deltaY)` is consumed AND grows a semitone row | 1 |
+| `wheelShiftPansTime` (W23 f/u) | `handleWheel(Shift, +deltaY)` is consumed AND moves the leftmost visible beat | 1 |
+| `wheelPlainNotConsumed` (W23 f/u) | an unmodified wheel returns **false**, so the caller forwards it to the Viewport for native pitch scroll | 1 |
 
-> The mouse-wheel zoom itself is interaction-territory (no synthetic-wheel driver) — the buttons, scrollbar,
-> Fit, zoom math, playhead, and the undo key-fallback are all gated; the `session_pianoroll` screenshot shows
-> the render. Collision-free; before bare `--selftest`; verify `mode=pianoroll`.
+> The wheel **routing** is now gated: `GridCanvas::mouseWheelMove`'s decode was extracted into the public
+> `PianoRollView::handleWheel` seam, so the Ctrl / Ctrl+Shift / Shift / plain decisions are driven directly.
+> What remains interaction-territory is only the OS delivering a real wheel event. The `session_pianoroll`
+> screenshot shows the render. Collision-free; before bare `--selftest`; verify `mode=pianoroll`.
 
 ## `Forge --selftest-timesig` (W23 — time-signature seam)
 
@@ -1050,10 +1057,13 @@ engine-write legs).
 | `midInsertReadsBack` | a change inserted at beat 16 (5/4) reads back there while beat 0 keeps its own sig — resolves by position | 1 |
 | `denominatorClamp` | a non-power-of-two denominator (3) snaps to a valid power of two | 1 |
 | `undoRestores` | a fresh-transaction meter change is reverted by `Edit::undo` — asserts the sig STRING (content), never `canUndo/canRedo` (the W16 4OSC redo-wipe gotcha) | 1 |
+| `rulerInsertAtBar` (W23 f/u) | `ArrangeView::insertTimeSigAtBar` — the exact snap+write path the ruler right-click uses — takes a MID-bar time (beat 9.5) and lands the change on that bar's downbeat (beat 8), reading back "7/8" | 1 |
+| `sigZoneNonEmpty` / `sigSeamsWired` / `sigZoneClickable` (W23 f/u) | after a forced synchronous paint the LCD's signature zone has real bounds, both `querySig`/`onSigChanged` seams are wired, and `hitTest` agrees at the zone's centre — the click-target precondition | 1 / 1 / 1 |
 
-> v1 UI edits the song's initial (beat-0) meter via the LCD "· 4/4" popup; the seam supports mid-arrangement
-> changes (proven by `midInsertReadsBack`) but the placing UI is a follow-up. The LCD-click→popup is
-> interaction-territory (mirrors the tempo popup). Collision-free; before bare `--selftest`; verify `mode=timesig`.
+> Two UIs write the meter: the LCD "· 4/4" popup edits the song's **initial** (beat-0) meter, and the arrange
+> ruler's right-click → "Insert time signature change here…" places a change at the clicked **bar**
+> (`insertTimeSigAtBar`, floor-snapped). `sigZoneClickable` proves the LCD zone is hit-testable; only the
+> `CallOutBox` launch itself remains interaction-territory. Collision-free; before bare `--selftest`; verify `mode=timesig`.
 
 ## `Forge --selftest-trim` (W23 — trim silent start)
 
@@ -1074,6 +1084,23 @@ directly.
 | `undoReverts` | one `Edit::undo` restores start AND offset (content-level, never `canRedo` — W16 gotcha) | 1 |
 | `noOpWhenTight` | a second trim on the now-tight clip returns false and leaves the start alone | 1 |
 
-> Trims to the first *note*; a controller-only clip (no notes) no-ops (narrow edge). The UI trigger is the
-> Arrange clip right-click "Trim silent start" (MIDI-only); a piano-roll trigger + an audio-clip variant are
-> follow-ups. Collision-free; before bare `--selftest`; verify `mode=trim`.
+### W23 follow-up — audio legs (`forge::audioedit::trimLeadingSilence`)
+
+A WAV that is **silent for 1 s then a 440 Hz sine** is written to disk and imported onto its own track; the
+audio helper (a `juce::AudioFormatReader::searchForLevel` scan at a −60 dBFS threshold, bounded to the clip's
+source span) then drives the SAME `setStart(preserveSync)` left-edge crop.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `audioImported` / `audioTrimmed` | the wave clip exists; the helper moved the edge | 1 / 1 |
+| `audioStartMovedForward` | the start advanced AND landed on the sine onset (0.9 s < start < 1.1 s) — not merely "moved" | 1 |
+| `audioOffsetIncreased` / `audioEndPreserved` | the lead-in went into the offset (nothing destroyed); the clip end is untouched | 1 / 1 |
+| `audioNoOpWhenTight` | a second trim on the now-tight clip declines | 1 |
+| `audioUndoReverts` | one `Edit::undo` restores start AND offset (content-level, never `canRedo`) | 1 |
+
+> The trim item now shows for **both** MIDI and audio clips (`ArrangeView::trimClipStart` dispatches on type),
+> and the piano roll has a **Trim** button in its nav strip (a clip/arrange-level edit, so the shell performs
+> it and rebuilds the arrange surface). **Known limits:** MIDI trims to the first *note* — a controller-only
+> clip (no notes) no-ops; audio trim **declines on a non-unity speed ratio**, because the clip offset is in
+> edit-seconds while the silence scan finds a source-second (`Δ = Ts/speed − offset`), and only `speed == 1`
+> makes that mapping unambiguous. Collision-free; before bare `--selftest`; verify `mode=trim`.

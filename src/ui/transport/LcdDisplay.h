@@ -89,6 +89,13 @@ public:
         time-signature popup (each a CallOutBox anchored to its own zone). */
     void mouseUp (const juce::MouseEvent&) override;
 
+    /** Bounds of the last-painted clickable tempo readout (empty when the zone isn't painted — narrow
+        width / the count-in face). Exposed so the headless gate can prove the zone is hit-testable. */
+    juce::Rectangle<int> getTempoZoneBounds() const  { return tempoZoneBounds; }
+
+    /** Bounds of the last-painted clickable time-signature readout (empty when not painted). */
+    juce::Rectangle<int> getSigZoneBounds() const    { return sigZoneBounds; }
+
     //==============================================================================
     // Tempo-edit seams, wired by the shell (see main.cpp). Both must be set for the tempo zone
     // to become clickable at runtime; hitTest also requires them so the click-through behaviour

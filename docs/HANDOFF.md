@@ -19,11 +19,25 @@
 > other's files). Build **clean (0 warnings)** · **46/46 selftest floor** (43 → 46: `+pianoroll` `+timesig`
 > `+trim`) · **12/12 screenshots** (`+session_pianoroll`). ⚠ **NOT pushed to `origin` — the whole W23 batch
 > is committed locally on `main`, push HELD for the maintainer's OK.** Full record →
-> [devlog/wave-23-handson-followups.md](devlog/wave-23-handson-followups.md). **Known follow-ups:** a
-> piano-roll trim trigger + audio-clip trim; a ruler UI to place mid-arrangement time-sig changes (the seam
-> supports them, gate-proven); optionally require ≥3 taps before tap-tempo applies. **Interaction-only (not
-> headlessly gated):** the LCD-click→time-sig popup + the piano-roll mouse-wheel zoom (buttons/scrollbar/
-> keys/playhead/undo ARE gated).
+> [devlog/wave-23-handson-followups.md](devlog/wave-23-handson-followups.md).
+>
+> **A third round then knocked out every documented follow-up** (3 more parallel file-disjoint agents; NO new
+> gates — all five items extend existing ones, so the floor stays **46**): **(a)** the arrange **ruler**
+> right-click → "Insert time signature change here…" places a meter change at the clicked BAR (new public
+> `ArrangeView::insertTimeSigAtBar`, floor-snapped; gate leg `rulerInsertAtBar`); **(b)** **audio-clip trim** —
+> new header-only `forge::audioedit::trimLeadingSilence` (a `searchForLevel` −60 dBFS scan + the same
+> `setStart(preserveSync)` crop), and `trimClipStart` now dispatches MIDI↔audio so the menu item serves both;
+> **(c)** a **Trim button** in the piano-roll nav strip (fires `onTrimClipRequested` — the shell trims, seals,
+> saves and rebuilds arrange, since a trim is a clip-level edit); **(d)** **tap tempo now requires ≥3 taps**, so
+> the first value averages ≥2 intervals (this broke the `clampHigh` leg, which tapped only twice — the gate
+> caught it; new `twoTapsNull` leg pins the floor); **(e)** **both proof gaps closed** — the wheel decode was
+> extracted into a public `PianoRollView::handleWheel` seam (4 new legs) and `LcdDisplay` exposes its zone
+> bounds so `sigZoneClickable` proves the sig readout is hit-testable. ⚠ **Engine correction worth knowing:**
+> a clip's `offset` is in EDIT-seconds while a silence scan yields a SOURCE-second, so the audio-trim advance is
+> `Δ = Ts/speed − offset`, NOT `(Ts − offset)/speed`; they agree only at `speed == 1`, so the helper **declines
+> on a non-unity speed ratio** rather than mis-trim a stretched clip. **Remaining interaction-only:** the
+> `CallOutBox` launch itself and the OS delivering a real wheel event. **Remaining known limits:** MIDI trim
+> keys on the first *note* (a controller-only clip no-ops); audio trim is unity-speed only.
 
 > The prior wave, **W22 — buildable-backlog
 > follow-ups**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program

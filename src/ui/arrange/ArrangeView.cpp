@@ -1,7 +1,10 @@
 #include "ui/arrange/ArrangeView.h"
 #include "ui/ForgeLookAndFeel.h"
+#include "ui/transport/TimeSigPopup.h"   // ruler right-click -> time-signature CallOutBox
 #include "core/Log.h"
-#include "engine/MidiEditHelpers.h"   // forge::midiedit::trimLeadingSilence
+#include "engine/EngineHelpers.h"        // setTimeSigAt / getTimeSigStringAt (ruler time-sig insert)
+#include "engine/MidiEditHelpers.h"      // forge::midiedit::trimLeadingSilence
+#include "engine/AudioEditHelpers.h"     // forge::audioedit::trimLeadingSilence
 
 #include <array>
 #include <cmath>
@@ -39,13 +42,26 @@ namespace
 TimeRulerComponent::TimeRulerComponent (TimelineView& v)
     : view (v)
 {
-    setInterceptsMouseClicks (false, false);
+    // Intercept clicks on the strip itself (for the right-click time-signature menu) but not children
+    // (it has none). The ruler is the top strip above the lanes/playhead, so nothing behind it needs the
+    // click — left-clicks are ignored below, so no scrub/selection behaviour changes.
+    setInterceptsMouseClicks (true, false);
 }
 
 void TimeRulerComponent::setEdit (te::Edit* e)
 {
     edit = e;
     repaint();
+}
+
+void TimeRulerComponent::mouseDown (const juce::MouseEvent& e)
+{
+    // Right-click anywhere on the bars|beats strip offers "insert a time-signature change at this bar".
+    // Map our own local x -> edit time through the shared TimelineView (our width IS the clip-area width)
+    // and hand ArrangeView a semantic (time, screen-anchor) pair via the callback — the ruler never reaches
+    // into ArrangeView and owns no menu / engine logic itself.
+    if (e.mods.isPopupMenu() && onRightClicked != nullptr && edit != nullptr && getWidth() > 0)
+        onRightClicked (view.xToTime (e.x, getWidth()), e.getScreenPosition());
 }
 
 void TimeRulerComponent::setSubBeatTicks (int ticksPerBeat)
@@ -963,6 +979,13 @@ void ArrangeView::rebuild()
         ruler->setSubBeatTicks (division == SnapDivision::sixteenth ? 3
                                 : division == SnapDivision::eighth  ? 1
                                                                     : 0);
+
+        // Right-click the bars|beats strip -> "insert a time-signature change at this bar".
+        ruler->onRightClicked = [this] (te::TimePosition clickedTime, juce::Point<int> screenPos)
+        {
+            showRulerContextMenu (clickedTime, screenPos);
+        };
+
         addAndMakeVisible (*ruler);
 
         for (auto* track : te::getAudioTracks (*edit))
@@ -1399,6 +1422,74 @@ te::TimePosition ArrangeView::snapToGrid (te::TimePosition t) const
 }
 
 //==============================================================================
+te::BeatPosition ArrangeView::insertTimeSigAtBar (te::TimePosition t, int numerator, int denominator)
+{
+    if (edit == nullptr)
+        return te::BeatPosition();
+
+    auto& seq = edit->tempoSequence;
+
+    // Snap to the BAR CONTAINING t: toBarsAndBeats gives the (0-based) bar t sits in; that bar's start beat
+    // is toBeats({bar, 0 beats}) — the same robust bar<->beat idiom snapToGrid uses, resolved to a BEAT so
+    // the engine seam (setTimeSigAt rounds a mid-beat position to the nearest beat) lands exactly on the
+    // downbeat.
+    const auto bb      = seq.toBarsAndBeats (t);
+    const auto barBeat = seq.toBeats (te::tempo::BarsAndBeats { jmax (0, bb.bars), te::BeatDuration() });
+
+    EngineHelpers::setTimeSigAt (*edit, barBeat, numerator, denominator);   // UM-bound (undoable)
+
+    notifyEditMutated();               // shell seals the per-gesture undo transaction + autosaves
+    if (ruler != nullptr)
+        ruler->repaint();              // bar numbering / grid shifts with the new meter
+    repaint();
+
+    return barBeat;
+}
+
+void ArrangeView::showRulerContextMenu (te::TimePosition clickedTime, juce::Point<int> screenPos)
+{
+    if (edit == nullptr)
+        return;
+
+    Component::SafePointer<ArrangeView> safeThis (this);
+    const auto anchor = Rectangle<int> (screenPos.x, screenPos.y, 1, 1);
+
+    PopupMenu menu;
+    menu.addItem ("Insert time signature change here...", [safeThis, clickedTime, anchor]
+    {
+        if (safeThis == nullptr || safeThis->edit == nullptr)
+            return;
+
+        // Seed the popup from the signature already in force at the bar the click resolves to (same bar as
+        // the write target, so it reads the value the change starts from). The popup is engine-free: it
+        // queries via querySig and pushes edits back through onSigChanged -> insertTimeSigAtBar, the SAME
+        // snap+write the headless gate drives.
+        auto& seq          = safeThis->edit->tempoSequence;
+        const auto bb      = seq.toBarsAndBeats (clickedTime);
+        const auto barBeat = seq.toBeats (te::tempo::BarsAndBeats { jmax (0, bb.bars), te::BeatDuration() });
+
+        auto querySig = [safeThis, barBeat]() -> String
+        {
+            if (safeThis != nullptr && safeThis->edit != nullptr)
+                return EngineHelpers::getTimeSigStringAt (*safeThis->edit, barBeat);
+
+            return "4/4";
+        };
+
+        auto onSigChanged = [safeThis, clickedTime] (int num, int den)
+        {
+            if (safeThis != nullptr)
+                safeThis->insertTimeSigAtBar (clickedTime, num, den);
+        };
+
+        CallOutBox::launchAsynchronously (std::make_unique<TimeSigPopup> (std::move (querySig), std::move (onSigChanged)),
+                                          anchor, nullptr);
+    });
+
+    menu.showMenuAsync (PopupMenu::Options().withTargetScreenArea (anchor));
+}
+
+//==============================================================================
 void ArrangeView::showClipAreaContextMenu (TrackLaneComponent& lane, int clipAreaX, int clipAreaW,
                                            const MouseEvent&)
 {
@@ -1445,10 +1536,11 @@ void ArrangeView::showClipContextMenu (ClipComponent& cc, const MouseEvent&)
             safeThis->deleteClip (*clip);
     });
 
-    // MIDI-only: trims the clip's left edge forward to its first event (note/CC/sysex), absorbing
-    // the skipped lead-in into the clip offset — deletes nothing, reversible by dragging the edge
-    // back out. A wave/audio clip has no MIDI content to trim against, so the item is withheld.
-    if (clip->isMidi())
+    // Trims the clip's left edge forward to its first content — the first event (MIDI) or the first
+    // above-threshold sample (audio) — absorbing the skipped lead-in into the clip offset: deletes nothing,
+    // reversible by dragging the edge back out. Shown for both MIDI and audio clips; a clip with no
+    // trimmable content (or a non-unity-speed audio clip) is a clean no-op via the helper.
+    if (clip->isMidi() || dynamic_cast<te::AudioClipBase*> (clip) != nullptr)
         menu.addItem ("Trim silent start", [safeThis, clip]
         {
             if (safeThis != nullptr && clip != nullptr)
@@ -1595,13 +1687,21 @@ void ArrangeView::trimClipStart (te::Clip& clip)
     if (edit == nullptr)
         return;
 
+    // Dispatch by clip type to the matching header-only helper: a MidiClip trims to its first event, an
+    // audio clip to its first above-threshold sample. Both use Clip::setStart (preserveSync, !keepLength) so
+    // nothing is deleted and the gesture is one Ctrl+Z. Each helper guards its own no-op cases (empty / tight
+    // / looping / — audio — unreadable source or non-unity speed) and returns false for a clean skip.
+    bool didTrim = false;
+
     if (auto* mc = dynamic_cast<te::MidiClip*> (&clip))
+        didTrim = forge::midiedit::trimLeadingSilence (*mc);
+    else if (auto* ac = dynamic_cast<te::AudioClipBase*> (&clip))
+        didTrim = forge::audioedit::trimLeadingSilence (*ac);
+
+    if (didTrim)
     {
-        if (forge::midiedit::trimLeadingSilence (*mc))   // helper guards empty/tight/looping — false is a clean no-op
-        {
-            notifyEditMutated();   // shell seals the per-gesture undo transaction + autosaves (same path as delete/rename)
-            rebuild();             // ArrangeView has no clip-mutation listener — manual refresh, mirrors deleteClip
-        }
+        notifyEditMutated();   // shell seals the per-gesture undo transaction + autosaves (same path as delete/rename)
+        rebuild();             // ArrangeView has no clip-mutation listener — manual refresh, mirrors deleteClip
     }
 }
 

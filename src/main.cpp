@@ -22,6 +22,7 @@
 #include "engine/Metronome.h"
 #include "engine/MidiLearn.h"
 #include "engine/MidiEditHelpers.h"
+#include "engine/AudioEditHelpers.h"    // forge::audioedit::trimLeadingSilence (--selftest-trim audio legs)
 #include "engine/ModifierHelpers.h"
 #include "engine/ForgeUIBehaviour.h"
 #include "engine/LaunchpadDriver.h"
@@ -391,6 +392,26 @@ public:
         // to the shell so global shortcuts fire from inside the roll (docked OR torn off) regardless of
         // which sub-component holds focus — the same escape hatch the mixer/roll popouts use.
         pianoRoll.onUnhandledKey = [this] (const KeyPress& k) { return keyPressed (k); };
+
+        // W23 follow-up: the roll's nav-strip "Trim" button — crop the bound clip's silent lead-in. A
+        // CLIP-level (arrange) edit, so the SHELL performs it, not the roll: trim, seal the transaction,
+        // save, rebuild the arrange surface (the clip's timeline position just moved) and re-fit the roll
+        // to the clip's new span. No-op when trimLeadingSilence declines (already tight / looping / empty).
+        pianoRoll.onTrimClipRequested = [this]
+        {
+            auto* mc = pianoRoll.getClip();
+            if (mc == nullptr)
+                return;
+
+            if (forge::midiedit::trimLeadingSilence (*mc))
+            {
+                sealUndoTransaction();
+                if (! session.save())
+                    FORGE_LOG_ERROR ("Failed to save project after piano-roll trim");
+                arrangeView.rebuild();
+                pianoRoll.fitClipToView();
+            }
+        };
 
         // "New MIDI Clip" from a lane context menu: create the clip (born audible via a default 4OSC),
         // rebuild the arrange surface so its MidiClipComponent appears, then open the piano-roll on it
@@ -2756,14 +2777,22 @@ private:
     {
         forge::transport::TapTempo t;
         t.tap (0.0);
-        const bool oneTapNull = ! t.currentBpm().has_value();     // <2 taps -> no estimate
+        const bool oneTapNull = ! t.currentBpm().has_value();     // <3 taps -> no estimate
+
+        // W23 follow-up (min-3 taps): TWO taps must still yield nothing — this is the leg that actually
+        // pins the >=3 contract (oneTapNull alone can't distinguish a ">=2 taps" floor from a ">=3" one).
+        // A fresh instance, so it cannot perturb bpm120's exact tap sequence below.
+        forge::transport::TapTempo twoTaps;
+        twoTaps.tap (0.0); twoTaps.tap (500.0);
+        const bool twoTapsNull = ! twoTaps.currentBpm().has_value();
+
         t.tap (500.0); t.tap (1000.0); t.tap (1500.0);
         const bool bpm120 = t.currentBpm().has_value() && std::abs (*t.currentBpm() - 120.0) < 1e-6;
         t.tap (4000.0);                                           // gap 2500 ms > 2000 ms -> fresh sequence
         const bool gapReset = ! t.currentBpm().has_value();
 
         forge::transport::TapTempo fast;
-        fast.tap (0.0); fast.tap (10.0);                          // 6000 BPM raw -> clamps to 300
+        fast.tap (0.0); fast.tap (10.0); fast.tap (20.0);         // 3 taps, two 10 ms intervals -> 6000 BPM raw -> clamps to 300
         const bool clampHigh = fast.currentBpm().has_value() && std::abs (*fast.currentBpm() - 300.0) < 1e-6;
 
         // Rolling-window leg: the estimator averages only the last (up to) 4 buffered taps, not an
@@ -2790,11 +2819,13 @@ private:
             engineClamp = std::abs (ed->tempoSequence.getBpmAt (te::TimePosition()) - 20.0) < 1e-3;
         }
 
-        const bool pass = oneTapNull && bpm120 && gapReset && clampHigh && windowDropsStale && engineWrite && engineClamp;
+        const bool pass = oneTapNull && twoTapsNull && bpm120 && gapReset && clampHigh && windowDropsStale
+                          && engineWrite && engineClamp;
 
         String report;
         report << "mode=taptempo" << newLine
                << "oneTapNull="       << (oneTapNull ? 1 : 0) << newLine
+               << "twoTapsNull="      << (twoTapsNull ? 1 : 0) << newLine
                << "bpm120="           << (bpm120 ? 1 : 0) << newLine
                << "gapReset="         << (gapReset ? 1 : 0) << newLine
                << "clampHigh="        << (clampHigh ? 1 : 0) << newLine
@@ -6737,7 +6768,8 @@ private:
         bool clipBound = false, roundTrips = false, zoomInWidensBeat = false, zoomAnchorHeld = false,
              zoomOutNarrowsBeat = false, pitchZoomWidensRow = false, playheadTracks = false,
              playheadOffscreen = false, undoViaRollKey = false, localKeyNotForwarded = false,
-             ctrlZForwarded = false;
+             ctrlZForwarded = false, wheelCtrlZoomsTime = false, wheelCtrlShiftZoomsPitch = false,
+             wheelShiftPansTime = false, wheelPlainNotConsumed = false;
 
         if (auto* ed = session.getEdit())
         {
@@ -6815,12 +6847,49 @@ private:
                 const bool zFwd = pianoRoll.keyPressed (
                     KeyPress ((int) 'Z', ModifierKeys (ModifierKeys::commandModifier), (juce_wchar) 'Z'));
                 ctrlZForwarded = zFwd && probeFired;
+
+                // (7) Wheel routing (W23 follow-up): GridCanvas::mouseWheelMove decodes Ctrl / Ctrl+Shift /
+                // Shift / plain into zoom/pan. handleWheel is the extracted public seam, so the exact
+                // routing the mouse takes is now provable headlessly. Re-fit first so the starting geometry
+                // is deterministic regardless of what legs (1)-(6) left the zoom/scroll state at.
+                pianoRoll.fitClipToView();
+                const int wheelFocusX = pianoRoll.beatToX (2.0);
+                const int wheelFocusY = 200;
+
+                // Ctrl+wheel (deltaY > 0) -> zoom TIME in: consumed, and the per-beat span widens.
+                const int timeSpanBeforeWheel = pianoRoll.beatToX (3.0) - pianoRoll.beatToX (2.0);
+                const bool wheelCtrlConsumed = pianoRoll.handleWheel (
+                    ModifierKeys (ModifierKeys::ctrlModifier), 0.0f, 1.0f, wheelFocusX, wheelFocusY);
+                const int timeSpanAfterWheel = pianoRoll.beatToX (3.0) - pianoRoll.beatToX (2.0);
+                wheelCtrlZoomsTime = wheelCtrlConsumed && timeSpanAfterWheel > timeSpanBeforeWheel;
+
+                // Ctrl+Shift+wheel -> zoom PITCH in: consumed, and a semitone row grows taller.
+                const int rowBeforeWheel = pianoRoll.pitchToY (60) - pianoRoll.pitchToY (61);
+                const bool wheelCtrlShiftConsumed = pianoRoll.handleWheel (
+                    ModifierKeys (ModifierKeys::ctrlModifier | ModifierKeys::shiftModifier),
+                    0.0f, 1.0f, wheelFocusX, wheelFocusY);
+                const int rowAfterWheel = pianoRoll.pitchToY (60) - pianoRoll.pitchToY (61);
+                wheelCtrlShiftZoomsPitch = wheelCtrlShiftConsumed && rowAfterWheel > rowBeforeWheel;
+
+                // Shift+wheel (no Ctrl) -> pan TIME: consumed, and the leftmost visible beat moves.
+                const double leftBeatBeforeWheel = pianoRoll.xToBeat (PianoRollLayout::gutterW);
+                const bool wheelShiftConsumed = pianoRoll.handleWheel (
+                    ModifierKeys (ModifierKeys::shiftModifier), 0.0f, 1.0f, wheelFocusX, wheelFocusY);
+                const double leftBeatAfterWheel = pianoRoll.xToBeat (PianoRollLayout::gutterW);
+                wheelShiftPansTime = wheelShiftConsumed
+                                     && std::abs (leftBeatAfterWheel - leftBeatBeforeWheel) > 1.0e-6;
+
+                // Plain wheel -> NOT consumed; the caller must forward it to the Viewport (pitch scroll).
+                wheelPlainNotConsumed = ! pianoRoll.handleWheel (
+                    ModifierKeys(), 0.0f, 1.0f, wheelFocusX, wheelFocusY);
             }
         }
 
         const bool pass = clipBound && roundTrips && zoomInWidensBeat && zoomAnchorHeld
                           && zoomOutNarrowsBeat && pitchZoomWidensRow && playheadTracks
-                          && playheadOffscreen && undoViaRollKey && localKeyNotForwarded && ctrlZForwarded;
+                          && playheadOffscreen && undoViaRollKey && localKeyNotForwarded && ctrlZForwarded
+                          && wheelCtrlZoomsTime && wheelCtrlShiftZoomsPitch && wheelShiftPansTime
+                          && wheelPlainNotConsumed;
 
         String report;
         report << "mode=pianoroll" << newLine
@@ -6835,6 +6904,10 @@ private:
                << "undoViaRollKey="       << (undoViaRollKey ? 1 : 0) << newLine
                << "localKeyNotForwarded=" << (localKeyNotForwarded ? 1 : 0) << newLine
                << "ctrlZForwarded="       << (ctrlZForwarded ? 1 : 0) << newLine
+               << "wheelCtrlZoomsTime="       << (wheelCtrlZoomsTime ? 1 : 0) << newLine
+               << "wheelCtrlShiftZoomsPitch=" << (wheelCtrlShiftZoomsPitch ? 1 : 0) << newLine
+               << "wheelShiftPansTime="       << (wheelShiftPansTime ? 1 : 0) << newLine
+               << "wheelPlainNotConsumed="    << (wheelPlainNotConsumed ? 1 : 0) << newLine
                << "result="               << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="              << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -6851,7 +6924,7 @@ private:
     void runTimeSigSelftest()
     {
         bool initialRoundTrip = false, numDenDistinct = false, midInsertReadsBack = false,
-             denominatorClamp = false, undoRestores = false;
+             denominatorClamp = false, undoRestores = false, rulerInsertAtBar = false;
 
         if (auto* ed = session.getEdit())
         {
@@ -6895,10 +6968,40 @@ private:
             const bool applied = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "7/8";
             ed->undo();
             undoRestores = applied && EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == before;
+
+            // rulerInsertAtBar (W23 ruler seam): drive ArrangeView::insertTimeSigAtBar through the SAME
+            // snap+write path the ruler right-click menu uses. Reset beat 0 to 4/4 so the bar grid is known,
+            // bind the view to the edit, pick a MID-bar time (beat 9.5 = 1.5 beats into bar 3 in 4/4), and
+            // assert the write snaps DOWN to that bar's start (beat 8) and reads back as 7/8 there.
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 4, 4);
+            arrangeView.setEdit (ed);
+            const auto midBarTime   = ed->tempoSequence.toTime (te::BeatPosition::fromBeats (9.5));
+            const auto insertedBeat = arrangeView.insertTimeSigAtBar (midBarTime, 7, 8);
+            const bool snappedToBar = std::abs (insertedBeat.inBeats() - 8.0) < 1.0e-6;
+            const bool readsBack78  = EngineHelpers::getTimeSigStringAt (*ed, insertedBeat) == "7/8";
+            rulerInsertAtBar = snappedToBar && readsBack78;
         }
 
+        // sigZoneClickable (W23 follow-up): prove the LCD's signature readout is actually HIT-TESTABLE,
+        // not merely painted — the precondition for the click→TimeSigPopup path. Widen the LCD past its
+        // keyZoneMinWidth gate explicitly rather than lean on the ambient selftest window size, then force
+        // a SYNCHRONOUS paint via createComponentSnapshot (setSize alone only marks it dirty for a later
+        // async repaint, so sigZoneBounds wouldn't be latched yet) — the same idiom --screenshot's
+        // captureView() uses. sigSeamsWired is asserted directly rather than inferred, so a regression that
+        // clears a seam but leaves the geometry intact reports the cause instead of a bare failure.
+        // NOTE: this proves the hit-test precondition; the CallOutBox launch itself stays interaction-territory.
+        auto& lcd = controlBar.getLcdDisplay();
+        lcd.setSize (400, lcd.getHeight() > 0 ? lcd.getHeight() : 30);
+        (void) lcd.createComponentSnapshot (lcd.getLocalBounds());   // side effect: latches tempo/sigZoneBounds
+
+        const auto sigBounds        = lcd.getSigZoneBounds();
+        const bool sigZoneNonEmpty  = ! sigBounds.isEmpty();
+        const bool sigSeamsWired    = lcd.querySig != nullptr && lcd.onSigChanged != nullptr;
+        const auto sigCentre        = sigBounds.getCentre();
+        const bool sigZoneClickable = sigZoneNonEmpty && sigSeamsWired && lcd.hitTest (sigCentre.x, sigCentre.y);
+
         const bool pass = initialRoundTrip && numDenDistinct && midInsertReadsBack
-                          && denominatorClamp && undoRestores;
+                          && denominatorClamp && undoRestores && rulerInsertAtBar && sigZoneClickable;
 
         String report;
         report << "mode=timesig" << newLine
@@ -6907,6 +7010,10 @@ private:
                << "midInsertReadsBack=" << (midInsertReadsBack ? 1 : 0) << newLine
                << "denominatorClamp="   << (denominatorClamp ? 1 : 0) << newLine
                << "undoRestores="       << (undoRestores ? 1 : 0) << newLine
+               << "rulerInsertAtBar="   << (rulerInsertAtBar ? 1 : 0) << newLine
+               << "sigZoneNonEmpty="    << (sigZoneNonEmpty ? 1 : 0) << newLine
+               << "sigSeamsWired="      << (sigSeamsWired ? 1 : 0) << newLine
+               << "sigZoneClickable="   << (sigZoneClickable ? 1 : 0) << newLine
                << "result="             << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -6929,7 +7036,10 @@ private:
     {
         bool clipCreated = false, seededNote = false, trimmed = false, startMovedForward = false,
              notePosPreserved = false, noLeadingSilence = false, offsetIncreased = false,
-             endPreserved = false, undoReverts = false, noOpWhenTight = false;
+             endPreserved = false, undoReverts = false, noOpWhenTight = false,
+             audioImported = false, audioTrimmed = false, audioStartMovedForward = false,
+             audioOffsetIncreased = false, audioEndPreserved = false, audioNoOpWhenTight = false,
+             audioUndoReverts = false;
 
         if (auto* ed = session.getEdit())
         {
@@ -6980,10 +7090,77 @@ private:
                 undoReverts = std::abs (posUndone.getStart().inSeconds() - startBefore.inSeconds()) < 1.0e-6
                              && std::abs (posUndone.getOffset().inSeconds()) < 1.0e-6;
             }
+
+            // --- Audio legs (W23): forge::audioedit::trimLeadingSilence on an ARRANGE wave clip. Build a WAV
+            // that is silent for ~1 s then a 440 Hz sine, import it onto its own track, and drive the helper:
+            // it must move the start forward to the sine onset (~1 s), grow the offset, hold the clip END
+            // fixed, no-op on a second (already-tight) call, and revert via undo (content-level: start AND
+            // offset restored; NEVER canRedo — the W16 4OSC redo-wipe defect makes UM flags unreliable).
+            auto makeSilenceThenSine = [] (double sr, double silenceSecs, double toneSecs,
+                                           double freq, float gain) -> File
+            {
+                auto f = File::createTempFile (".wav");
+                if (auto os = f.createOutputStream())
+                {
+                    WavAudioFormat wav;
+                    if (auto* w = wav.createWriterFor (os.get(), sr, 1, 16, {}, 0))
+                    {
+                        os.release();
+                        std::unique_ptr<AudioFormatWriter> wo (w);
+                        const int silenceN = (int) (silenceSecs * sr);
+                        const int toneN    = (int) (toneSecs * sr);
+                        AudioBuffer<float> buf (1, silenceN + toneN);
+                        buf.clear();                                     // the leading silence
+                        auto* s = buf.getWritePointer (0);
+                        const double dp = MathConstants<double>::twoPi * freq / sr;
+                        double ph = 0.0;
+                        for (int i = 0; i < toneN; ++i) { s[silenceN + i] = gain * (float) std::sin (ph); ph += dp; }
+                        wo->writeFromAudioSampleBuffer (buf, 0, silenceN + toneN);
+                    }
+                }
+                return f;
+            };
+
+            const File silenceThenSine = makeSilenceThenSine (44100.0, 1.0, 2.0, 440.0, 0.2f);
+            ed->ensureNumberOfAudioTracks (2);   // import onto track 1 (track 0 holds the MIDI clip above)
+
+            if (auto ac = session.importAudioFile (silenceThenSine, te::TimePosition(), 1))
+            {
+                audioImported = true;
+
+                const auto aStartBefore  = ac->getPosition().getStart();
+                const auto aEndBefore    = ac->getPosition().getEnd();
+                const auto aOffsetBefore = ac->getPosition().getOffset();
+
+                // Trim leg (own transaction, sealing the import).
+                um.beginNewTransaction();
+                audioTrimmed = forge::audioedit::trimLeadingSilence (*ac);
+
+                const auto   pAfter     = ac->getPosition();
+                const double aStartSecs = pAfter.getStart().inSeconds();
+                audioStartMovedForward = aStartSecs > aStartBefore.inSeconds() + 1.0e-4
+                                         && aStartSecs > 0.9 && aStartSecs < 1.1;   // lands at the ~1 s onset
+                audioOffsetIncreased   = pAfter.getOffset().inSeconds() > aOffsetBefore.inSeconds() + 1.0e-4;
+                audioEndPreserved      = std::abs (pAfter.getEnd().inSeconds() - aEndBefore.inSeconds()) < 1.0e-3;
+
+                // No-op leg: the clip is now tight — a second trim must decline and leave the start alone.
+                um.beginNewTransaction();
+                const bool aSecondTrim = forge::audioedit::trimLeadingSilence (*ac);
+                audioNoOpWhenTight = ! aSecondTrim
+                                     && std::abs (ac->getPosition().getStart().inSeconds() - aStartSecs) < 1.0e-6;
+
+                // Undo leg: reverts the trim transaction. Content-level (start AND offset), never canRedo().
+                ed->undo();
+                const auto pUndone = ac->getPosition();
+                audioUndoReverts = std::abs (pUndone.getStart().inSeconds()  - aStartBefore.inSeconds())  < 1.0e-4
+                                   && std::abs (pUndone.getOffset().inSeconds() - aOffsetBefore.inSeconds()) < 1.0e-4;
+            }
         }
 
         const bool pass = clipCreated && seededNote && trimmed && startMovedForward && notePosPreserved
-                          && noLeadingSilence && offsetIncreased && endPreserved && undoReverts && noOpWhenTight;
+                          && noLeadingSilence && offsetIncreased && endPreserved && undoReverts && noOpWhenTight
+                          && audioImported && audioTrimmed && audioStartMovedForward && audioOffsetIncreased
+                          && audioEndPreserved && audioNoOpWhenTight && audioUndoReverts;
 
         String report;
         report << "mode=trim" << newLine
@@ -6997,6 +7174,13 @@ private:
                << "endPreserved="      << (endPreserved ? 1 : 0) << newLine
                << "undoReverts="       << (undoReverts ? 1 : 0) << newLine
                << "noOpWhenTight="     << (noOpWhenTight ? 1 : 0) << newLine
+               << "audioImported="          << (audioImported ? 1 : 0) << newLine
+               << "audioTrimmed="           << (audioTrimmed ? 1 : 0) << newLine
+               << "audioStartMovedForward=" << (audioStartMovedForward ? 1 : 0) << newLine
+               << "audioOffsetIncreased="   << (audioOffsetIncreased ? 1 : 0) << newLine
+               << "audioEndPreserved="      << (audioEndPreserved ? 1 : 0) << newLine
+               << "audioNoOpWhenTight="     << (audioNoOpWhenTight ? 1 : 0) << newLine
+               << "audioUndoReverts="       << (audioUndoReverts ? 1 : 0) << newLine
                << "result="            << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
 

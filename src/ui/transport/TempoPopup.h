@@ -8,8 +8,8 @@
     Three ways to set the tempo, all clamped to [20, 300] and all echoed back into the label:
       - type a value into the editable BPM label (return commits it);
       - the +/- steppers: +/-0.1 BPM per click, +/-1.0 when Shift is held;
-      - TAP: taps an owned TapTempo with the hi-res millisecond clock; once two taps exist the
-        estimated BPM is applied.
+      - TAP: taps an owned TapTempo with the hi-res millisecond clock; once THREE taps exist (so the
+        estimate averages at least two intervals, never a single-interval guess) the BPM is applied.
 
     Fixed size (setSize in the ctor) so CallOutBox sizes its bubble to fit. Message-thread only.
 */

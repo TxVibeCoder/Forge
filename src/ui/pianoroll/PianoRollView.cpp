@@ -54,12 +54,22 @@ PianoRollView::PianoRollView()
     initZoomButton (zoomOutPitchBtn, "-", "Zoom out (pitch)  \xe2\x80\x94  Ctrl+Shift+Scroll");
     initZoomButton (zoomInPitchBtn,  "+", "Zoom in (pitch)  \xe2\x80\x94  Ctrl+Shift+Scroll");
     initZoomButton (fitBtn,       "Fit", "Fit the whole clip to the view");
+    initZoomButton (trimBtn,     "Trim", "Trim the clip's silent start");
 
     zoomOutTimeBtn.onClick  = [this] { zoomTime  (0.8,  gutterW + timeAxisWidth() / 2); };
     zoomInTimeBtn.onClick   = [this] { zoomTime  (1.25, gutterW + timeAxisWidth() / 2); };
     zoomOutPitchBtn.onClick = [this] { zoomPitch (0.8,  viewport.getMaximumVisibleHeight() / 2); };
     zoomInPitchBtn.onClick  = [this] { zoomPitch (1.25, viewport.getMaximumVisibleHeight() / 2); };
     fitBtn.onClick          = [this] { fitClipToView(); };
+    trimBtn.onClick         = [this]
+    {
+        // A CLIP-level (arrange) edit, not a note-level one -- the shell performs it (see the
+        // onTrimClipRequested doc comment). No-op with no clip bound or the callback unset.
+        if (getClip() == nullptr)
+            return;
+        if (onTrimClipRequested != nullptr)
+            onTrimClipRequested();
+    };
 
     hScrollBar.setWantsKeyboardFocus (false);
     hScrollBar.setAutoHide (false);
@@ -174,6 +184,8 @@ void PianoRollView::layoutNavStrip (juce::Rectangle<int> strip)
     place (zoomInPitchBtn,  22);
     strip.removeFromLeft (8);
     place (fitBtn, 34);
+    strip.removeFromLeft (6);
+    place (trimBtn, 40);
     strip.removeFromLeft (6);
 
     hScrollBar.setBounds (strip.withTrimmedTop (3).withTrimmedBottom (3));   // fills the rest
@@ -344,6 +356,32 @@ void PianoRollView::fitClipToView()
 
     applyViewChange();
     scrollToClipPitchRange();
+}
+
+bool PianoRollView::handleWheel (const juce::ModifierKeys& mods, float deltaX, float deltaY, int canvasX, int canvasY)
+{
+    // Ctrl/Cmd -> zoom (time, or pitch with Shift), anchored under the pointer. Sign of deltaY picks
+    // in vs out; a fixed step keeps it predictable across mice with different wheel resolutions.
+    if (mods.isCtrlDown() || mods.isCommandDown())
+    {
+        const double f = (deltaY >= 0.0f) ? 1.25 : 0.8;
+        if (mods.isShiftDown())
+            zoomPitch (f, canvasY - viewport.getViewPositionY());   // canvasY (canvas-space) -> viewport-local
+        else
+            zoomTime (f, canvasX);
+        return true;
+    }
+
+    // Shift -> pan the time axis. Some mice report the horizontal delta, others the vertical.
+    if (mods.isShiftDown())
+    {
+        const double d = (deltaX != 0.0f ? (double) deltaX : (double) deltaY);
+        panTime (-d * jmax (1.0, visibleBeats()) * 0.2);
+        return true;
+    }
+
+    // Plain wheel -> not consumed; the caller forwards it to the Viewport for native vertical scroll.
+    return false;
 }
 
 void PianoRollView::applyViewChange()
@@ -1095,30 +1133,11 @@ void PianoRollView::GridCanvas::mouseUp (const MouseEvent& e)
 
 void PianoRollView::GridCanvas::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& wheel)
 {
-    const auto& m = e.mods;
-
-    // Ctrl/Cmd -> zoom (time, or pitch with Shift), anchored under the pointer. Sign of deltaY picks
-    // in vs out; a fixed step keeps it predictable across mice with different wheel resolutions.
-    if (m.isCtrlDown() || m.isCommandDown())
-    {
-        const double f = (wheel.deltaY >= 0.0f) ? 1.25 : 0.8;
-        if (m.isShiftDown())
-            owner.zoomPitch (f, e.y - owner.viewport.getViewPositionY());   // e.y canvas-space -> viewport-local
-        else
-            owner.zoomTime (f, e.x);
-        return;
-    }
-
-    // Shift -> pan the time axis. Some mice report the horizontal delta, others the vertical.
-    if (m.isShiftDown())
-    {
-        const double d = (wheel.deltaX != 0.0f ? (double) wheel.deltaX : (double) wheel.deltaY);
-        owner.panTime (-d * jmax (1.0, owner.visibleBeats()) * 0.2);
-        return;
-    }
-
-    // Plain wheel -> the Viewport's native vertical (pitch) scroll.
-    owner.viewport.useMouseWheelMoveIfNeeded (e.getEventRelativeTo (&owner.viewport), wheel);
+    // The decode itself lives in owner.handleWheel() (a public seam so the routing is testable
+    // headlessly, W23 follow-up); a plain wheel (not consumed) forwards to the Viewport for its
+    // native vertical (pitch) scroll, exactly as before the extraction.
+    if (! owner.handleWheel (e.mods, wheel.deltaX, wheel.deltaY, e.x, e.y))
+        owner.viewport.useMouseWheelMoveIfNeeded (e.getEventRelativeTo (&owner.viewport), wheel);
 }
 
 //==============================================================================
