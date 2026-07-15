@@ -1,7 +1,7 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-09**, end of **"W23 — hands-on
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-10**, end of **"W23 — hands-on
 > follow-ups"**: four maintainer requests from driving the built app, all shipped + headless-verified.
 > **(1) Piano roll** — the drawer roll gained its OWN zoomable beat→pixel time axis (decoupled from the
 > shared arrange `TimelineView`; Ctrl/Shift+wheel + Time/Pitch/Fit buttons + a horizontal scrollbar), a
@@ -491,6 +491,13 @@ Full feature list + roadmap in [STATUS.md](STATUS.md).
 ---
 
 ## What's next (the path forward)
+
+> ▶ **The actionable queue now lives in [BACKLOG.md](BACKLOG.md)** — source-verified packets for each
+> ready-to-build item (MIDI multi-track import · save→reload gate legs · render-audibility legs · capture
+> count-in · W23 trim residuals · instrument library · Modulate polish), a territory map for fanning them
+> out, and the parked list. **Item 0 there is the `FourOscPlugin` redo defect — the only broken core
+> interaction, blocked on a maintainer decision.** Both roadmaps (the 10-wave frontier program and the
+> 5-wave hands-on plan) are COMPLETE; the text below is historical.
 
 > W07–W11 are **committed + PUSHED to `origin/main`** (through `0f9d5cc`, sanitize-clean; local `main` ==
 > `origin/main`). Hardware smoke tests and manual GUI passes are **permanently parked** (standing

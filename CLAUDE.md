@@ -333,4 +333,5 @@ fix regressions, then the consolidation commit (docs/devlog), **sanitize**, and 
 ---
 
 *Rules, tenets, and gotchas live here. Product brief → `docs/DIRECTION.md` · state → `docs/HANDOFF.md` · roadmap
-→ `docs/STATUS.md` · logging → `docs/LOGGING.md` · architecture → `docs/ARCHITECTURE.md`.*
+→ `docs/STATUS.md` · **what to build next → `docs/BACKLOG.md`** · logging → `docs/LOGGING.md` · architecture →
+`docs/ARCHITECTURE.md`.*
