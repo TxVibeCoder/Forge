@@ -277,9 +277,10 @@ edit / device — runs and quits before the window, like `--selftest-lufs`): ass
 
 The acceptance gate for **W04a — the menu bar**. Pure model gate: dispatches through a BARE model
 (every callback unset — must no-op, never crash), then asserts the tree shape (5 menus, pinned item
-counts), non-zero item ids, known shortcut labels (Save = Ctrl+S, Open = Ctrl+O — display-only
-strings that must not drift from `keyPressed`), callback dispatch (flag capture), and live tick
-marks from the query functions (unset query = unticked).
+counts — Edit is **4** since W24's B7 added `Modulate…`), non-zero item ids, known shortcut labels
+(Save = Ctrl+S, Open = Ctrl+O, **Modulate… = Ctrl+M** — display-only strings that must not drift
+from `keyPressed`), callback dispatch (flag capture), and live tick marks from the query functions
+(unset query = unticked).
 
 ## `Forge --selftest-tray` (channel-tray live sync)
 
@@ -509,6 +510,19 @@ poll timer is visibility-gated).
 | `muteOk` | the strip reflects `track.setMute(true)` | 1 |
 | `soloOk` | the strip reflects `track.setSolo(true)` | 1 |
 
+### W24 addition (B7 — the modulated-parameter indicator)
+
+The strip (like the mixer strips and channel tray) draws a small accent dot on a control whose parameter has
+an LFO modifier assigned, cached by its own refresh path (edge-compared; `paintOverChildren` reads only the
+cache). The leg drives the full lifecycle through the REAL seams (`forge::modifier::addLFO` + `assign`, then
+the full-teardown `removeLFO` — never a bare `removeModifier`, per the asserts-on-no-op gotcha):
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `indicatorOffBaseline` | no assignment → no dot | 1 |
+| `indicatorOnAfterAssign` | after `assign(volParam, lfo)` + one refresh, the dot state is ON | 1 |
+| `indicatorClearsAfterRemove` | after `removeLFO` + one refresh, the dot clears | 1 |
+
 > Verified 2026-07-02: **PASS** (`mode=sessionmixer`, all legs 1), bringing the floor to **22 gates**.
 > **Ladder-ordering note:** `--selftest-sessionmixer` CONTAINS `--selftest-session`, so it MUST be matched
 > before it in the `commandLine.contains(...)` ladders — else it silently runs the session gate and reports a
@@ -523,8 +537,12 @@ The acceptance gate for **W09 — the audible demo** (design:
 [../docs/devlog/wave-09-instruments.md](../docs/devlog/wave-09-instruments.md)). Structural + synchronous:
 `PluginHost::applyInstrumentPreset(track0, Kick)` inserts a 4OSC (not the Sampler); `applyInstrumentPreset(track2,
 Piano)` inserts the engine **Sampler**; `InstrumentSamples::ensurePianoOneShot()` generates the self-rendered
-CC0 piano one-shot on disk; and a seeded clip actually holds notes. It does NOT render audio (the Sampler loads
-its sample on an AsyncUpdater; playback engagement is covered by `--selftest-session`).
+CC0 piano one-shot on disk; and a seeded clip actually holds notes. **W24 (B3)** added a deferred **render
+leg**: phase 1 also seeds a short arrange clip (one note) on the Sampler track, then `finishDemoSelftest`
+runs after a 600 ms message-loop pump (the Sampler ingests its audio on an AsyncUpdater — rendering without
+the pump measures silence), renders the stem via the synchronous `Exporter::renderStems`, and samples its
+peak — proving the Sampler actually **ingested** the one-shot, the silent-failure class the structural legs
+could not close.
 
 | field | meaning | PASS requires |
 |---|---|---|
@@ -532,10 +550,11 @@ its sample on an AsyncUpdater; playback engagement is covered by `--selftest-ses
 | `pianoIsSampler` | the Piano preset inserted a `te::SamplerPlugin` | 1 |
 | `pianoFileExists` | the self-rendered CC0 piano one-shot exists in `%APPDATA%\Forge\library` | 1 |
 | `noteCount` / `clipHasNotes` | a seeded demo clip holds notes | `noteCount>0`, `clipHasNotes=1` |
+| `renderPeak` / `renderAudible` (W24) | the rendered Sampler-track stem's peak; three-state PASS/FAIL/SKIP (PASS = peak > 0.01; FAIL = a stem rendered but SILENT — a real ingestion regression; SKIP = the render infrastructure produced no usable stem, logged, non-blocking) | `renderAudible != FAIL` |
 
-> Verified 2026-07-02: **PASS** (all legs 1, `noteCount=16`), bringing the floor to **23 gates**. Known
-> follow-up (QC NIT, not gated): the gate proves the piano one-shot exists on disk but not that the Sampler
-> *ingested* it (an async load) — a render/ingestion leg would prove the final audible link.
+> Verified 2026-07-02: **PASS** (all legs 1, `noteCount=16`), bringing the floor to **23 gates**. The former
+> known follow-up ("proves the one-shot exists on disk but not that the Sampler *ingested* it") is CLOSED by
+> the W24 render leg — verified 2026-07-22 `renderAudible=PASS`, `renderPeak≈0.55`.
 
 ## `Forge --selftest-sendarrange` (Session → Arrangement "Send to" bridge)
 
@@ -859,11 +878,30 @@ engine reader is tempo-INDEPENDENT (ticks→beats), so notes land on file beats 
 | `emptyGuard` | a non-existent `.mid` path degrades to `{}` (the pre-guard) | 1 |
 | `notelessGuard` | an EXISTING but note-less `.mid` degrades to `{}` (the `createClipFromFile`-null branch — the real graceful-degradation path) | 1 |
 
+### W24 addition (B1 — multi-track fan-out, `ProjectSession::importMidiFileMultiTrack`)
+
+The new seam parses the WHOLE file first (`te::readFileToMidiList` — the engine's own reader, so the
+tempo-independent ticks→beats mapping and per-(track×channel) decomposition are identical to the single-clip
+path) and lands one born-audible clip per non-empty part on consecutive tracks, creating tracks on demand.
+The leg writes a 4-chunk `.mid` — three note-bearing tracks (2/3/5 notes on channels 1/2/3) plus a CC-only
+track that must be SKIPPED (never a silent clip):
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `mtWrote` | the 4-chunk test `.mid` was written | 1 |
+| `mtClipCount` / `mtCountOk` | 4 source chunks land exactly 3 clips (the CC-only skip proved) | 3 / 1 |
+| `mtNotesOk` | per-clip note counts are 2/3/5 in destination order | 1 |
+| `mtTracksOk` | the clips sit on consecutive tracks from `firstTrackIndex` (on-demand creation included) | 1 |
+| `mtInstrumentsOk` | every landed track is born-audible (a synth at the head) | 1 |
+| `mtSingleOk` | the single-track 4-note file through the NEW seam lands exactly ONE clip (regression control vs the old path) | 1 |
+
 > `-midifile` CONTAINS `-midi` → placed **before** `--selftest-midi` (longest-first, alongside `-midilearn`/
-> `-midiinput`) in both ladders; verify `mode=midifile`. **Floor is now 38 gates.** The real UI drop path
+> `-midiinput`) in both ladders; verify `mode=midifile`. The real UI drop path
 > (accept `mid;midi` in `isInterestedInFileDrag`; dispatch audio vs MIDI by extension in `handleSlotFilesDropped`
-> + the arrange `onFilesDropped`) is proved by adversarial QC, not by a gate. v1 imports only the FIRST
-> track/channel of a multi-track file (a documented limitation); the 4OSC gives pitches (a MIDI file is melodic).
+> + the arrange `onFilesDropped`) is proved by adversarial QC, not by a gate. **W24 (B1):** the browser filter
+> now includes `*.mid;*.midi`, and both the browser double-click and the arrange drop route `.mid`/`.midi`
+> through `importMidiFileMultiTrack` (a single-track file still lands exactly one clip). The 4OSC gives
+> pitches (a MIDI file is melodic). `importMidiFile`/`importMidiIntoSlot` keep their single-clip contracts.
 
 ## `Forge --selftest-stepclip` (Step Clip drum-grid seam, W20 / frontier Wave 10)
 
@@ -929,13 +967,14 @@ non-silent.
 | `idempotentReturnedFalse` / `idempotentStillEight` | a 2nd `ensureDrumKitInstrument` no-ops (returns false; still 8 sounds — never stacks) | 1 / 1 |
 | `filesOk` | the 8 `drum_<note>.wav` one-shots exist on disk > 1 KB | 1 |
 | `audioNonSilent` | each generated one-shot DECODES to non-silent PCM (peak > 0.05) — proves the generators produce real audio, not just valid files (on a cold cache this exercises the full generate path) | 1 |
+| `renderPeak` / `renderAudible` (W24, B3) | a one-kick-note arrange clip on the drum track, rendered via `Exporter::renderStems` in a deferred phase (`finishDrumKitSelftest`, after a 600 ms async-ingestion pump); three-state PASS/FAIL/SKIP, same semantics as `--selftest-demo` | `renderAudible != FAIL` |
 
 > `-drumkit` is collision-free (no substring overlap) — placed before the bare `--selftest` in both ladders;
-> verify `mode=drumkit`. **Floor is now 40 gates.** All audio is self-rendered CC0 into `%APPDATA%\Forge\library`
+> verify `mode=drumkit`. All audio is self-rendered CC0 into `%APPDATA%\Forge\library`
 > (no committed binaries; deterministic seeded synthesis; the piano one-shot is byte-identical after the
-> shared-writer refactor). A full note-on → engine-render (Sampler-ingestion) leg stays parked (W09/W10 class);
-> the mixed-clip "first-instrument-wins" limitation (a melodic pitch played through a drum kit is silent) is a
-> documented v1 behavior.
+> shared-writer refactor). The formerly-parked note-on → engine-render (Sampler-ingestion) leg SHIPPED in
+> W24 — verified 2026-07-22 `renderAudible=PASS`, `renderPeak≈0.65`. The mixed-clip "first-instrument-wins"
+> limitation (a melodic pitch played through a drum kit is silent) remains a documented v1 behavior.
 
 ## `Forge --selftest-nudge` (piano-roll keyboard nudge)
 
@@ -1098,9 +1137,61 @@ source span) then drives the SAME `setStart(preserveSync)` left-edge crop.
 | `audioNoOpWhenTight` | a second trim on the now-tight clip declines | 1 |
 | `audioUndoReverts` | one `Edit::undo` restores start AND offset (content-level, never `canRedo`) | 1 |
 
+### W24 additions (B5 — both W23 known limits closed)
+
+**Speed-ratio legs.** The audio helper now implements the speed-correct advance `Δ = Ts/speed − offset`
+(engine ground truth: `AudioClipBase::clipTimeToSourceFileTime` — `sourceTime = (t + offset) · speed`) with a
+speed-mapped scan window, instead of declining on a non-unity ratio. The leg stretches the same silence+sine
+source to **speed 2** and **pre-seeds offset = 0.25 s** — load-bearing, because at offset 0 the correct and
+the dimensionally-wrong `(Ts − offset)/speed` formulas coincide; the ±0.02 windows fail the naive answer
+(start 0.375 s) and pass only the correct one (start 0.25 s / offset 0.50 s). Auto-tempo clips are now
+**explicitly declined with a logged WARN** (their offset is reinterpreted in beats — a latent W23 hole where
+one could slip past the old unity-speed guard and mis-trim).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `speedImported` / `speedTrimmed` | the stretched clip exists; the helper trimmed it (no longer declines) | 1 / 1 |
+| `speedStartCorrect` / `speedOffsetCorrect` | start ≈ 0.25 s AND offset ≈ 0.50 s — only the `Δ = Ts/speed − offset` formula lands both | 1 / 1 |
+| `speedEndPreserved` / `speedNoOpWhenTight` / `speedUndoReverts` | end fixed; second trim declines; undo restores start AND offset (content-level, never `canRedo`) | 1 / 1 / 1 |
+
+**CC-only MIDI leg.** The MIDI helper's empty-guard is relaxed from "no notes" to "no events at all", so a
+controller-only clip (CC/sysex, zero notes) trims to its first event (`MidiList::getFirstBeatNumber` already
+folds notes + CC + sysex). The leg seeds one mod-wheel event at content beat 3 (14-bit value convention).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `ccClipCreated` / `ccSeeded` | a clip with 1 CC event and ZERO notes | 1 / 1 |
+| `ccTrimmed` / `ccStartMovedForward` / `ccNoLeadingSilence` | the trim advances (no silent no-op) and the visible start lands on content beat 3 | 1 / 1 / 1 |
+| `ccEndPreserved` / `ccUndoReverts` | end fixed; undo restores start AND offset | 1 / 1 |
+
 > The trim item now shows for **both** MIDI and audio clips (`ArrangeView::trimClipStart` dispatches on type),
 > and the piano roll has a **Trim** button in its nav strip (a clip/arrange-level edit, so the shell performs
-> it and rebuilds the arrange surface). **Known limits:** MIDI trims to the first *note* — a controller-only
-> clip (no notes) no-ops; audio trim **declines on a non-unity speed ratio**, because the clip offset is in
-> edit-seconds while the silence scan finds a source-second (`Δ = Ts/speed − offset`), and only `speed == 1`
-> makes that mapping unambiguous. Collision-free; before bare `--selftest`; verify `mode=trim`.
+> it and rebuilds the arrange surface). Both W23 known limits (note-only MIDI trim; unity-speed-only audio
+> trim) are CLOSED as of W24; the remaining documented decline is **auto-tempo** audio clips (logged WARN).
+> Collision-free; before bare `--selftest`; verify `mode=trim`.
+
+## `Forge --selftest-reload` (W24 — the save→reload round-trip)
+
+The acceptance gate for **B2 — proven disk persistence**: the FIRST gate that ever re-reads state from
+**disk** (every other gate asserts in-memory state only, so a whole class of "persists in memory, silently
+lost on save/reload" failures was unprovable before it). Synchronous. Seeds distinctive values through the
+real seams, `session.saveAs()` to a temp `.tracktionedit`, **mutates every seeded value away in memory
+(unsaved)**, then reopens the file through the REAL `swapProject` path (full view teardown + `openProject` +
+rebind — the same path the File ▸ Open dialog drives) and asserts every value reads back through the same
+seams. The mutate-away step is load-bearing: if the reload silently failed and the old in-memory edit
+survived, the asserts would read the mutated values and FAIL — asserting seeded values right after a save
+would pass whether or not anything was read back from disk.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `seededOk` | scene 0 renamed, a 2-note slot clip at (0,0), Toggle launch mode, per-clip launch Q (1/8), a `trackNext` follow action (type BEFORE duration — the W11 auto-plant gotcha), a 5/4 time signature — all read back in memory pre-save | 1 |
+| `savedOk` / `openOk` | `saveAs` succeeded; `openProject` (inside `swapProject`) returned true | 1 / 1 |
+| `sceneNameBack` | the scene name reads "ReloadScene" again (the in-memory mutation set "NotSaved") | 1 |
+| `launchModeBack` / `launchQBack` | Toggle mode + the 1/8 per-clip override (flag AND type) survived the round-trip | 1 / 1 |
+| `followBack` | the `trackNext` follow action survived | 1 |
+| `timeSigBack` | beat 0 reads "5/4" again (mutated to 4/4 in memory pre-reload) | 1 |
+| `slotFilledBack` / `notesAfterReload` / `noteCountBack` | slot (0,0) is filled and its MidiClip holds exactly the 2 seeded notes | 1 / 2 / 1 |
+
+> `-reload` is collision-free (no substring overlap with any existing gate name) — placed before the bare
+> `--selftest` in both ladders; verify `mode=reload`. **Floor is now 47 gates.** Undo history does NOT survive
+> a project swap (by design) — the gate asserts nothing about it. The temp file is deleted after the report.

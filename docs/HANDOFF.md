@@ -1,8 +1,32 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-10**, end of **"W23 — hands-on
-> follow-ups"**: four maintainer requests from driving the built app, all shipped + headless-verified.
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-22**, end of **"W24 — backlog
+> burn-down"**: the first wave driven straight off **[BACKLOG.md](BACKLOG.md)** — five "Ready to build"
+> items shipped in one pass (3 parallel file-disjoint agents + the orchestrator owning `main.cpp`), plus two
+> standalone landings earlier the same day. **(B1) MIDI import** — new `ProjectSession::importMidiFileMultiTrack`
+> (rides the engine's own `te::readFileToMidiList` parse, one born-audible clip per non-empty source
+> track/channel on consecutive tracks, CC-only parts skipped); browser filter now shows `*.mid;*.midi` and
+> both browser double-click + arrange drop route through it. **(B2) `--selftest-reload`** — the FIRST gate
+> to re-read state from DISK (seed → saveAs → **mutate-away in memory** → reopen via the real `swapProject`
+> → assert; the mutate-away step is what makes a silent reload failure FAIL). **(B3) render-audibility
+> legs** — `--selftest-demo`/`-drumkit` now render a stem after pumping the Sampler's async ingestion and
+> assert non-silence (verified genuine PASS, peaks ≈0.55/0.65 — the W09 ingestion follow-up + W22 drum-kit
+> render deferral both closed). **(B5) both W23 trim limits closed** — audio trim is speed-correct
+> (`Δ = Ts/speed − offset`, source-verified; auto-tempo now declined with a logged WARN — a latent
+> mis-trim hole) and MIDI trim handles CC-only clips. **(B7) Modulate polish** — Edit ▸ Modulate… (Ctrl+M)
+> + a modulated-parameter accent dot on the mixer/tray/Session strips (edge-compared cache on existing
+> polls, no new timers). Earlier same-day: **B6 groundwork** (`13a1f0f` — four self-rendered CC0 melodic
+> voices: PluckBass/Pad/Bell/Clav + `InstrumentPreset` plumbing; API-only, no UI assigns them yet) and the
+> **B8 curated launch-quantise submenu** (`14c2c61` — 8 musical values + "More…", ids enum-keyed). Build
+> **clean (0 warnings)** · **47/47 selftest floor** (46 → 47: `+reload`; 5 gates extended in place) ·
+> **12/12 screenshots** (B7 dot visually confirmed in `mix`). ⚠ **NOT pushed — the whole batch is committed
+> locally on `main`, push HELD for the maintainer's OK.** Remaining on the backlog: item 0 (Redo — needs the
+> maintainer's A/B/C call), B4 (capture count-in, its own wave), B6's browser→slot interaction, B8 leftovers.
+> Full record → [devlog/wave-24-backlog-burndown.md](devlog/wave-24-backlog-burndown.md).
+
+> The prior wave, **W23 — hands-on
+> follow-ups**: four maintainer requests from driving the built app, all shipped + headless-verified.
 > **(1) Piano roll** — the drawer roll gained its OWN zoomable beat→pixel time axis (decoupled from the
 > shared arrange `TimelineView`; Ctrl/Shift+wheel + Time/Pitch/Fit buttons + a horizontal scrollbar), a
 > **moving playhead** overlay (30 Hz, `timeTempo` clock colour), a clearer **grid** (bar/beat/sub-beat
@@ -37,7 +61,8 @@
 > `Δ = Ts/speed − offset`, NOT `(Ts − offset)/speed`; they agree only at `speed == 1`, so the helper **declines
 > on a non-unity speed ratio** rather than mis-trim a stretched clip. **Remaining interaction-only:** the
 > `CallOutBox` launch itself and the OS delivering a real wheel event. **Remaining known limits:** MIDI trim
-> keys on the first *note* (a controller-only clip no-ops); audio trim is unity-speed only.
+> keys on the first *note* (a controller-only clip no-ops); audio trim is unity-speed only. *(Both limits
+> CLOSED in W24 — see the current block above.)*
 
 > The prior wave, **W22 — buildable-backlog
 > follow-ups**: a sweep through the "immediate follow-ups + buildable-now" items after the frontier program

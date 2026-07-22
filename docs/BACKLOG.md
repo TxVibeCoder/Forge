@@ -15,6 +15,12 @@
 > melodic voices + `InstrumentPreset` plumbing; the browser→slot interaction is still open, see B6) and the
 > **B8 curated launch-Q submenu** (`14c2c61`). Build clean, **46/46 floor re-verified** at `14c2c61`.
 > Local `main` is ahead of `origin/main` (push held for the maintainer's OK).
+>
+> **Update 2026-07-22 later (W24 wave):** **B1, B2, B3, B5, B7 ALL SHIPPED** in one backlog-burn-down wave
+> (3 file-disjoint agents + orchestrator; build clean; **47/47 floor** — `+--selftest-reload`; 12/12
+> screenshots; full record → `devlog/wave-24-backlog-burndown.md`). Their sections below are now stubs.
+> **Still open: item 0 (Redo — maintainer decision), B4 (capture count-in), B6's remaining interaction, the
+> B8 leftovers.** Push still held.
 
 ---
 
@@ -69,84 +75,27 @@ disjoint files and can be fanned out in one wave (see the territory map at the b
 
 ---
 
-### B1 — MIDI import: multi-track files + browser support ⇄ parallel-safe
-**Value: high (a papercut you hit on the first real `.mid` you drag in). Effort: medium. Risk: low.**
-
-Two related gaps in the MIDI-file import shipped post-W20.
-
-- **Verified — import collapses to ONE clip.** Both `ProjectSession::importMidiIntoSlot`
-  (`src/services/files/ProjectSession.cpp:1104`) and `importMidiFile` (`:1149`) call
-  `te::createClipFromFile (file, *track, false)` (`:1165`), which returns a single `te::MidiClip::Ptr` onto a
-  single track. A multi-track / multi-channel `.mid` therefore does **not** fan out — you get one clip.
-- **Verified — the browser cannot see `.mid` at all.**
-  `juce::WildcardFileFilter audioFilter { "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3", … }`
-  (`src/ui/browser/BrowserView.h:44`). No `.mid`/`.midi`, so browser double-click import is impossible.
-
-**Build:**
-1. A `ProjectSession::importMidiFileMultiTrack(file, start, firstTrackIndex)` seam that reads the file's
-   track/channel structure (`juce::MidiFile` — parse *before* handing to the engine) and lands **one clip per
-   source track/channel** on consecutive Forge tracks, each born-audible.
-2. Widen the browser filter to include `*.mid;*.midi` and route a double-click / drag to the MIDI import path
-   (the dispatch layer already branches audio-vs-MIDI by extension — reuse it).
-
-**Gate `--selftest-midifile` (extend, no new gate):** write a **3-track** `.mid` (distinct note counts per
-track), import it, assert 3 clips on 3 consecutive tracks with the right per-track note counts; assert the
-single-track path still yields exactly 1 clip (the regression control).
-
-**Footguns:** MIDI beats are content-relative (beat 0 = clip start); the engine's `createClipFromFile` is
-tempo-**independent** (ticks→beats), so notes land on file beats regardless of edit tempo — preserve that.
-Don't `setLoopRangeBeats({})` (re-asserts auto-tempo).
-
-**Territory:** `ProjectSession.{h,cpp}`, `BrowserView.{h,cpp}`, `main.cpp` (gate + dispatch).
+### B1 — MIDI import: multi-track files + browser support — ✅ SHIPPED (W24)
+`ProjectSession::importMidiFileMultiTrack` (over the engine's own `te::readFileToMidiList` parse); browser
+filter + double-click + arrange drop serve `.mid;.midi`; `--selftest-midifile` +6 legs. Honest edges (flagged,
+not built): a single format-1 source track using multiple channels yields one clip per channel (the engine's
+canonical decomposition); the file's tempo/meter map is NOT imported (product decision); slot-side multi-track
+fan-out out of scope. Details → `devlog/wave-24-backlog-burndown.md`.
 
 ---
 
-### B2 — Prove persistence: save→reload round-trip gate legs ⇄ parallel-safe
-**Value: high (closes a whole silent-failure class). Effort: low. Risk: low.**
-
-- **Verified — no gate ever reloads from disk.** `openProject` / `session.saveAs` appear in `src/main.cpp`
-  only at `:2095` and `:2120`, inside the `FileChooser` dialog callbacks. Every gate asserts **in-memory**
-  state only.
-
-Several shipped features are proven in memory but never proven to survive a write-and-reload of the
-`.tracktionedit`: scene names/order, `forgeLaunchMode`, per-clip launch quantise, follow actions, step-clip
-cells, time signatures. Disk persistence is *probably* guaranteed by the engine's whole-tree serializer —
-but "probably" is exactly what a gate is for.
-
-**Build:** one new gate `--selftest-reload`: seed a distinctive state (rename a scene, set a per-clip launch
-Q, a Toggle launch mode, a follow action, a 5/4 time sig), `session.saveAs(tempFile)`, then
-`session.openProject(tempFile)`, and assert **every** value reads back. Cheap, high-leverage.
-
-**Footguns:** the project-swap path tears down views + drops the piano-roll/step-grid clip Ptrs
-(`swapProject`); drive it through the **real** seams, not a bypass. Undo history does not survive a swap (by
-design — don't assert on it).
-
-**Territory:** `main.cpp` only.
+### B2 — Prove persistence: save→reload round-trip gate legs — ✅ SHIPPED (W24)
+`--selftest-reload` (floor 46 → 47): seed via real seams → `saveAs` → **mutate-away in memory** → reopen via
+the real `swapProject` → assert everything reads back. The mutate-away step is the load-bearing wall against
+a false pass. Contract → `../tests/SELFTEST.md`.
 
 ---
 
-### B3 — Render-audibility gate legs (does it actually make sound?) ⇄ parallel-safe
-**Value: high (closes the "it's silent and we'd never know" class). Effort: medium. Risk: low.**
-
-- **Verified — the demo gate proves insertion, never ingestion.**
-  `pass = kickIsSynth && pianoIsSampler && pianoFileExists && clipHasNotes` (`src/main.cpp:7346`). It asserts
-  the `SamplerPlugin` is *inserted* (`:7332`) and the CC0 one-shot *exists on disk* (`:7334`) — but never that
-  the Sampler **ingested** the sample (an async load), i.e. never that a note renders audio.
-
-The precedent for the fix already exists: `--selftest-sendarrange`'s W16 leg renders a stem via the
-synchronous `Exporter::renderStems` and samples its peak with `readPeakMagnitude`, folding in as a three-state
-`PASS`/`FAIL`/`SKIP` (SKIP is honest and non-blocking).
-
-**Build:** apply that same render+peak leg to (a) `--selftest-demo` (the Sampler path — proves ingestion),
-(b) `--selftest-drumkit` (the deferred W22 leg), and (c) the four W24 melodic voices (`13a1f0f` — PluckBass /
-Pad / Bell / Clav, currently ungated). Reuse the existing helpers verbatim.
-
-**Footguns:** the Sampler loads on an `AsyncUpdater` — you must yield/pump the message loop before rendering
-or you'll measure silence and call it a real failure. Keep the three-state `SKIP` semantics; never fabricate a
-`PASS` when the render infrastructure can't produce a file.
-
-**Territory:** `main.cpp` only. **⚠ Conflicts with B2** (both are `main.cpp`-only) — serialize those two, or
-give them to the same CLI.
+### B3 — Render-audibility gate legs — ✅ SHIPPED (W24) for demo + drumkit
+Deferred render phases on `--selftest-demo` / `--selftest-drumkit` (600 ms async-ingestion pump →
+`Exporter::renderStems` → peak; three-state PASS/FAIL/SKIP). Verified genuine PASS (peaks ≈0.55/0.65).
+**Remaining slice:** the four W24 melodic voices (`13a1f0f` — PluckBass/Pad/Bell/Clav) are still ungated —
+apply the same leg pattern when B6 surfaces them (they are API-only until then).
 
 ---
 
@@ -170,21 +119,11 @@ parallel-safe** with anything touching the capture path.
 
 ---
 
-### B5 — Finish the W23 trim residuals ⇄ parallel-safe
-**Value: medium. Effort: low. Risk: low.**
-
-Two documented limits shipped knowingly in `af0bd78`:
-
-1. **Audio trim declines on a non-unity speed ratio.** A clip's `offset` is in **edit**-seconds while the
-   silence scan yields a **source**-second, so the advance is `Δ = Ts/speed − offset`, *not*
-   `(Ts − offset)/speed`; they agree only at `speed == 1`. `forge::audioedit::trimLeadingSilence`
-   (`src/engine/AudioEditHelpers.h`) guards on `speed == 1` and returns false otherwise.
-   **Build:** implement the speed-correct formula + a gate leg with a stretched clip.
-2. **MIDI trim keys on the first *note*.** A controller-only clip (CC/sysex, zero notes) no-ops, even though
-   `MidiList::getFirstBeatNumber()` already accounts for CC/sysex. **Build:** relax the
-   `getNumNotes() == 0` guard to "no events at all" and add a CC-only gate leg.
-
-**Territory:** `AudioEditHelpers.h`, `MidiEditHelpers.h`, `main.cpp` (gate legs).
+### B5 — Finish the W23 trim residuals — ✅ SHIPPED (W24)
+Speed-correct audio trim (`Δ = Ts/speed − offset`, source-verified against `clipTimeToSourceFileTime`;
+gate leg pre-seeds a non-zero offset so the naive formula fails) + CC-only MIDI trim. Bonus hardening:
+**auto-tempo clips are now a logged decline** (their offset is beat-domain — the old unity-speed guard could
+let one slip through and mis-trim; a latent W23 hole, closed). Remaining documented decline: auto-tempo.
 
 ---
 
@@ -209,16 +148,12 @@ B1** on `BrowserView`.
 
 ---
 
-### B7 — Modulate (LFO) UI polish — Fable's call
-**Value: low-medium (discoverability). Effort: low. Risk: low.**
-
-- **Verified — the feature exists but is keyboard-only.** Ctrl+M → `showModulateMenu()`
-  (`src/main.cpp:2054` → `:2363`). There is no menu-bar entry and no indicator that a parameter is modulated.
-
-**Build (Fable owns the calls):** a menu-bar entry, a shortcut review, and a modulated-parameter indicator on
-the affected control. Purely additive.
-
-**Territory:** `ForgeMenuModel`, the mixer/tray strip widgets, `main.cpp`.
+### B7 — Modulate (LFO) UI polish — ✅ SHIPPED (W24, Fable calls implemented)
+Edit ▸ Modulate… (Ctrl+M, grouped with MIDI Learn) + a modulated-parameter accent dot (5px on a panelBg
+backing disc, `paintOverChildren`, edge-compared cache riding each surface's existing poll) on MixerView
+Channel/Return strips, ChannelTray, and SessionMixerStrip. Gated (`-menu` count+shortcut pin;
+`-sessionmixer` +3 indicator legs) and lit in the screenshot demo. Skipped by design: the master strip
+(unreachable from `showModulateMenu`); send knobs / per-plugin-param indicators (additive later).
 
 ---
 
@@ -253,23 +188,19 @@ edits them (CLAUDE.md, Wave Orchestration Rule, Pillar 3).
 
 | item | owns | conflicts with |
 |---|---|---|
-| B1 MIDI import | `ProjectSession.{h,cpp}`, `BrowserView.{h,cpp}` | B6 (BrowserView) |
-| B2 save→reload | *(gate only)* | B3 (both main.cpp-only) |
-| B3 render legs | *(gate only)* | B2 |
 | B4 capture count-in | `RecordController`, capture path, `TransportBar` | — |
-| B5 trim residuals | `AudioEditHelpers.h`, `MidiEditHelpers.h` | — |
-| B6 instrument library | `BrowserView`, `InstrumentSamples`, `SessionView` | B1 (BrowserView) |
-| B7 Modulate polish | `ForgeMenuModel`, strip widgets | — |
+| B6 instrument library (remaining) | `BrowserView`, `PluginHost`, `SessionView` | — |
 
-**A clean 3-agent wave:** B1 + B5 + B7 (fully disjoint), with B2/B3 folded into the orchestrator's own
-`main.cpp` pass at consolidation.
+*(The W24 wave consumed the rest of this table — B1 + B5 + B7 ran as the suggested 3-agent fan-out with
+B2/B3 in the orchestrator's `main.cpp` pass, exactly as planned. B4 and B6-remaining don't conflict and
+could even run together, but B4 wants its own focused wave per its risk note.)*
 
 ---
 
 ## The process (unchanged)
 
 Build → **one** integration build (`cmake --build .\build --config Debug`; kill `Forge.exe` first) → the
-**full selftest floor** (currently 46 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
+**full selftest floor** (currently 47 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
 docs (`HANDOFF` / `STATUS` / `CLAUDE.md` counts / `SELFTEST.md` / a devlog) → **sanitize scan** → scoped
 commit → **hold the push for the maintainer's OK**.
 

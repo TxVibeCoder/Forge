@@ -62,7 +62,13 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY-SIX gates as of W23 (hands-on follow-ups):
+- **Selftest floor** (must pass after any change — FORTY-SEVEN gates as of W24 (backlog burn-down):
+  W24 added `--selftest-reload` (the save→reload round-trip — the first gate that re-reads state from DISK;
+  its mutate-away-before-reopen step is load-bearing) and extended five gates in place: `-midifile` (+6
+  multi-track fan-out legs, B1), `-demo`/`-drumkit` (+deferred render legs proving Sampler INGESTION, B3 —
+  three-state PASS/FAIL/SKIP, pump the async load first), `-trim` (+speed-ratio legs with a pre-seeded
+  non-zero offset — at offset 0 the correct and naive formulas coincide — and a CC-only leg, B5),
+  `-sessionmixer` (+3 modulated-indicator legs, B7), `-menu` (Edit count 3→4 + the Ctrl+M shortcut pin, B7);
   W21 added `--selftest-modifier` (the LFO / `ModifierHelpers` seam) + `--selftest-drumkit` (the self-rendered
   CC0 drum-kit Sampler that Step Clips are now born with); W22 added `--selftest-nudge` (piano-roll keyboard nudge,
   `forge::midiedit::shiftNoteStarts`) + `--selftest-retrocapture` (`ProjectSession::commitRetrospectiveToSlot` —
@@ -82,8 +88,8 @@ conflict, surface it.
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`,
-  `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`;
-  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim` are collision-free —
+  `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`, `--selftest-reload`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload` are collision-free —
   placed before bare `--selftest`
   (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).
   ⚠ new gate names that CONTAIN an existing name must be
