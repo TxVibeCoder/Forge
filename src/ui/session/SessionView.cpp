@@ -570,21 +570,72 @@ void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const Mous
         modeMenu.addItem (idModeToggle,  "Toggle",  true, currentMode == LaunchMode::Toggle);
         menu.addSubMenu ("Launch mode", modeMenu);
 
-        // W2 per-clip launch-quantise: "Global (inherit)" + one item per LaunchQType. Labels come from the
-        // SAME te::getLaunchQTypeChoices() the global TransportBar combo uses; the ticked item keys off the
-        // real has-override test (clipInheritsGlobalLaunchQuantisation), not a value compare.
+        // W2 per-clip launch-quantise, curated in W24 (Fable UI call). "Global (inherit)" + a curated musical
+        // subset you can scan mid-performance, then a "More..." child submenu carrying EVERY remaining value
+        // (nothing is removed - the 23-value long tail is structured away, not minimised). Labels come from the
+        // SAME te::getLaunchQTypeChoices() the global TransportBar combo uses (never guessed strings); the ticked
+        // item keys off the real has-override test (clipInheritsGlobalLaunchQuantisation), not a value compare.
+        //
+        // DISPATCH-SAFE REORG (load-bearing): every leaf id is idLaunchQBase + (int) LaunchQType - i.e. the id
+        // encodes the ENUM VALUE, never the item's on-screen position - so relocating a value into "More..."
+        // cannot change what it dispatches to. The async handler's single range test
+        // (idLaunchQBase .. idLaunchQBase + count) already covers both menu levels, unchanged.
         PopupMenu launchQMenu;
         const auto launchQChoices  = te::getLaunchQTypeChoices();
         const bool inheritsGlobalQ = session.clipInheritsGlobalLaunchQuantisation (trackIdx, sceneIdx);
         const auto globalQ         = session.getGlobalLaunchQuantisation();
         const auto clipQ           = session.getClipLaunchQuantisation (trackIdx, sceneIdx);
+
         launchQMenu.addItem (idLaunchQInherit,
                              "Global (inherit - " + launchQChoices[(int) globalQ] + ")",
                              true, inheritsGlobalQ);
         launchQMenu.addSeparator();
+
+        // The curated subset, in musical order (coarsest -> finest). Each entry is an ENGINE enum value; its
+        // display label is pulled from launchQChoices[(int) v]. Straight divisions only - triplet/dotted
+        // variants (and the 8-bar / 1/32 / 1/64 extremes) live under "More...".
+        const te::LaunchQType kCuratedLaunchQ[] =
+        {
+            te::LaunchQType::none,       // "None"  -> shown as "None (free)": launches with no grid
+            te::LaunchQType::fourBars,   // "4 Bars"
+            te::LaunchQType::twoBars,    // "2 Bars"
+            te::LaunchQType::bar,        // "1 Bar"
+            te::LaunchQType::half,       // "1/2"
+            te::LaunchQType::quarter,    // "1/4"
+            te::LaunchQType::eighth,     // "1/8"
+            te::LaunchQType::sixteenth,  // "1/16"
+        };
+
+        auto isCurated = [&kCuratedLaunchQ] (te::LaunchQType v)
+        {
+            for (auto c : kCuratedLaunchQ)
+                if (c == v)
+                    return true;
+            return false;
+        };
+
+        // One item builder for BOTH levels: id keyed to the enum value, tick keyed to the real override state.
+        auto addLaunchQItem = [&] (PopupMenu& m, te::LaunchQType v)
+        {
+            const int idx = (int) v;
+            String label = launchQChoices[idx];
+            if (v == te::LaunchQType::none)
+                label = "None (free)";                       // clarify: 'none' == launch immediately, no grid
+            m.addItem (idLaunchQBase + idx, label, true,
+                       ! inheritsGlobalQ && v == clipQ);
+        };
+
+        for (auto v : kCuratedLaunchQ)
+            addLaunchQItem (launchQMenu, v);
+
+        // "More..." carries every value NOT in the curated set, in the engine's own enum order. Ids stay
+        // idLaunchQBase + (int) v, so each dispatches identically to its old flat-list self.
+        PopupMenu moreLaunchQMenu;
         for (int i = 0; i < launchQChoices.size(); ++i)
-            launchQMenu.addItem (idLaunchQBase + i, launchQChoices[i], true,
-                                 ! inheritsGlobalQ && static_cast<te::LaunchQType> (i) == clipQ);
+            if (! isCurated (static_cast<te::LaunchQType> (i)))
+                addLaunchQItem (moreLaunchQMenu, static_cast<te::LaunchQType> (i));
+        launchQMenu.addSubMenu ("More...", moreLaunchQMenu);
+
         menu.addSubMenu ("Launch quantise", launchQMenu);
 
         menu.addSeparator();
