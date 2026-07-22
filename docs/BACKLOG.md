@@ -10,6 +10,11 @@
 >
 > **Baseline at time of writing:** tip `af0bd78` · build clean (0 warnings) · **46/46 selftest floor** ·
 > 12/12 screenshots · local `main` == `origin/main`.
+>
+> **Update 2026-07-22 (W24):** two items landed — **B6 groundwork** (`13a1f0f`: the four self-rendered CC0
+> melodic voices + `InstrumentPreset` plumbing; the browser→slot interaction is still open, see B6) and the
+> **B8 curated launch-Q submenu** (`14c2c61`). Build clean, **46/46 floor re-verified** at `14c2c61`.
+> Local `main` is ahead of `origin/main` (push held for the maintainer's OK).
 
 ---
 
@@ -132,8 +137,9 @@ The precedent for the fix already exists: `--selftest-sendarrange`'s W16 leg ren
 synchronous `Exporter::renderStems` and samples its peak with `readPeakMagnitude`, folding in as a three-state
 `PASS`/`FAIL`/`SKIP` (SKIP is honest and non-blocking).
 
-**Build:** apply that same render+peak leg to (a) `--selftest-demo` (the Sampler path — proves ingestion), and
-(b) `--selftest-drumkit` (the deferred W22 leg). Reuse the existing helpers verbatim.
+**Build:** apply that same render+peak leg to (a) `--selftest-demo` (the Sampler path — proves ingestion),
+(b) `--selftest-drumkit` (the deferred W22 leg), and (c) the four W24 melodic voices (`13a1f0f` — PluckBass /
+Pad / Bell / Clav, currently ungated). Reuse the existing helpers verbatim.
 
 **Footguns:** the Sampler loads on an `AsyncUpdater` — you must yield/pump the message loop before rendering
 or you'll measure silence and call it a real failure. Keep the three-state `SKIP` semantics; never fabricate a
@@ -187,10 +193,16 @@ Two documented limits shipped knowingly in `af0bd78`:
 
 - **[inherited]** (W09 scope deferral, **not re-verified**): blocked on a missing **browser → Session-slot**
   interaction — there is no way to drop/assign a library instrument onto a track from the browser.
+- **Groundwork SHIPPED (W24, `13a1f0f`):** four self-rendered CC0 melodic voices — PluckBass / Pad / Bell /
+  Clav (`InstrumentSamples::ensureMelodicOneShot`, `src/engine/dsp/InstrumentSamples.{h,cpp}`), each a
+  deterministic one-shot rendered at `kRootNote`, plus `PluginHost::InstrumentPreset::{PluckBass,Pad,Bell,
+  Clav}` wired through a shared `insertSamplerOneShot` helper (the Piano's chromatic-Sampler recipe,
+  factored). **Nothing user-facing assigns these yet**, and no gate leg renders them — fold the render proof
+  into the B3 pass.
 
-**Build:** the interaction first (browser item → track/slot), then the library (self-rendered CC0 one-shots
-only — a public AGPLv3 repo; **no third-party packs**, a locked decision). `InstrumentSamples` already
-renders CC0 content; extend it rather than vendoring anything.
+**Build (remaining):** the interaction (browser item → track/slot) + a UI surface that assigns an
+`InstrumentPreset` to a track, then any further library growth. Self-rendered CC0 one-shots only — a public
+AGPLv3 repo; **no third-party packs**, a locked decision. Extend `InstrumentSamples`, never vendor.
 
 **Territory:** `BrowserView`, `PluginHost`/`InstrumentSamples`, `SessionView`, `main.cpp`. **⚠ Conflicts with
 B1** on `BrowserView`.
@@ -214,7 +226,7 @@ the affected control. Purely additive.
 
 | item | source | note |
 |---|---|---|
-| Curated launch-Q submenu subset | W12 f/u | 23 values is too many; a Fable call. |
+| ~~Curated launch-Q submenu subset~~ | W12 f/u | **SHIPPED W24 (`14c2c61`)** — 8 straight divisions + a "More..." child menu; ids stay enum-keyed. |
 | Immediate-launch for Gate mode | W11 f/u | Instant click-hold under any quantise. |
 | Random / weighted / group follow-actions | W11 f/u | v2 of the follow-action set. |
 | Scene colour / multi-select | W15 f/u | |
