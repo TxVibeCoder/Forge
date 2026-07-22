@@ -58,7 +58,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -447,10 +447,12 @@ public:
         // track-aware) and rebuild so the clip appears. Null-guarded — unwired it is a safe no-op.
         arrangeView.onFilesDropped = [this] (int trackIndex, const File& file, te::TimePosition start)
         {
-            // A .mid/.midi file imports as a MidiClip (born-audible, tempo-independent beats); anything
-            // else routes to the audio importer. Both land on the dropped lane at the drop time.
+            // A .mid/.midi file imports as MidiClips (born-audible, tempo-independent beats) — W24 (B1):
+            // through the MULTI-track seam, so a multi-track file fans out one clip per non-empty source
+            // track/channel downward from the dropped lane (a single-track file lands exactly 1 clip on
+            // that lane, as before). Anything else routes to the audio importer at the drop time.
             const bool ok = file.hasFileExtension ("mid;midi")
-                                ? (session.importMidiFile (file, start, trackIndex) != nullptr)
+                                ? ! session.importMidiFileMultiTrack (file, start, trackIndex).empty()
                                 : (session.importAudioFile (file, start, trackIndex) != nullptr);
             if (! ok)
                 FORGE_LOG_ERROR ("Failed to import dropped file onto arrange track "
@@ -459,12 +461,23 @@ public:
             arrangeView.rebuild();
         };
 
-        // Double-clicking an audio file in the Browser imports it onto the project.
+        // Double-clicking a file in the Browser imports it onto the project. W24 (B1): a .mid/.midi
+        // routes to the MULTI-track MIDI importer (one born-audible clip per non-empty source
+        // track/channel, consecutive tracks from 0 — the seam fires onTracksChanged when it grows the
+        // list); anything else routes to the audio importer. Same extension branch as the Arrange drop.
         browserPanel.onImportFile = [this] (const File& f)
         {
-            clip = session.importAudioFile (f, te::TimePosition());
-            if (clip == nullptr)
-                FORGE_LOG_ERROR ("Failed to import audio file: " + f.getFullPathName());
+            if (f.hasFileExtension ("mid;midi"))
+            {
+                if (session.importMidiFileMultiTrack (f, te::TimePosition()).empty())
+                    FORGE_LOG_ERROR ("Failed to import MIDI file: " + f.getFullPathName());
+            }
+            else
+            {
+                clip = session.importAudioFile (f, te::TimePosition());
+                if (clip == nullptr)
+                    FORGE_LOG_ERROR ("Failed to import audio file: " + f.getFullPathName());
+            }
             session.save();
             rebind();
         };
@@ -973,6 +986,12 @@ public:
         {
             // W23: forge::midiedit::trimLeadingSilence — crop an arrange MIDI clip's silent lead-in.
             MessageManager::callAsync ([this] { runTrimSelftest(); });
+        }
+        else if (mode == SelfTest::reload)
+        {
+            // W24 (B2): the save→reload round-trip — seed, saveAs, mutate away, reopen via swapProject,
+            // assert every seeded value reads back from disk. Synchronous; one callAsync yield suffices.
+            MessageManager::callAsync ([this] { runReloadSelftest(); });
         }
         else if (mode == SelfTest::midifile)
         {
@@ -1517,6 +1536,7 @@ private:
         cb.queryCanUndo  = [this] { auto* e = session.getEdit(); return e != nullptr && e->getUndoManager().canUndo(); };
         cb.queryCanRedo  = [this] { auto* e = session.getEdit(); return e != nullptr && e->getUndoManager().canRedo(); };
         cb.onMidiLearn = [this] { showMidiLearnMenu(); };
+        cb.onModulate  = [this] { showModulateMenu(); };   // B7: menu-bar entry for the Ctrl+M LFO picker
 
         // View — commands shared with the ControlBar; queries read the shell's own state.
         cb.onViewMode      = controlBar.onViewMode;
@@ -2359,7 +2379,7 @@ private:
     // W22: the "Modulate" picker — a track ▸ plugin ▸ param cascade (cloned from showMidiLearnMenu, the
     // Fable-approved MIDI-learn pattern) whose terminal action attaches an LFO (forge::modifier::addLFO) and
     // assigns it to the chosen parameter. The engine seam is gated by --selftest-modifier; this is the UI
-    // entry point (Ctrl+M). Menu wording / placement + a "modulated" indicator are deferred to Fable.
+    // entry point, reachable via Ctrl+M AND Edit ▸ Modulate... (B7); the strips draw a "modulated" dot.
     void showModulateMenu()
     {
         auto* edit = session.getEdit();
@@ -5995,7 +6015,8 @@ private:
     // to it, force ONE refreshControls() tick, then read the strip's controls back through its accessors.
     void runSessionMixerSelftest()
     {
-        bool bound = false, faderOk = false, panOk = false, muteOk = false, soloOk = false;
+        bool bound = false, faderOk = false, panOk = false, muteOk = false, soloOk = false,
+             indicatorOffBaseline = false, indicatorOnAfterAssign = false, indicatorClearsAfterRemove = false;
 
         if (auto* ed = session.getEdit())
         {
@@ -6018,12 +6039,31 @@ private:
                 muteOk  = strip.isMuteOn();
                 soloOk  = strip.isSoloOn();
 
+                // B7 (W24) indicator leg: the modulated-parameter dot must track LFO assignment through
+                // the strip's own refresh path (off baseline -> on after assign -> cleared after remove).
+                // removeLFO is the full teardown (detaches every target), so no unassign call — the
+                // removeModifier-asserts-on-no-op footgun is never in play here.
+                indicatorOffBaseline = ! strip.isVolModulatedShown();
+                if (auto* vp = t0->getVolumePlugin())
+                    if (auto lfo = forge::modifier::addLFO (*t0))
+                    {
+                        if (vp->volParam != nullptr)
+                            forge::modifier::assign (*vp->volParam, *lfo);
+                        strip.refreshControls();
+                        indicatorOnAfterAssign = strip.isVolModulatedShown();
+
+                        forge::modifier::removeLFO (*lfo);
+                        strip.refreshControls();
+                        indicatorClearsAfterRemove = ! strip.isVolModulatedShown();
+                    }
+
                 t0->setMute (false);   // restore (throwaway edit, kept tidy)
                 t0->setSolo (false);
             }
         }
 
-        const bool pass = bound && faderOk && panOk && muteOk && soloOk;
+        const bool pass = bound && faderOk && panOk && muteOk && soloOk
+                          && indicatorOffBaseline && indicatorOnAfterAssign && indicatorClearsAfterRemove;
 
         String report;
         report << "mode=sessionmixer" << newLine
@@ -6032,6 +6072,9 @@ private:
                << "panOk="    << (panOk ? 1 : 0) << newLine
                << "muteOk="   << (muteOk ? 1 : 0) << newLine
                << "soloOk="   << (soloOk ? 1 : 0) << newLine
+               << "indicatorOffBaseline="       << (indicatorOffBaseline ? 1 : 0) << newLine
+               << "indicatorOnAfterAssign="     << (indicatorOnAfterAssign ? 1 : 0) << newLine
+               << "indicatorClearsAfterRemove=" << (indicatorClearsAfterRemove ? 1 : 0) << newLine
                << "result="   << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="  << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -6472,19 +6515,20 @@ private:
     // pitches). Appends a FRESH AudioTrack, calls PluginHost::ensureDrumKitInstrument, and proves: the head
     // instrument is a te::SamplerPlugin with 8 sounds, each mapped (keyNote==minKey==maxKey) to the expected
     // GM note in StepClip channel order (36,38,42,46,39,45,50,51); a 2nd call no-ops (returns false, still 8
-    // sounds — idempotent, never stacks); the 8 drum_<note>.wav one-shots exist on disk > 1 KB. STRUCTURAL:
-    // getNumSounds/getKeyNote read straight from the ValueTree, so no message-loop pump is needed. (A render
-    // leg — note-on -> non-silence — would go after the loads, must first pump the Sampler async load, and
-    // SKIP-degrade if the buffer is still empty: the same async-load class the piano preset documents.)
+    // sounds — idempotent, never stacks); the 8 drum_<note>.wav one-shots exist on disk > 1 KB. STRUCTURAL
+    // legs (getNumSounds/getKeyNote read straight from the ValueTree) need no message-loop pump; the W24 (B3)
+    // render leg DOES — it seeds an arrange clip here, then finishDrumKitSelftest renders after a deferred
+    // pump of the Sampler's async ingestion (SKIP-degrading, never a fictional PASS).
     void runDrumKitSelftest()
     {
         static const int expectedNotes[8] = { 36, 38, 42, 46, 39, 45, 50, 51 };
 
         bool trackOk = false, isSampler = false, soundCountOk = false, notesOk = false,
-             idempotentReturnedFalse = false, idempotentStillEight = false, filesOk = false;
+             idempotentReturnedFalse = false, idempotentStillEight = false, filesOk = false,
+             renderClipMade = false;
         int  numSounds = -1, numSoundsAfter2nd = -1;
 
-        if (session.getEdit() != nullptr)
+        if (auto* ed = session.getEdit())
         {
             // A freshly appended audio track carries no head instrument -> the insert path runs.
             auto* track = session.appendAudioTrack ("SelfTest DrumKit");
@@ -6519,6 +6563,25 @@ private:
                     numSoundsAfter2nd = sampler->getNumSounds();
                     idempotentStillEight = numSoundsAfter2nd == 8;
                 }
+
+                // W24 (B3) render-leg seed: a short ARRANGE clip on the drum track (one kick note, GM 36),
+                // so the deferred render phase can prove the Sampler INGESTED the one-shots — the W22
+                // deferral this leg closes. The structural + file-decode legs above prove mapping and
+                // audible bytes on disk, never that a note-on renders audio through the engine.
+                if (isSampler)
+                {
+                    const int drumTrackIndex = te::getAudioTracks (*ed).indexOf (track);
+                    if (auto rc = session.createMidiClip (drumTrackIndex,
+                                                          te::TimeRange (te::TimePosition(),
+                                                                         te::TimePosition::fromSeconds (1.5)),
+                                                          "DrumRender"))
+                    {
+                        rc->getSequence().addNote (36, te::BeatPosition::fromBeats (0.0),
+                                                   te::BeatDuration::fromBeats (1.0), 110, 0,
+                                                   &ed->getUndoManager());
+                        renderClipMade = true;
+                    }
+                }
             }
 
             // The 8 one-shots exist on disk and are non-trivially sized (> 1 KB).
@@ -6535,9 +6598,9 @@ private:
 
         // Non-silence leg (QC hardening): decode each generated drum one-shot and assert it holds real
         // (non-silent) PCM. The structural checks above prove a Sampler with 8 mapped sounds + files that
-        // EXIST, not that the files contain AUDIO. (A full note-on -> engine-render leg stays parked, same
-        // class as the W09 Sampler-ingestion follow-up; this hermetic file-decode proves the generators
-        // produce audible one-shots — on a cold cache it exercises the generate path end to end.)
+        // EXIST, not that the files contain AUDIO; this hermetic file-decode proves the generators produce
+        // audible one-shots (on a cold cache it exercises the generate path end to end). The full note-on ->
+        // engine-render proof is the W24 render leg in finishDrumKitSelftest below.
         bool audioNonSilent = false;
         {
             const File libDir = File::getSpecialLocation (File::userApplicationDataDirectory)
@@ -6561,8 +6624,64 @@ private:
             audioNonSilent = nonSilent == 8;
         }
 
+        // The Sampler ingests its 8 one-shots on an AsyncUpdater — defer the render+report phase so
+        // the message loop pumps the ingestion first (W24, B3; same discipline as --selftest-demo).
+        juce::Timer::callAfterDelay (600,
+            [this, trackOk, isSampler, soundCountOk, notesOk, idempotentReturnedFalse,
+             idempotentStillEight, filesOk, audioNonSilent, numSounds, numSoundsAfter2nd, renderClipMade]
+            { finishDrumKitSelftest (trackOk, isSampler, soundCountOk, notesOk, idempotentReturnedFalse,
+                                     idempotentStillEight, filesOk, audioNonSilent, numSounds,
+                                     numSoundsAfter2nd, renderClipMade); });
+    }
+
+    // Phase 2 of --selftest-drumkit (W24, B3): render the drum track's arrange stem and sample its
+    // peak — proves a note-on renders audio through the engine (Sampler ingestion), closing the W22
+    // deferral. Three-state PASS/FAIL/SKIP, same semantics as --selftest-demo / --selftest-sendarrange.
+    void finishDrumKitSelftest (bool trackOk, bool isSampler, bool soundCountOk, bool notesOk,
+                                bool idempotentReturnedFalse, bool idempotentStillEight, bool filesOk,
+                                bool audioNonSilent, int numSounds, int numSoundsAfter2nd,
+                                bool renderClipMade)
+    {
+        juce::String renderAudible = "SKIP";
+        float        renderPeak    = -1.0f;
+
+        if (auto* ed = session.getEdit(); ed != nullptr && renderClipMade)
+        {
+            auto renderDir = File::getSpecialLocation (File::tempDirectory)
+                                 .getChildFile ("forge_drumkit_render");
+            renderDir.deleteRecursively();
+
+            juce::String renderErr;
+            if (Exporter::renderStems (*ed, renderDir, renderErr))
+            {
+                // Prefer the stem named after the drum track; a sole stem is an acceptable fallback.
+                auto stems = renderDir.findChildFiles (File::findFiles, false, "*.wav");
+                File stem;
+                for (auto& s : stems)
+                    if (s.getFileName().contains ("DrumKit"))
+                        stem = s;
+                if (stem == File() && stems.size() == 1)
+                    stem = stems.getReference (0);
+
+                if (stem != File())
+                {
+                    renderPeak    = readPeakMagnitude (stem);
+                    renderAudible = renderPeak > 0.01f ? "PASS" : "FAIL";
+                }
+                else
+                    FORGE_LOG_WARN ("selftest-drumkit: no stem matched the drum track among "
+                                    + juce::String (stems.size()) + " stem(s) — renderAudible stays SKIP");
+            }
+            else
+                FORGE_LOG_WARN ("selftest-drumkit: renderStems failed — " + renderErr
+                                + " — renderAudible stays SKIP (never a fictional PASS)");
+
+            renderDir.deleteRecursively();
+        }
+
         const bool pass = trackOk && isSampler && soundCountOk && notesOk
-                          && idempotentReturnedFalse && idempotentStillEight && filesOk && audioNonSilent;
+                          && idempotentReturnedFalse && idempotentStillEight && filesOk && audioNonSilent
+                          && renderAudible != "FAIL";   // SKIP is honest + non-blocking; proven silence fails
 
         String report;
         report << "mode=drumkit" << newLine
@@ -6576,6 +6695,8 @@ private:
                << "idempotentStillEight="    << (idempotentStillEight ? 1 : 0) << newLine
                << "filesOk="                 << (filesOk ? 1 : 0) << newLine
                << "audioNonSilent="          << (audioNonSilent ? 1 : 0) << newLine
+               << "renderPeak="              << renderPeak << newLine
+               << "renderAudible="           << renderAudible << newLine
                << "result="                  << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="                 << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -7026,12 +7147,133 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-reload (W24, B2): the save→reload round-trip — the first gate that ever re-reads state
+    // from DISK (every other gate asserts in-memory state only). Seeds distinctive values through the
+    // real seams (a scene name, a note-seeded slot clip, a Toggle launch mode, a per-clip launch
+    // quantise, a follow action, a 5/4 time signature), session.saveAs() to a temp .tracktionedit, then
+    // MUTATES every seeded value away IN MEMORY (without saving) before reopening through the REAL
+    // swapProject path (the same teardown+rebind the File>Open dialog drives). The mutate-away step is
+    // load-bearing: if the reload silently failed and we were still reading the old in-memory edit, the
+    // asserts would see the mutated values and FAIL — asserting the seeded values right after a save
+    // would pass whether or not anything was ever read back from disk. Undo history does NOT survive a
+    // swap (by design) — nothing here asserts on it.
+    void runReloadSelftest()
+    {
+        bool seededOk = false, savedOk = false, openOk = false, sceneNameBack = false,
+             launchModeBack = false, launchQBack = false, followBack = false, timeSigBack = false,
+             slotFilledBack = false, noteCountBack = false;
+        int  notesAfterReload = -1;
+
+        const File f = File::getSpecialLocation (File::tempDirectory)
+                           .getChildFile ("forge_selftest_reload" + String (te::editFileSuffix));
+        f.deleteFile();
+
+        if (auto* ed = session.getEdit())
+        {
+            // Seed: every value flows through the same seam the UI uses, so the round-trip proves the
+            // real persistence path, not a mirror.
+            session.ensureScenes (2);
+            session.setSceneName (0, "ReloadScene");
+
+            int seededNotes = 0;
+            if (auto mc = session.createMidiClipInSlot (0, 0, "ReloadClip"))
+            {
+                auto* um = &ed->getUndoManager();
+                mc->getSequence().addNote (60, te::BeatPosition::fromBeats (0.0),
+                                           te::BeatDuration::fromBeats (1.0), 100, 0, um);
+                mc->getSequence().addNote (64, te::BeatPosition::fromBeats (1.0),
+                                           te::BeatDuration::fromBeats (1.0), 100, 0, um);
+                seededNotes = mc->getSequence().getNumNotes();
+            }
+
+            session.setLaunchMode (0, 0, LaunchMode::Toggle);
+            session.setClipLaunchQuantisation (0, 0, te::LaunchQType::eighth);
+            session.setFollowAction (0, 0, te::FollowAction::trackNext);     // type BEFORE duration (W11 auto-plant gotcha)
+            session.setFollowActionDuration (0, 0, te::Clip::FollowActionDurationType::loops, 2.0);
+            EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 5, 4);
+
+            seededOk = seededNotes == 2
+                       && session.getSceneName (0) == "ReloadScene"
+                       && session.getLaunchMode (0, 0) == LaunchMode::Toggle
+                       && ! session.clipInheritsGlobalLaunchQuantisation (0, 0)
+                       && session.getFollowAction (0, 0) == te::FollowAction::trackNext
+                       && EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "5/4";
+
+            savedOk = seededOk && session.saveAs (f);
+
+            if (savedOk)
+            {
+                // Mutate AWAY from every seeded value, unsaved — the reload must bring the saved ones back.
+                session.setSceneName (0, "NotSaved");
+                session.setLaunchMode (0, 0, LaunchMode::Trigger);
+                session.clearClipLaunchQuantisation (0, 0);
+                session.setFollowAction (0, 0, te::FollowAction::none);
+                EngineHelpers::setTimeSigAt (*ed, te::BeatPosition(), 4, 4);
+            }
+        }
+
+        if (savedOk)
+        {
+            // The REAL reopen path: full view teardown + doSwap + rebind (swapProject is synchronous).
+            swapProject ([this, f, &openOk] { openOk = session.openProject (f); });
+
+            if (auto* ed = session.getEdit(); ed != nullptr && openOk)
+            {
+                sceneNameBack  = session.getSceneName (0) == "ReloadScene";
+                launchModeBack = session.getLaunchMode (0, 0) == LaunchMode::Toggle;
+                launchQBack    = ! session.clipInheritsGlobalLaunchQuantisation (0, 0)
+                                 && session.getClipLaunchQuantisation (0, 0) == te::LaunchQType::eighth;
+                followBack     = session.getFollowAction (0, 0) == te::FollowAction::trackNext;
+                timeSigBack    = EngineHelpers::getTimeSigStringAt (*ed, te::BeatPosition()) == "5/4";
+                slotFilledBack = session.isSlotFilled (0, 0);
+
+                if (auto* s = session.getClipSlot (0, 0))
+                    if (auto* mc = dynamic_cast<te::MidiClip*> (s->getClip()))
+                        notesAfterReload = mc->getSequence().getNumNotes();
+                noteCountBack = notesAfterReload == 2;
+            }
+        }
+
+        const bool pass = seededOk && savedOk && openOk && sceneNameBack && launchModeBack
+                          && launchQBack && followBack && timeSigBack && slotFilledBack && noteCountBack;
+
+        String report;
+        report << "mode=reload" << newLine
+               << "seededOk="         << (seededOk ? 1 : 0) << newLine
+               << "savedOk="          << (savedOk ? 1 : 0) << newLine
+               << "openOk="           << (openOk ? 1 : 0) << newLine
+               << "sceneNameBack="    << (sceneNameBack ? 1 : 0) << newLine
+               << "launchModeBack="   << (launchModeBack ? 1 : 0) << newLine
+               << "launchQBack="      << (launchQBack ? 1 : 0) << newLine
+               << "followBack="       << (followBack ? 1 : 0) << newLine
+               << "timeSigBack="      << (timeSigBack ? 1 : 0) << newLine
+               << "slotFilledBack="   << (slotFilledBack ? 1 : 0) << newLine
+               << "notesAfterReload=" << notesAfterReload << newLine
+               << "noteCountBack="    << (noteCountBack ? 1 : 0) << newLine
+               << "reloadFile="       << f.getFullPathName() << newLine
+               << "result="           << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="          << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write reload selftest report to: " + reportFile.getFullPathName());
+        FORGE_LOG_INFO ("Reload selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        f.deleteFile();   // the process quits next; the reopened edit is never touched again
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-trim (W23): forge::midiedit::trimLeadingSilence — "Trim silent start" on an Arrange MIDI
     // clip. Builds a one-shot arrange clip via ProjectSession::createMidiClip (NOT createMidiClipInSlot,
     // so it is born non-looping rather than slot-normalized per the W10/W13 gotchas) with a single note at
     // content beat 2 (2 beats of leading silence), then drives the helper directly: the trim must move the
     // clip start forward, absorb the gap into the offset, preserve the note's absolute timeline position
-    // and the clip's end, no-op on a second (already-tight) call, and revert via undo.
+    // and the clip's end, no-op on a second (already-tight) call, and revert via undo. W24 (B5) adds the
+    // speed-ratio legs (a stretched clip with a pre-seeded offset — the Δ = Ts/speed − offset formula, which
+    // only a non-zero offset can distinguish from the naive one) and the CC-only MIDI leg (a controller-only
+    // clip trims to its first CC event instead of silently declining).
     void runTrimSelftest()
     {
         bool clipCreated = false, seededNote = false, trimmed = false, startMovedForward = false,
@@ -7039,7 +7281,12 @@ private:
              endPreserved = false, undoReverts = false, noOpWhenTight = false,
              audioImported = false, audioTrimmed = false, audioStartMovedForward = false,
              audioOffsetIncreased = false, audioEndPreserved = false, audioNoOpWhenTight = false,
-             audioUndoReverts = false;
+             audioUndoReverts = false,
+             speedImported = false, speedTrimmed = false, speedStartCorrect = false,
+             speedOffsetCorrect = false, speedEndPreserved = false, speedNoOpWhenTight = false,
+             speedUndoReverts = false,
+             ccClipCreated = false, ccSeeded = false, ccTrimmed = false, ccStartMovedForward = false,
+             ccNoLeadingSilence = false, ccEndPreserved = false, ccUndoReverts = false;
 
         if (auto* ed = session.getEdit())
         {
@@ -7155,12 +7402,92 @@ private:
                 audioUndoReverts = std::abs (pUndone.getStart().inSeconds()  - aStartBefore.inSeconds())  < 1.0e-4
                                    && std::abs (pUndone.getOffset().inSeconds() - aOffsetBefore.inSeconds()) < 1.0e-4;
             }
+
+            // --- Speed-ratio legs (B5): the SAME silence+sine source on a STRETCHED clip (speed 2) with a
+            // pre-seeded offset. Engine mapping (AudioClipBase::clipTimeToSourceFileTime): sourceTime =
+            // (clipRelativeEditTime + offset) * speed — so with offset 0.25 edit-s the left edge plays
+            // source 0.5 s (inside the 1 s silence) and the correct advance to the 1.0 s onset is
+            // Δ = Ts/speed − offset = 1.0/2 − 0.25 = 0.25 edit-s → start 0.25 s, offset 0.50 s (the edge
+            // now plays 0.50*2 = 1.0 s, the onset — the audible start is preserved: 0.25 s is exactly the
+            // edit-time the onset played at BEFORE the trim). The dimensionally-wrong (Ts − offset)/speed
+            // would give Δ = 0.375 → start 0.375 s; the ±0.02 windows below fail it. offset MUST be
+            // non-zero: at offset 0 the two formulas coincide and the leg would prove nothing.
+            ed->ensureNumberOfAudioTracks (3);   // its own track (2)
+
+            if (auto sc = session.importAudioFile (silenceThenSine, te::TimePosition(), 2))
+            {
+                speedImported = true;
+
+                um.beginNewTransaction();        // seed: stretch + pre-offset, sealed apart from the trim
+                sc->setSpeedRatio (2.0);
+                sc->setOffset (te::TimeDuration::fromSeconds (0.25));
+                const auto sEndBefore = sc->getPosition().getEnd();
+
+                // Trim leg (own transaction).
+                um.beginNewTransaction();
+                speedTrimmed = forge::audioedit::trimLeadingSilence (*sc);
+
+                const auto sAfter = sc->getPosition();
+                speedStartCorrect  = std::abs (sAfter.getStart().inSeconds()  - 0.25) < 0.02;  // Ts/speed − offset
+                speedOffsetCorrect = std::abs (sAfter.getOffset().inSeconds() - 0.50) < 0.02;  // edge plays the onset
+                speedEndPreserved  = std::abs (sAfter.getEnd().inSeconds() - sEndBefore.inSeconds()) < 1.0e-3;
+
+                // No-op leg: the edge now plays the onset — a second trim must decline and hold the start.
+                um.beginNewTransaction();
+                const bool sSecondTrim = forge::audioedit::trimLeadingSilence (*sc);
+                speedNoOpWhenTight = ! sSecondTrim
+                                     && std::abs (sc->getPosition().getStart().inSeconds() - sAfter.getStart().inSeconds()) < 1.0e-6;
+
+                // Undo leg: content-level (start AND offset), never canRedo() (W16 4OSC redo-wipe gotcha).
+                ed->undo();
+                const auto sUndone = sc->getPosition();
+                speedUndoReverts = std::abs (sUndone.getStart().inSeconds()) < 1.0e-4
+                                   && std::abs (sUndone.getOffset().inSeconds() - 0.25) < 1.0e-4;
+            }
+
+            // --- CC-only MIDI leg (B5): a controller-only clip (ZERO notes) must trim to its first CC
+            // event — the W23 guard keyed on getNumNotes() and silently no-opped. One mod-wheel event at
+            // content beat 3 (engine CC values are 14-bit, hence 64 << 7). Same createMidiClip path as the
+            // note leg above, so the clip is born non-looping (not slot-normalized — W10/W13).
+            ed->ensureNumberOfAudioTracks (4);   // its own track (3)
+
+            if (auto cc = session.createMidiClip (3, { te::TimePosition(), clipEnd }, "TRIMCC"))
+            {
+                ccClipCreated = true;
+
+                um.beginNewTransaction();
+                auto& ccSeq = cc->getSequence();
+                ccSeq.addControllerEvent (te::BeatPosition::fromBeats (3.0), 1 /*mod wheel*/, 64 << 7, &um);
+                ccSeeded = ccSeq.getNumNotes() == 0 && ccSeq.getNumControllerEvents() == 1;
+
+                const auto ccStartBefore = cc->getPosition().getStart();
+                const auto ccEndBefore   = cc->getPosition().getEnd();
+
+                // Trim leg (own transaction): must advance to the CC event's beat, not decline.
+                um.beginNewTransaction();
+                ccTrimmed = forge::midiedit::trimLeadingSilence (*cc);
+
+                const auto ccAfter = cc->getPosition();
+                ccStartMovedForward = ccAfter.getStart().inSeconds() > ccStartBefore.inSeconds();
+                ccNoLeadingSilence  = std::abs (cc->getContentBeatAtTime (ccAfter.getStart()).inBeats() - 3.0) < 1.0e-6;
+                ccEndPreserved      = std::abs (ccAfter.getEnd().inSeconds() - ccEndBefore.inSeconds()) < 1.0e-6;
+
+                // Undo leg: content-level (start AND offset), never canRedo().
+                ed->undo();
+                const auto ccUndone = cc->getPosition();
+                ccUndoReverts = std::abs (ccUndone.getStart().inSeconds() - ccStartBefore.inSeconds()) < 1.0e-6
+                               && std::abs (ccUndone.getOffset().inSeconds()) < 1.0e-6;
+            }
         }
 
         const bool pass = clipCreated && seededNote && trimmed && startMovedForward && notePosPreserved
                           && noLeadingSilence && offsetIncreased && endPreserved && undoReverts && noOpWhenTight
                           && audioImported && audioTrimmed && audioStartMovedForward && audioOffsetIncreased
-                          && audioEndPreserved && audioNoOpWhenTight && audioUndoReverts;
+                          && audioEndPreserved && audioNoOpWhenTight && audioUndoReverts
+                          && speedImported && speedTrimmed && speedStartCorrect && speedOffsetCorrect
+                          && speedEndPreserved && speedNoOpWhenTight && speedUndoReverts
+                          && ccClipCreated && ccSeeded && ccTrimmed && ccStartMovedForward
+                          && ccNoLeadingSilence && ccEndPreserved && ccUndoReverts;
 
         String report;
         report << "mode=trim" << newLine
@@ -7181,6 +7508,20 @@ private:
                << "audioEndPreserved="      << (audioEndPreserved ? 1 : 0) << newLine
                << "audioNoOpWhenTight="     << (audioNoOpWhenTight ? 1 : 0) << newLine
                << "audioUndoReverts="       << (audioUndoReverts ? 1 : 0) << newLine
+               << "speedImported="      << (speedImported ? 1 : 0) << newLine
+               << "speedTrimmed="       << (speedTrimmed ? 1 : 0) << newLine
+               << "speedStartCorrect="  << (speedStartCorrect ? 1 : 0) << newLine
+               << "speedOffsetCorrect=" << (speedOffsetCorrect ? 1 : 0) << newLine
+               << "speedEndPreserved="  << (speedEndPreserved ? 1 : 0) << newLine
+               << "speedNoOpWhenTight=" << (speedNoOpWhenTight ? 1 : 0) << newLine
+               << "speedUndoReverts="   << (speedUndoReverts ? 1 : 0) << newLine
+               << "ccClipCreated="      << (ccClipCreated ? 1 : 0) << newLine
+               << "ccSeeded="           << (ccSeeded ? 1 : 0) << newLine
+               << "ccTrimmed="          << (ccTrimmed ? 1 : 0) << newLine
+               << "ccStartMovedForward="<< (ccStartMovedForward ? 1 : 0) << newLine
+               << "ccNoLeadingSilence=" << (ccNoLeadingSilence ? 1 : 0) << newLine
+               << "ccEndPreserved="     << (ccEndPreserved ? 1 : 0) << newLine
+               << "ccUndoReverts="      << (ccUndoReverts ? 1 : 0) << newLine
                << "result="            << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="           << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -7202,7 +7543,9 @@ private:
         bool wroteFile = false, slotImported = false, slotNotesOk = false, arrImported = false,
              arrNotesOk = false, arrStartOk = false, instrumentOk = false, emptyGuard = false,
              notelessGuard = false;
-        int  slotNoteCount = -1, arrNoteCount = -1;
+        bool mtWrote = false, mtCountOk = false, mtNotesOk = false, mtTracksOk = false,
+             mtInstrumentsOk = false, mtSingleOk = false;
+        int  slotNoteCount = -1, arrNoteCount = -1, mtClipCount = -1;
         double arrStartSecs = -1.0;
 
         // Build a 4-note .mid (C4..D#4, each 1 beat long, 1 beat apart) at 960 ticks/quarter.
@@ -7272,10 +7615,87 @@ private:
             }
             notelessGuard = session.importMidiIntoSlot (0, 6, notelessFile) == nullptr;
             notelessFile.deleteFile();
+
+            // --- B1 multi-track fan-out (W24): a 4-chunk .mid — 3 note-bearing tracks (2 / 3 / 5 notes on
+            // channels 1 / 2 / 3) plus one CC-only track (ZERO notes — must be skipped, never a silent
+            // clip, so 4 source chunks land exactly 3 clips). Imported via importMidiFileMultiTrack
+            // starting at track 2 (tracks 0..1 exist from the legs above), exercising consecutive
+            // placement AND on-demand track creation in one pass.
+            const auto multiFile = File::getSpecialLocation (File::tempDirectory)
+                                       .getChildFile ("forge_selftest_multitrack.mid");
+            {
+                const int tpqn = 960;
+                juce::MidiFile mf;
+                mf.setTicksPerQuarterNote (tpqn);
+
+                const int noteCounts[3] = { 2, 3, 5 };
+                for (int t = 0; t < 3; ++t)
+                {
+                    juce::MidiMessageSequence seq;
+                    for (int i = 0; i < noteCounts[t]; ++i)
+                    {
+                        seq.addEvent (juce::MidiMessage::noteOn  (t + 1, 48 + 12 * t + i, 0.8f), (double) (i * tpqn));
+                        seq.addEvent (juce::MidiMessage::noteOff (t + 1, 48 + 12 * t + i),       (double) ((i + 1) * tpqn));
+                    }
+                    seq.updateMatchedPairs();
+                    mf.addTrack (seq);
+                }
+
+                {   // CC-only chunk: parses to a note-less part -> the seam must SKIP it.
+                    juce::MidiMessageSequence cc;
+                    cc.addEvent (juce::MidiMessage::controllerEvent (4, 1, 64), 0.0);
+                    cc.addEvent (juce::MidiMessage::controllerEvent (4, 1, 96), (double) tpqn);
+                    mf.addTrack (cc);
+                }
+
+                multiFile.deleteFile();
+                if (auto out = std::unique_ptr<FileOutputStream> (multiFile.createOutputStream()))
+                    mtWrote = mf.writeTo (*out);
+            }
+
+            {
+                const int firstTrack = 2;
+                const auto mtClips   = session.importMidiFileMultiTrack (multiFile, te::TimePosition(), firstTrack);
+
+                mtClipCount = (int) mtClips.size();
+                mtCountOk   = mtClipCount == 3;   // 4 source chunks -> 3 clips == the CC-only skip proved
+
+                if (mtCountOk)
+                {
+                    const int expected[3] = { 2, 3, 5 };
+                    mtNotesOk = mtTracksOk = mtInstrumentsOk = true;
+
+                    auto allTracks = te::getAudioTracks (*ed);
+
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        mtNotesOk = mtNotesOk
+                                    && mtClips[(size_t) i]->getSequence().getNumNotes() == expected[i];
+
+                        auto* at   = dynamic_cast<te::AudioTrack*> (mtClips[(size_t) i]->getTrack());
+                        mtTracksOk = mtTracksOk && at != nullptr && allTracks.indexOf (at) == firstTrack + i;
+
+                        bool synth = false;
+                        if (at != nullptr)
+                            for (auto* p : at->pluginList)
+                                if (p != nullptr && (p->isSynth() || p->takesMidiInput())) { synth = true; break; }
+                        mtInstrumentsOk = mtInstrumentsOk && synth;
+                    }
+                }
+
+                // Regression control: the SINGLE-track 4-note file through the NEW seam lands exactly
+                // ONE clip (behaviour-compatible with the old single-clip path).
+                const auto singleClips = session.importMidiFileMultiTrack (midiFile, te::TimePosition(), firstTrack + 3);
+                mtSingleOk = singleClips.size() == 1
+                             && singleClips[0]->getSequence().getNumNotes() == 4;
+            }
+            multiFile.deleteFile();
         }
 
         const bool pass = wroteFile && slotImported && slotNotesOk && arrImported && arrNotesOk
-                          && arrStartOk && instrumentOk && emptyGuard && notelessGuard;
+                          && arrStartOk && instrumentOk && emptyGuard && notelessGuard
+                          && mtWrote && mtCountOk && mtNotesOk && mtTracksOk
+                          && mtInstrumentsOk && mtSingleOk;
 
         String report;
         report << "mode=midifile" << newLine
@@ -7291,6 +7711,13 @@ private:
                << "instrumentOk="  << (instrumentOk ? 1 : 0) << newLine
                << "emptyGuard="    << (emptyGuard ? 1 : 0) << newLine
                << "notelessGuard=" << (notelessGuard ? 1 : 0) << newLine
+               << "mtWrote="         << (mtWrote ? 1 : 0) << newLine
+               << "mtClipCount="     << mtClipCount << newLine
+               << "mtCountOk="       << (mtCountOk ? 1 : 0) << newLine
+               << "mtNotesOk="       << (mtNotesOk ? 1 : 0) << newLine
+               << "mtTracksOk="      << (mtTracksOk ? 1 : 0) << newLine
+               << "mtInstrumentsOk=" << (mtInstrumentsOk ? 1 : 0) << newLine
+               << "mtSingleOk="      << (mtSingleOk ? 1 : 0) << newLine
                << "result="        << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="       << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -7310,11 +7737,13 @@ private:
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
-    // Structural + synchronous — it does NOT render audio (the Sampler loads its sample on an AsyncUpdater;
-    // a render leg would have to pump the loop first). Playback engagement is covered by --selftest-session.
+    // W24 (B3): a deferred render leg (finishDemoSelftest) now ALSO proves the Sampler INGESTED the one-shot
+    // — a note-on renders non-silent audio — after pumping the async load. Playback engagement is covered
+    // by --selftest-session.
     void runDemoSelftest()
     {
-        bool kickIsSynth = false, pianoIsSampler = false, pianoFileExists = false, clipHasNotes = false;
+        bool kickIsSynth = false, pianoIsSampler = false, pianoFileExists = false, clipHasNotes = false,
+             renderClipMade = false;
         int  noteCount = 0;
 
         if (auto* ed = session.getEdit())
@@ -7340,10 +7769,82 @@ private:
                     noteCount    = mc->getSequence().getNumNotes();
                     clipHasNotes = noteCount > 0;
                 }
+
+                // W24 (B3) render-leg seed: a short ARRANGE clip on the Sampler track (slot clips never
+                // reach Exporter::renderStems, which walks getClips() — arrange only), one note, so the
+                // deferred render phase can prove the Sampler actually INGESTED the piano one-shot (the
+                // structural pianoIsSampler/pianoFileExists legs prove insertion + on-disk presence, not
+                // ingestion — the exact silent-failure class B3 closes). The distinctive track name keys
+                // the stem lookup in the render phase.
+                tracks[2]->setName ("KeysRenderStem");
+                if (auto rc = session.createMidiClip (2, te::TimeRange (te::TimePosition(),
+                                                                        te::TimePosition::fromSeconds (2.0)),
+                                                      "DemoRender"))
+                {
+                    rc->getSequence().addNote (60, te::BeatPosition::fromBeats (0.0),
+                                               te::BeatDuration::fromBeats (2.0), 100, 0,
+                                               &ed->getUndoManager());
+                    renderClipMade = true;
+                }
             }
         }
 
-        const bool pass = kickIsSynth && pianoIsSampler && pianoFileExists && clipHasNotes;
+        // The Sampler ingests its audio on an AsyncUpdater — rendering NOW would measure silence and
+        // call it a failure (the documented async-load caveat). Defer the render+report phase so the
+        // message loop pumps the ingestion first; 600 ms is generous for a <100 KB local wav.
+        juce::Timer::callAfterDelay (600,
+            [this, kickIsSynth, pianoIsSampler, pianoFileExists, clipHasNotes, noteCount, renderClipMade]
+            { finishDemoSelftest (kickIsSynth, pianoIsSampler, pianoFileExists, clipHasNotes,
+                                  noteCount, renderClipMade); });
+    }
+
+    // Phase 2 of --selftest-demo (W24, B3): render the arrange stem and sample its peak — the same
+    // three-state PASS/FAIL/SKIP discipline as --selftest-sendarrange's W16 leg (PASS only on genuine
+    // non-silent output; FAIL only if a stem WAS produced but reads silent — with the ingestion pump
+    // above, that IS a real regression; SKIP, logged, if the render infrastructure can't produce one).
+    void finishDemoSelftest (bool kickIsSynth, bool pianoIsSampler, bool pianoFileExists,
+                             bool clipHasNotes, int noteCount, bool renderClipMade)
+    {
+        juce::String renderAudible = "SKIP";
+        float        renderPeak    = -1.0f;
+
+        if (auto* ed = session.getEdit(); ed != nullptr && renderClipMade)
+        {
+            auto renderDir = File::getSpecialLocation (File::tempDirectory)
+                                 .getChildFile ("forge_demo_render");
+            renderDir.deleteRecursively();
+
+            juce::String renderErr;
+            if (Exporter::renderStems (*ed, renderDir, renderErr))
+            {
+                // Prefer the stem named after the render track (stems are named per track); fall back
+                // to a sole stem so a naming change degrades to SKIP via no-match, never a wrong file.
+                auto stems = renderDir.findChildFiles (File::findFiles, false, "*.wav");
+                File stem;
+                for (auto& s : stems)
+                    if (s.getFileName().contains ("KeysRenderStem"))
+                        stem = s;
+                if (stem == File() && stems.size() == 1)
+                    stem = stems.getReference (0);
+
+                if (stem != File())
+                {
+                    renderPeak    = readPeakMagnitude (stem);
+                    renderAudible = renderPeak > 0.01f ? "PASS" : "FAIL";
+                }
+                else
+                    FORGE_LOG_WARN ("selftest-demo: no stem matched the render track among "
+                                    + juce::String (stems.size()) + " stem(s) — renderAudible stays SKIP");
+            }
+            else
+                FORGE_LOG_WARN ("selftest-demo: renderStems failed — " + renderErr
+                                + " — renderAudible stays SKIP (never a fictional PASS)");
+
+            renderDir.deleteRecursively();
+        }
+
+        const bool pass = kickIsSynth && pianoIsSampler && pianoFileExists && clipHasNotes
+                          && renderAudible != "FAIL";   // SKIP is honest + non-blocking; proven silence fails
 
         String report;
         report << "mode=demo" << newLine
@@ -7352,6 +7853,8 @@ private:
                << "pianoFileExists=" << (pianoFileExists ? 1 : 0) << newLine
                << "noteCount="       << noteCount << newLine
                << "clipHasNotes="    << (clipHasNotes ? 1 : 0) << newLine
+               << "renderPeak="      << renderPeak << newLine
+               << "renderAudible="   << renderAudible << newLine
                << "result="          << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="         << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -7491,6 +7994,14 @@ private:
                 AutomationHelpers::addPoint (*volParam, 4.0, 0.35f);
                 AutomationHelpers::addPoint (*volParam, 8.0, 0.70f);
             }
+
+        // B7 (W24): modulate the Bass track's pan with a gentle LFO so the modulated-parameter
+        // indicator dot renders in the mix / arrange_tray / Session screenshot states.
+        if (tracks.size() > 1)
+            if (auto* vp = tracks[1]->getVolumePlugin())
+                if (vp->panParam != nullptr)
+                    if (auto lfo = forge::modifier::addLFO (*tracks[1]))
+                        forge::modifier::assign (*vp->panParam, *lfo);
 
         // W09: launch scene 0 — the coherent kick+bass+piano groove — so the snapshot shows playing pads.
         session.launchScene (0);
@@ -8255,7 +8766,7 @@ static void runMenuSelfTest()
                            && names[(int) ForgeMenuModel::menuFile]      == "File"
                            && names[(int) ForgeMenuModel::menuTransport] == "Transport";
 
-    const int expectedCounts[] = { 10, 3, 7, 6, 1 };  // File (+1 Exit, hands-on 1.5), Edit (+2 W05 undo/redo), View, Transport, Help
+    const int expectedCounts[] = { 10, 4, 7, 6, 1 };  // File (+1 Exit, hands-on 1.5), Edit (+2 W05 undo/redo, +1 B7 Modulate), View, Transport, Help
     bool countsPass = names.size() == (int) (sizeof (expectedCounts) / sizeof (expectedCounts[0]));
     for (int m = 0; countsPass && m < names.size(); ++m)
         countsPass = model.getMenuForIndex (m, names[m]).getNumItems() == expectedCounts[m];
@@ -8265,7 +8776,7 @@ static void runMenuSelfTest()
     // NOTE: MenuItemIterator stores a POINTER to the menu — the menu must be a named local,
     // never a temporary, or the iterator dangles.
     bool idsPass = true;
-    juce::String saveShortcut, openShortcut;
+    juce::String saveShortcut, openShortcut, modulateShortcut;
 
     for (int m = 0; m < names.size(); ++m)
     {
@@ -8278,12 +8789,14 @@ static void runMenuSelfTest()
             if (! item.isSeparator && item.subMenu == nullptr && item.itemID == 0)
                 idsPass = false;
 
-            if (item.text == "Save")    saveShortcut = item.shortcutKeyDescription;
-            if (item.text == "Open...") openShortcut = item.shortcutKeyDescription;
+            if (item.text == "Save")        saveShortcut     = item.shortcutKeyDescription;
+            if (item.text == "Open...")     openShortcut     = item.shortcutKeyDescription;
+            if (item.text == "Modulate...") modulateShortcut = item.shortcutKeyDescription;   // B7
         }
     }
 
-    const bool shortcutsPass = saveShortcut == "Ctrl+S" && openShortcut == "Ctrl+O";
+    const bool shortcutsPass = saveShortcut == "Ctrl+S" && openShortcut == "Ctrl+O"
+                               && modulateShortcut == "Ctrl+M";   // B7: a rebind that forgets the table fails loudly
 
     // Dispatch leg: wire two flag-capturing callbacks and invoke them via menuItemSelected.
     bool saveFired  = false;
@@ -8408,6 +8921,7 @@ public:
                             : commandLine.contains ("--selftest-pianoroll")      ? "selftest-pianoroll"      // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest-timesig")        ? "selftest-timesig"        // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest-trim")           ? "selftest-trim"           // before bare --selftest (collision-free, W23)
+                            : commandLine.contains ("--selftest-reload")         ? "selftest-reload"         // before bare --selftest (collision-free, W24)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -8486,6 +9000,7 @@ public:
                         : commandLine.contains ("--selftest-pianoroll")      ? SelfTest::pianoroll      // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest-timesig")        ? SelfTest::timesig        // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest-trim")           ? SelfTest::trim           // before bare --selftest (collision-free, W23)
+                        : commandLine.contains ("--selftest-reload")         ? SelfTest::reload         // before bare --selftest (collision-free, W24)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

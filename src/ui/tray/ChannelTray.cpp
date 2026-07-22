@@ -30,6 +30,35 @@ namespace
     constexpr int controlsH  = 26;    // the M/S row at the bottom
     constexpr int faderMinH  = 110;   // insert rows never squeeze the fader below this
     constexpr int meterW     = 10;    // peak-meter bar beside the fader (W04b)
+
+    //==========================================================================================
+    // B7 modulated-parameter indicator — a compact copy of the MixerView.cpp helpers (the
+    // "compact re-implementation, not extraction" stance this file already takes; StripWidgets.h
+    // stays style-only).
+
+    /** True when `param` (nullable) has at least one modifier (e.g. a Ctrl+M LFO) assigned. A
+        cheap read (an atomic flag inside the engine); message-thread only. Never called from
+        paint — the tray caches the result and paints from the cache. */
+    bool isParamModulated (const te::AutomatableParameter::Ptr& param)
+    {
+        return param != nullptr && param->hasActiveModifierAssignments();
+    }
+
+    /** Draws the "modulated" indicator: a ~5px filled accent dot on a panelBg backing disc (so it
+        reads over any widget state, including an accent-filled slider track), anchored at the
+        top-right corner of `control`'s bounds. Existing palette colours only. */
+    void drawModulationDot (Graphics& g, const Component& control)
+    {
+        constexpr float d = 5.0f;
+        const auto b = control.getBounds().toFloat();
+        const float x = b.getRight() - d - 1.0f;
+        const float y = b.getY() + 1.0f;
+
+        g.setColour (Colour (ForgeLookAndFeel::panelBg));
+        g.fillEllipse (x - 1.0f, y - 1.0f, d + 2.0f, d + 2.0f);
+        g.setColour (Colour (ForgeLookAndFeel::accent));
+        g.fillEllipse (x, y, d, d);
+    }
 }
 
 //==============================================================================
@@ -225,6 +254,9 @@ void ChannelTray::rebuildFromTrack()
         insertRows.clear();
         lastChainSig.clear();
         trackColour = Colour (ForgeLookAndFeel::panelBg);
+        volModulated = panModulated = false;   // B7: no track -> no indicator dots
+        pan.setTooltip ("Pan");                // restore the baseline tooltip for the next bind
+        fader.setTooltip ("");
         resized();
         repaint();
         return;
@@ -397,6 +429,37 @@ void ChannelTray::syncControls (te::AudioTrack& t, int liveIndex)
         trackColour = liveColour;
         repaint();
     }
+
+    refreshModulationFlags (t);   // B7: an assignment made/removed elsewhere (Ctrl+M) shows within a tick
+}
+
+void ChannelTray::refreshModulationFlags (te::AudioTrack& t)
+{
+    bool volMod = false, panMod = false;
+
+    if (auto* vp = t.getVolumePlugin())
+    {
+        volMod = isParamModulated (vp->volParam);
+        panMod = isParamModulated (vp->panParam);
+    }
+
+    if (volMod == volModulated && panMod == panModulated)
+        return;
+
+    volModulated = volMod;
+    panModulated = panMod;
+    fader.setTooltip (volModulated ? "Volume - modulated (LFO)" : "");
+    pan.setTooltip   (panModulated ? "Pan - modulated (LFO)"    : "Pan");
+    repaint();
+}
+
+void ChannelTray::paintOverChildren (Graphics& g)
+{
+    if (track == nullptr)
+        return;
+
+    if (volModulated) drawModulationDot (g, fader);
+    if (panModulated) drawModulationDot (g, pan);
 }
 
 //==============================================================================
@@ -423,6 +486,16 @@ bool ChannelTray::isShowingTrack() const
 bool ChannelTray::getMeterHasSource() const
 {
     return meter.hasSource();
+}
+
+bool ChannelTray::getVolModulatedShown() const
+{
+    return volModulated;
+}
+
+bool ChannelTray::getPanModulatedShown() const
+{
+    return panModulated;
 }
 
 //==============================================================================

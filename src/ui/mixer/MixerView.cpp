@@ -24,6 +24,40 @@ using forge::strip::busLetter;
 // helper moved with it.
 
 //==============================================================================
+// B7 modulated-parameter indicator, shared by ChannelStrip / ReturnStrip below. The tray and the
+// Session band carry their own compact copies — the "compact re-implementation, not extraction"
+// stance those surfaces already take (ui/common/StripWidgets.h stays style-only).
+namespace
+{
+    /** True when `param` (nullable) has at least one modifier (e.g. a Ctrl+M LFO) assigned.
+        A cheap read — an atomic flag inside the engine's per-param AutomationSourceList — so it is
+        safe on the poll path. Message-thread only (the engine asserts internally); NEVER called
+        from paint(): the strips cache the result and paint from the cache. */
+    bool isParamModulated (const te::AutomatableParameter::Ptr& param)
+    {
+        return param != nullptr && param->hasActiveModifierAssignments();
+    }
+
+    /** Draws the "this parameter is modulated" indicator: a ~5px filled dot in the app accent on a
+        panelBg backing disc (so it stays legible over ANY widget state, including an accent-filled
+        slider track), anchored at the top-right corner of `control`'s bounds. Existing palette
+        colours only — amber accent = interactive, per the Fable colour vocabulary. Call from the
+        owner's paintOverChildren with `control` a direct child, so the dot renders above it. */
+    void drawModulationDot (Graphics& g, const Component& control)
+    {
+        constexpr float d = 5.0f;
+        const auto b = control.getBounds().toFloat();
+        const float x = b.getRight() - d - 1.0f;
+        const float y = b.getY() + 1.0f;
+
+        g.setColour (Colour (ForgeLookAndFeel::panelBg));
+        g.fillEllipse (x - 1.0f, y - 1.0f, d + 2.0f, d + 2.0f);
+        g.setColour (Colour (ForgeLookAndFeel::accent));
+        g.fillEllipse (x, y, d, d);
+    }
+}
+
+//==============================================================================
 /*  InsertPanel — the list of a track's insert plugins plus a "+" add button. Each existing
     insert is a row: left-click the name opens its editor window (PluginWindow::show); the
     trailing "x" (or a right-click) removes it (PluginHost::removePlugin); a leading bypass dot
@@ -534,6 +568,8 @@ public:
 
         muteButton.setToggleState (track.isMuted (false), dontSendNotification);
         soloButton.setToggleState (track.isSolo  (false), dontSendNotification);
+
+        refreshModulationFlags();   // B7: seed the indicator cache so the first paint is right
     }
 
     /** Total height this strip wants, given its current insert count. The MixerView gives
@@ -571,6 +607,8 @@ public:
         const auto liveName = track.getName();
         if (nameLabel.getText() != liveName)
             nameLabel.setText (liveName, dontSendNotification);
+
+        refreshModulationFlags();   // B7: an assignment made/removed elsewhere (Ctrl+M) shows within a tick
     }
 
     /** Fader value (dB) currently shown — selftest seam (read via MixerView::getStripFaderDb). */
@@ -578,6 +616,21 @@ public:
 
     /** Mute-button state currently shown — selftest seam (read via MixerView::getStripMuted). */
     bool isMuteShown() const { return muteButton.getToggleState(); }
+
+    /** True when the volume-modulated indicator dot is shown (B7) — selftest seam. */
+    bool isVolModulatedShown() const { return volModulated; }
+
+    /** True when the pan-modulated indicator dot is shown (B7) — selftest seam. */
+    bool isPanModulatedShown() const { return panModulated; }
+
+    /** B7: the modulated-parameter indicator dots, drawn ABOVE the child sliders so they stay
+        visible in every widget state. Paints only from the tick-maintained cache — no engine
+        reads here (the ChannelTray trackColour precedent). */
+    void paintOverChildren (Graphics& g) override
+    {
+        if (volModulated) drawModulationDot (g, fader);
+        if (panModulated) drawModulationDot (g, pan);
+    }
 
     void paint (Graphics& g) override
     {
@@ -634,12 +687,39 @@ private:
     static constexpr int faderRegionH = 150;   // baseline fader/meter height used for sizing
     static constexpr int meterW       = 8;
 
+    /** B7: edge-compared refresh of the modulated-indicator cache for the vol/pan params. Rides
+        the EXISTING 28 Hz sync (no new timer); the queries are cheap (an atomic flag each) and
+        repaint/tooltip updates fire ONLY on a transition, so a steady-state tick stays free.
+        Hot path — never logs. */
+    void refreshModulationFlags()
+    {
+        bool volMod = false, panMod = false;
+
+        if (auto* vp = track.getVolumePlugin())
+        {
+            volMod = isParamModulated (vp->volParam);
+            panMod = isParamModulated (vp->panParam);
+        }
+
+        if (volMod == volModulated && panMod == panModulated)
+            return;
+
+        volModulated = volMod;
+        panModulated = panMod;
+        fader.setTooltip (volModulated ? "Volume - modulated (LFO)" : "");
+        pan.setTooltip   (panModulated ? "Pan - modulated (LFO)"    : "");
+        repaint();
+    }
+
     te::AudioTrack& track;
     std::function<void()> onInsertsChanged;
 
     // Set for the duration of a mouse drag on the matching slider — syncControls() skips a
     // control the user is holding, so the 28 Hz engine→widget sync never fights a gesture.
     bool faderDragging = false, panDragging = false;
+
+    // B7 modulated-parameter indicator cache (paint reads ONLY these; the tick maintains them).
+    bool volModulated = false, panModulated = false;
 
     Label nameLabel;
     Slider fader, pan;
@@ -868,6 +948,8 @@ public:
             else
                 meter.detach();
 
+            refreshModulationFlag (returnTrack);   // B7: seed the indicator cache on rebind
+
             fader.setValue (EngineHelpers::getTrackVolumeDb (*returnTrack), dontSendNotification);
             muteButton.setToggleState (returnTrack->isMuted (false), dontSendNotification);
             soloButton.setToggleState (returnTrack->isSolo  (false), dontSendNotification);
@@ -884,6 +966,7 @@ public:
         {
             meter.detach();
             insertPanel.reset();
+            refreshModulationFlag (nullptr);   // B7: no track -> no indicator
         }
 
         resized();
@@ -928,6 +1011,15 @@ public:
 
         if (! soloButton.isMouseButtonDown())
             soloButton.setToggleState (returnTrack->isSolo (false), dontSendNotification);
+
+        refreshModulationFlag (returnTrack);   // B7: edge-compared; repaints only on a transition
+    }
+
+    /** B7: the return fader's modulated-indicator dot, above the child slider (cache-only paint). */
+    void paintOverChildren (Graphics& g) override
+    {
+        if (isLive() && volModulated)
+            drawModulationDot (g, fader);
     }
 
     void paint (Graphics& g) override
@@ -985,6 +1077,26 @@ private:
         return "RETURN " + String::charToString ((juce_wchar) ('A' + busIndex));
     }
 
+    /** B7: edge-compared refresh of the return-fader modulated-indicator cache. `t` is the freshly
+        re-resolved return track for THIS call (never a cached pointer — the R1 rule); nullptr
+        clears the flag. Rides the existing 28 Hz pollMeter — repaint/tooltip only on a transition.
+        Hot path — never logs. */
+    void refreshModulationFlag (te::AudioTrack* t)
+    {
+        bool volMod = false;
+
+        if (t != nullptr)
+            if (auto* vp = t->getVolumePlugin())
+                volMod = isParamModulated (vp->volParam);
+
+        if (volMod == volModulated)
+            return;
+
+        volModulated = volMod;
+        fader.setTooltip (volModulated ? "Volume - modulated (LFO)" : "");
+        repaint();
+    }
+
     static constexpr int swatchH   = 5;
     static constexpr int nameH     = 20;
     static constexpr int controlsH = 26;
@@ -997,6 +1109,9 @@ private:
     // Set for the duration of a fader drag — pollMeter's sync skips a held control, so the
     // 28 Hz engine→widget sync never fights a gesture.
     bool faderDragging = false;
+
+    // B7 modulated-parameter indicator cache (paint reads ONLY this; the tick maintains it).
+    bool volModulated = false;
 
     Label nameLabel;
     TextButton enableButton;
@@ -1221,6 +1336,22 @@ bool MixerView::getStripMuted (int index) const
 {
     if (auto* s = strips[index])
         return s->isMuteShown();
+
+    return false;
+}
+
+bool MixerView::getStripVolModulated (int index) const
+{
+    if (auto* s = strips[index])
+        return s->isVolModulatedShown();
+
+    return false;
+}
+
+bool MixerView::getStripPanModulated (int index) const
+{
+    if (auto* s = strips[index])
+        return s->isPanModulatedShown();
 
     return false;
 }

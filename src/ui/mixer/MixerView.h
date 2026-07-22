@@ -76,6 +76,14 @@ public:
     /** Mute-button state shown by the track strip at `index`, or false out of range — selftest seam. */
     bool getStripMuted (int index) const;
 
+    /** True when the track strip at `index` shows the volume-modulated indicator dot (B7), or
+        false out of range — selftest seam (valid after refreshControls). */
+    bool getStripVolModulated (int index) const;
+
+    /** True when the track strip at `index` shows the pan-modulated indicator dot (B7), or
+        false out of range — selftest seam (valid after refreshControls). */
+    bool getStripPanModulated (int index) const;
+
 private:
     class ChannelStrip;   // track strip — defined in the .cpp
     class MasterStrip;    // master strip — defined in the .cpp

@@ -1177,6 +1177,94 @@ te::MidiClip::Ptr ProjectSession::importMidiFile (const juce::File& file, te::Ti
     return clip;
 }
 
+std::vector<te::MidiClip::Ptr> ProjectSession::importMidiFileMultiTrack (const juce::File& file,
+                                                                         te::TimePosition start,
+                                                                         int firstTrackIndex)
+{
+    std::vector<te::MidiClip::Ptr> clips;
+
+    if (edit == nullptr || firstTrackIndex < 0 || ! file.existsAsFile())
+        return clips;
+
+    // Parse the WHOLE file BEFORE touching the edit. te::readFileToMidiList is the exact parse
+    // te::createClipFromFile rides (which then keeps only lists.getFirst() — the single-clip v1 limit
+    // this seam removes): one content-relative MidiList per non-empty source (track x channel) part,
+    // converted ticks->beats with the file's OWN PPQ (juce::MidiFile::getTimeFormat) — the tempo-
+    // INDEPENDENT mapping, so notes land on file beats regardless of the edit tempo. A format-1 file
+    // with one channel per track yields one part per track; a format-0 file (everything on one track)
+    // fans out per CHANNEL. An unreadable file yields no lists, so a bad file mutates NOTHING below.
+    const auto lists = te::readFileToMidiList (file, false);   // false = standard MIDI, no note-expression
+
+    const auto& ts          = edit->tempoSequence;
+    const int  tracksBefore = te::getAudioTracks (*edit).size();
+    int destIndex = firstTrackIndex;
+
+    for (auto* l : lists)
+    {
+        // Skip note-less parts (tempo/meta/CC-only source tracks) — no silent clips for them. The
+        // engine reader already drops fully-empty sequences; this guard also drops CC/sysex-only ones.
+        if (l == nullptr || l->getNumNotes() == 0)
+            continue;
+
+        auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, destIndex);
+
+        if (track == nullptr)
+        {
+            FORGE_LOG_ERROR ("Multi-track MIDI import: failed to create or access track "
+                             + juce::String (destIndex) + " for " + file.getFullPathName());
+            break;   // every later part targets a higher index that would fail the same way — keep what landed
+        }
+
+        // Size the clip to the next whole bar past its last event (mirrors te::createClipFromFile),
+        // insert at [0, end) and slide to `start` with keepLength (mirrors importMidiFile — MIDI beats
+        // are content-relative, beat 0 = clip start, so the notes move with the clip). An AudioTrack
+        // insert is a plain NON-looping arrange one-shot: no slot normalization, so no disableLooping /
+        // auto-tempo dance is needed here.
+        const auto lastEventTime = ts.toTime (l->getLastBeatNumber());
+        const auto nextBar       = static_cast<int> (std::ceil (ts.toBarsAndBeats (lastEventTime).getTotalBars()));
+        const auto clipEnd       = ts.toTime (te::tempo::BarsAndBeats { juce::jmax (1, nextBar) });
+
+        // Free te::insertMIDIClip (owner, name, range) — name BEFORE range. Name each clip after its
+        // source track's own name when the file carries one, else the file name.
+        const auto trackName = l->getImportedMidiTrackName();
+        const auto clipName  = trackName.isNotEmpty() ? trackName : file.getFileNameWithoutExtension();
+
+        auto clip = te::insertMIDIClip (*track, clipName, te::TimeRange (te::TimePosition(), clipEnd));
+
+        if (clip == nullptr)
+        {
+            // Do NOT advance destIndex: nothing landed on this track, so the next part retries it and
+            // the created clips stay on consecutive filled tracks (no silent gap lane).
+            FORGE_LOG_ERROR ("Multi-track MIDI import: failed to insert clip on track "
+                             + juce::String (destIndex) + " for " + file.getFullPathName());
+            continue;
+        }
+
+        clip->getSequence().copyFrom (*l, &edit->getUndoManager());   // getSequence(), never getSequenceLooped()
+        clip->setStart (start, /*preserveSync*/ false, /*keepLength*/ true);
+
+        PluginHost::ensureDefaultInstrument (*track);   // born audible — same recipe as every MIDI import seam
+        clips.push_back (clip);
+        ++destIndex;
+    }
+
+    if (clips.empty())
+    {
+        FORGE_LOG_WARN ("Multi-track MIDI import: no importable notes in " + file.getFullPathName()
+                        + " (unreadable / empty / meta-only)");
+        return clips;
+    }
+
+    edit->markAsChanged();
+
+    // A multi-track file routinely GROWS the track list (e.g. a 3-track .mid into a 1-track project);
+    // views that cache track refs must rebuild (same invariant as appendAudioTrack / ensureAuxBus).
+    if (te::getAudioTracks (*edit).size() > tracksBefore && onTracksChanged != nullptr)
+        onTracksChanged();
+
+    return clips;
+}
+
 bool ProjectSession::clearSlot (int trackIndex, int sceneIndex)
 {
     if (edit == nullptr)

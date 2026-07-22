@@ -96,8 +96,21 @@ public:
         rather than a level. */
     bool getMeterHasSource() const;
 
+    /** True when the volume-modulated indicator dot is shown (B7) — selftest seam (valid after
+        refreshNow). */
+    bool getVolModulatedShown() const;
+
+    /** True when the pan-modulated indicator dot is shown (B7) — selftest seam (valid after
+        refreshNow). */
+    bool getPanModulatedShown() const;
+
     void resized() override;
     void paint (juce::Graphics&) override;
+
+    /** B7: the modulated-parameter indicator dots (a ~5px accent dot at the fader/pan top-right
+        corner), drawn ABOVE the child sliders so they stay visible in every widget state. Paints
+        only from the tick-maintained cache — no engine reads here (the trackColour precedent). */
+    void paintOverChildren (juce::Graphics&) override;
 
 private:
     //==============================================================================
@@ -135,6 +148,12 @@ private:
         this is called). `liveIndex` is the validated absolute track index for the send seam. */
     void syncControls (te::AudioTrack&, int liveIndex);
 
+    /** B7: edge-compared refresh of the modulated-indicator cache for `t`'s vol/pan params. `t`
+        is the freshly validated track for THIS tick (never a cached pointer). The queries are
+        cheap (an atomic flag each); repaint/tooltip updates fire only on a transition, so a
+        steady-state tick stays free. Hot path — never logs. */
+    void refreshModulationFlags (te::AudioTrack& t);
+
     /** Pops the add-insert menu (PluginHost::getAvailablePluginNames -> addPluginToTrack). */
     void showAddInsertMenu();
 
@@ -157,6 +176,10 @@ private:
     // control the user is holding, so it never fights a gesture.
     bool faderDragging = false, panDragging = false;
     bool sendDragging[auxBusCount] = {};
+
+    // B7 modulated-parameter indicator cache (paintOverChildren reads ONLY these; the tick
+    // maintains them, edge-compared).
+    bool volModulated = false, panModulated = false;
 
     // Aux sends are hidden when the bound track IS an aux return (a return sending to itself
     // would be a feedback structure; the mixer's return strips have no send row either).

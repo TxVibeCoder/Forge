@@ -67,9 +67,16 @@ public:
     double getPanValue() const;   // -1..+1
     bool   isMuteOn()    const;
     bool   isSoloOn()    const;
+    bool   isVolModulatedShown() const;   // B7: the volume-modulated indicator dot is shown
+    bool   isPanModulatedShown() const;   // B7: the pan-modulated indicator dot is shown
 
     void resized() override;
     void paint (juce::Graphics&) override;
+
+    /** B7: the modulated-parameter indicator dots (a ~5px accent dot at the fader/pan top-right
+        corner), drawn ABOVE the child sliders so they stay visible in every widget state. Paints
+        only from the poll-maintained cache — no engine reads here. */
+    void paintOverChildren (juce::Graphics&) override;
 
 private:
     //==============================================================================
@@ -89,6 +96,12 @@ private:
         seed every control from the engine. Called by setTrack only. */
     void rebindFromTrack();
 
+    /** B7: edge-compared refresh of the modulated-indicator cache for `t`'s vol/pan params. `t`
+        is the freshly re-resolved track for THIS refresh (never a cached pointer — R1). The
+        queries are cheap (an atomic flag each); repaint/tooltip updates fire only on a
+        transition, so a steady-state tick stays free. Hot path — never logs. */
+    void refreshModulationFlags (te::AudioTrack& t);
+
     //==============================================================================
     // R1 identity: the strip caches ONLY these two. Every dereference re-resolves live.
     te::Edit* edit  = nullptr;   // raw, non-owning (R1); re-validated indirectly via resolveLiveTrack
@@ -100,6 +113,10 @@ private:
     // Drag/focus guards: the poll skips a control the user is actively holding so it never fights
     // a gesture (every engine->widget write is dontSendNotification besides).
     bool faderDragging = false, panDragging = false;
+
+    // B7 modulated-parameter indicator cache (paintOverChildren reads ONLY these; the poll
+    // maintains them, edge-compared).
+    bool volModulated = false, panModulated = false;
 
     juce::Slider   fader;                     // horizontal dB fader (forge::strip::styleDbFader + LinearBar)
     juce::Slider   pan;                       // pan knob (forge::strip::stylePanKnob)

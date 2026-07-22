@@ -59,6 +59,23 @@ public:
         the file is unreadable / empty / has no notes. */
     te::MidiClip::Ptr importMidiFile (const juce::File&, te::TimePosition start, int trackIndex = 0);
 
+    /** Imports a `.mid`/`.midi` FILE onto the LINEAR (Arrange) timeline, fanning a multi-track /
+        multi-channel file out to ONE born-audible, NON-looping MidiClip per non-empty source part,
+        placed at `start` on CONSECUTIVE tracks beginning at `firstTrackIndex` (tracks are created on
+        demand via the same getOrInsertAudioTrackAt idiom every import seam uses; each receives a
+        default 4OSC so the clips are born audible). The file is parsed BEFORE the edit is touched
+        (te::readFileToMidiList — the same tempo-INDEPENDENT ticks->beats reader createClipFromFile
+        rides, keyed on the file's own PPQ, so notes land on file beats regardless of the edit tempo):
+        an unreadable/empty file mutates nothing. Parts are the engine's canonical decomposition — one
+        per non-empty (source track x MIDI channel) pair — so a format-1 file with one channel per
+        track yields one clip per track, and a format-0 file (all events on one track) fans out per
+        channel. Note-less parts (tempo/meta/CC-only tracks) are SKIPPED, never silent clips; a
+        single-track single-channel file therefore lands exactly 1 clip (behaviour-compatible with
+        importMidiFile). Fires onTracksChanged when the track list actually grew. Returns the created
+        clips in destination-track order; empty on failure / nothing importable (logged). */
+    std::vector<te::MidiClip::Ptr> importMidiFileMultiTrack (const juce::File&, te::TimePosition start,
+                                                             int firstTrackIndex = 0);
+
     /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
         ensuring the track exists and is born audible (a default 4OSC instrument is added if the
         track has none). Returns the new clip, or {} if there is no open edit / the insert failed. */
@@ -502,8 +519,9 @@ public:
         track has no send for that bus. Const. */
     float getTrackSendLevel (int trackIndex, int busIdx) const;
 
-    /** Fired (message thread) when a seam changes the TRACK LIST — currently only ensureAuxBus, which
-        appends an aux-return AudioTrack. The shell wires this to rebuild views that cache track refs
+    /** Fired (message thread) when a seam changes the TRACK LIST — ensureAuxBus / appendAudioTrack
+        (each appends a track) and importMidiFileMultiTrack (grows the list to fit a multi-track
+        `.mid`). The shell wires this to rebuild views that cache track refs
         (SessionView columns / ArrangeView lanes) so a stale column never derefs a track, and to persist.
         Fires only when a track was actually added (grow-only). */
     std::function<void()> onTracksChanged;

@@ -58,6 +58,7 @@ namespace
         { .id = M::cmdUndo,           .menu = M::menuEdit,      .name = "Undo",             .shortcut = "Ctrl+Z",       .action = &CB::onUndo, .enabledWhen = &CB::queryCanUndo },
         { .id = M::cmdRedo,           .menu = M::menuEdit,      .name = "Redo",             .shortcut = "Ctrl+Shift+Z", .action = &CB::onRedo, .enabledWhen = &CB::queryCanRedo },
         { .id = M::cmdMidiLearn,      .menu = M::menuEdit,      .name = "MIDI Learn...",    .shortcut = "Ctrl+L",       .separatorBefore = true, .action = &CB::onMidiLearn },
+        { .id = M::cmdModulate,       .menu = M::menuEdit,      .name = "Modulate...",      .shortcut = "Ctrl+M",       .action = &CB::onModulate },   // B7: same group as MIDI Learn (both are parameter-picker cascades)
 
         // View (the mode trio radio-ticks against queryViewMode; the region toggles tick their visibility)
         { .id = M::cmdViewSession,    .menu = M::menuView,      .name = "Session",          .shortcut = "F8",           .intAction = &CB::onViewMode, .intArg = 0, .radioTick = &CB::queryViewMode },

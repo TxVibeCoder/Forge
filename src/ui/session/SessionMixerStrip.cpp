@@ -20,6 +20,35 @@ namespace
     // The poll cadence. 12 Hz is plenty for a glanceable strip and is cheaper than the pad grid's
     // 25 Hz across many columns.
     constexpr int pollHz      = 12;
+
+    //==========================================================================================
+    // B7 modulated-parameter indicator — a compact copy of the MixerView.cpp helpers (the
+    // "compact re-implementation, not extraction" stance this file already takes; StripWidgets.h
+    // stays style-only).
+
+    /** True when `param` (nullable) has at least one modifier (e.g. a Ctrl+M LFO) assigned. A
+        cheap read (an atomic flag inside the engine); message-thread only. Never called from
+        paint — the strip caches the result and paints from the cache. */
+    bool isParamModulated (const te::AutomatableParameter::Ptr& param)
+    {
+        return param != nullptr && param->hasActiveModifierAssignments();
+    }
+
+    /** Draws the "modulated" indicator: a ~5px filled accent dot on a panelBg backing disc (so it
+        reads over any widget state, including an accent-filled slider track), anchored at the
+        top-right corner of `control`'s bounds. Existing palette colours only. */
+    void drawModulationDot (juce::Graphics& g, const juce::Component& control)
+    {
+        constexpr float d = 5.0f;
+        const auto b = control.getBounds().toFloat();
+        const float x = b.getRight() - d - 1.0f;
+        const float y = b.getY() + 1.0f;
+
+        g.setColour (juce::Colour (ForgeLookAndFeel::panelBg));
+        g.fillEllipse (x - 1.0f, y - 1.0f, d + 2.0f, d + 2.0f);
+        g.setColour (juce::Colour (ForgeLookAndFeel::accent));
+        g.fillEllipse (x, y, d, d);
+    }
 }
 
 //==============================================================================
@@ -144,6 +173,9 @@ void SessionMixerStrip::rebindFromTrack()
     if (! bound)
     {
         meter.detach();         // release the old track's measurer with the empty-state clear
+        volModulated = panModulated = false;   // B7: no track -> no indicator dots
+        fader.setTooltip ("Volume (dB)");      // restore the baseline tooltips for the next bind
+        pan.setTooltip ("Pan");
         repaint();
         return;
     }
@@ -193,6 +225,9 @@ void SessionMixerStrip::refreshControls()
             meter.setVisible (false);
             muteButton.setVisible (false);
             soloButton.setVisible (false);
+            volModulated = panModulated = false;   // B7: cleared with the rest of the empty state
+            fader.setTooltip ("Volume (dB)");
+            pan.setTooltip ("Pan");
             repaint();
         }
         return;
@@ -214,6 +249,37 @@ void SessionMixerStrip::refreshControls()
 
     if (! soloButton.isMouseButtonDown())
         soloButton.setToggleState (t->isSolo (false), dontSendNotification);
+
+    refreshModulationFlags (*t);   // B7: an assignment made/removed elsewhere (Ctrl+M) shows within a tick
+}
+
+void SessionMixerStrip::refreshModulationFlags (te::AudioTrack& t)
+{
+    bool volMod = false, panMod = false;
+
+    if (auto* vp = t.getVolumePlugin())
+    {
+        volMod = isParamModulated (vp->volParam);
+        panMod = isParamModulated (vp->panParam);
+    }
+
+    if (volMod == volModulated && panMod == panModulated)
+        return;
+
+    volModulated = volMod;
+    panModulated = panMod;
+    fader.setTooltip (volModulated ? "Volume (dB) - modulated (LFO)" : "Volume (dB)");
+    pan.setTooltip   (panModulated ? "Pan - modulated (LFO)"         : "Pan");
+    repaint();
+}
+
+void SessionMixerStrip::paintOverChildren (Graphics& g)
+{
+    if (! bound)
+        return;
+
+    if (volModulated) drawModulationDot (g, fader);
+    if (panModulated) drawModulationDot (g, pan);
 }
 
 //==============================================================================
@@ -222,6 +288,8 @@ double SessionMixerStrip::getFaderDb()  const { return fader.getValue(); }
 double SessionMixerStrip::getPanValue() const { return pan.getValue(); }
 bool   SessionMixerStrip::isMuteOn()    const { return muteButton.getToggleState(); }
 bool   SessionMixerStrip::isSoloOn()    const { return soloButton.getToggleState(); }
+bool   SessionMixerStrip::isVolModulatedShown() const { return volModulated; }
+bool   SessionMixerStrip::isPanModulatedShown() const { return panModulated; }
 
 //==============================================================================
 void SessionMixerStrip::resized()

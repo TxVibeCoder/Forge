@@ -45,6 +45,7 @@ public:
 
         cmdUndo, cmdRedo,   // W05
         cmdMidiLearn,
+        cmdModulate,        // B7: the Ctrl+M "Modulate" (LFO) picker, surfaced as a menu item
 
         cmdViewSession, cmdViewArrange, cmdViewMix,
         cmdToggleBrowser, cmdToggleDrawer,
@@ -75,6 +76,7 @@ public:
         std::function<void()> onUndo, onRedo;                       // W05
         std::function<bool()> queryCanUndo, queryCanRedo;           // W05: item enablement (unset = enabled)
         std::function<void()> onMidiLearn;
+        std::function<void()> onModulate;   // B7: opens the shell's Modulate (LFO) parameter picker
 
         // View
         std::function<void (int)> onViewMode;      // 0 = Session, 1 = Arrange, 2 = Mixer (ControlBar's convention)

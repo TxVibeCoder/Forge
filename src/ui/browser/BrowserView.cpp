@@ -86,9 +86,10 @@ void BrowserView::resized()
 //==============================================================================
 void BrowserView::fileDoubleClicked (const File& file)
 {
-    // Only fire for real, existing audio files. Directories double-click to expand/collapse in
-    // the tree itself; the WildcardFileFilter already keeps non-audio files out of the list, but
-    // we still guard existsAsFile() defensively.
+    // Only fire for real, existing files (audio or MIDI — the shell's dispatch branches on the
+    // extension). Directories double-click to expand/collapse in the tree itself; the
+    // WildcardFileFilter already keeps non-importable files out of the list, but we still guard
+    // existsAsFile() defensively.
     if (file.existsAsFile() && onImportFile != nullptr)
         onImportFile (file);
 }

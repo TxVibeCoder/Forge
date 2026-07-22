@@ -114,7 +114,8 @@ namespace forge::midiedit
     // event (note/CC/sysex via MidiList::getFirstBeatNumber), keeping every event at its absolute
     // timeline position (Clip::setStart preserveSync=true, keepLength=false — the boundary moves, the
     // content does not) and DELETING NOTHING (the skipped lead-in is absorbed into the clip offset,
-    // reversible by dragging the edge back). No-op (returns false) when the clip is empty, already
+    // reversible by dragging the edge back). No-op (returns false) when the clip is empty (no notes,
+    // no CC, no sysex — a controller-only clip DOES trim, to its first CC/sysex event), already
     // tight (first event at/behind the visible start), or LOOPING (an arrange one-shot is the target;
     // W5/W13: a looping/slot clip re-normalises). Undoable via the clip's Edit UndoManager (setStart
     // is UM-bound); the caller seals the gesture. Message-thread only. Returns true iff the clip
@@ -125,7 +126,11 @@ namespace forge::midiedit
             return false;
 
         auto& seq = clip.getSequence();                // NEVER getSequenceLooped() (edits there are discarded)
-        if (seq.getNumNotes() == 0)
+
+        // "Empty" means NO events of any kind — notes, CC, or sysex. getFirstBeatNumber() already folds all
+        // three in, so a controller-only clip (zero notes) trims to its first CC/sysex event (B5, closes the
+        // W23 residual where a notes-only guard made CC-only clips no-op).
+        if (seq.getNumNotes() == 0 && seq.getNumControllerEvents() == 0 && seq.getNumSysExEvents() == 0)
             return false;
 
         const auto firstBeat    = seq.getFirstBeatNumber();                                   // earliest event, content-relative
