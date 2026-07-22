@@ -60,10 +60,12 @@ namespace PluginHost
         getKeyNote — read straight from the ValueTree) needs no pump. Message-thread only. */
     bool ensureDrumKitInstrument (te::AudioTrack& track);
 
-    /** The demo's three self-contained instrument voices. Kick + Bass are programmed 4OSC presets
-        (pure synthesis, deterministic, no asset). Piano is the engine Sampler loaded with Forge's
-        self-rendered CC0 piano one-shot (see InstrumentSamples), pitched chromatically from one sample. */
-    enum class InstrumentPreset { Kick, Bass, Piano };
+    /** Forge's built-in instrument voices. Kick + Bass are programmed 4OSC presets (pure synthesis,
+        deterministic, no asset). Piano + the B6 melodic voices (PluckBass / Pad / Bell / Clav) are the
+        engine Sampler loaded with a self-rendered CC0 one-shot (see InstrumentSamples), each pitched
+        chromatically from one sample. New values are APPENDED — the demo builder / gates reference the
+        first three by name, so their ordinals must not move. */
+    enum class InstrumentPreset { Kick, Bass, Piano, PluckBass, Pad, Bell, Clav };
 
     /** Replaces the track's HEAD instrument with the given preset's instrument and configures it:
           Kick / Bass -> a 4OSC with programmed parameters (osc waveShape/tune/level, amp+filter ADSR,
@@ -71,13 +73,18 @@ namespace PluginHost
           Piano       -> the engine Sampler (te::SamplerPlugin) loaded via InstrumentSamples::
                          ensurePianoOneShot(), mapped at InstrumentSamples::kRootNote so it plays
                          chromatically.
+          PluckBass / Pad / Bell / Clav
+                      -> the engine Sampler loaded via InstrumentSamples::ensureMelodicOneShot(voice),
+                         each a self-rendered CC0 one-shot mapped at InstrumentSamples::kRootNote across
+                         keys 0..127 so it plays chromatically — the same Sampler recipe as Piano.
         Removes any existing head synth first so it never stacks. Returns the inserted instrument
         plugin, or nullptr on failure (logs). Message-thread only.
 
         NOTE (headless callers): the Sampler loads its audio asynchronously (on an AsyncUpdater), so a
-        headless render of a piano note must pump the message loop (e.g. dispatchPendingUpdates /
-        MessageManager::runDispatchLoopUntil) AFTER this returns and before rendering, or the sound will
-        have zero samples and be skipped on note-on. Kick/Bass have no such requirement. */
+        headless render of a Piano / PluckBass / Pad / Bell / Clav note must pump the message loop (e.g.
+        dispatchPendingUpdates / MessageManager::runDispatchLoopUntil) AFTER this returns and before
+        rendering, or the sound will have zero samples and be skipped on note-on. Kick/Bass have no such
+        requirement. */
     te::Plugin::Ptr applyInstrumentPreset (te::AudioTrack& track, InstrumentPreset preset);
 
     /** The user-insertable plugins on this track in chain order, EXCLUDING the always-present

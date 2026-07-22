@@ -56,4 +56,28 @@ namespace InstrumentSamples
         order). Deterministic (a distinct seeded self-owned PRNG per voice, NOT juce::Random).
         Message-thread only (file I/O). */
     juce::Array<DrumHit> ensureDrumKit();
+
+    //==============================================================================
+    // Melodic voices — additional self-rendered CC0 tonal one-shots (B6 groundwork) that fill the
+    // gaps between the demo's Kick / Bass / Piano. Each is rendered at kRootNote (the SAME root the
+    // piano uses) so a te::SamplerPlugin mapped root=kRootNote across keys 0..127 pitches it
+    // chromatically. Same determinism + CC0 contract as the piano and drum voices.
+
+    /** A self-rendered melodic one-shot voice. Each maps to one on-disk %APPDATA%\Forge\library file
+        and one PluginHost::InstrumentPreset. */
+    enum class MelodicVoice
+    {
+        PluckBass,   // round HARMONIC pluck — distinct from the inharmonic piano and the 4OSC saw bass
+        Pad,         // soft slow-swell detuned-saw ensemble
+        Bell,        // two-operator FM bell (inharmonic modulator ratio, long ring)
+        Clav         // bright, snappy clavinet-style pluck
+    };
+
+    /** Generates (if missing) the requested melodic one-shot into %APPDATA%\Forge\library\<voice>.wav
+        (mono, 44100 Hz) and returns its File. Idempotent: an existing, non-empty file is returned
+        without regenerating. Returns an empty File on failure (and logs). Deterministic — a pure
+        function of fixed synthesis constants (plus a distinct seeded self-owned PRNG per voice where
+        noise is used, NOT juce::Random), so the bytes are stable run-to-run. Message-thread only
+        (file I/O). */
+    juce::File ensureMelodicOneShot (MelodicVoice voice);
 }

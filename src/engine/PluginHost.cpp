@@ -407,6 +407,60 @@ namespace PluginHost
 
             setParam (synth.masterLevel, 0.0f);
         }
+
+        // Inserts the engine Sampler at the track HEAD and loads it with a single self-rendered CC0
+        // one-shot mapped at InstrumentSamples::kRootNote across the whole keyboard (root=kRootNote,
+        // keys 0..127) so it pitches chromatically — the same recipe the Piano preset uses inline,
+        // factored here for the B6 melodic presets (PluckBass / Pad / Bell / Clav). Returns the inserted
+        // plugin with the sound loaded; the inserted-but-silent plugin if addSound fails; or nullptr if
+        // the sample is missing / the Sampler could not be inserted / the built-in was not a Sampler
+        // (logs each). Message-thread only; the Sampler ingests its audio async (a headless render must
+        // pump the loop first — same caveat as the Piano preset). Callers pass a File already resolved
+        // via InstrumentSamples::ensureMelodicOneShot(); this never renders.
+        te::Plugin::Ptr insertSamplerOneShot (te::AudioTrack& track, const juce::File& sample,
+                                              const juce::String& displayName)
+        {
+            if (! sample.existsAsFile())
+            {
+                FORGE_LOG_ERROR ("Instrument preset '" + displayName
+                                 + "': no one-shot available — instrument not inserted");
+                return {};
+            }
+
+            // Insert the engine Sampler at the head via the same built-in path 4OSC / the piano use.
+            auto plugin = addInstrumentToTrack (track, te::SamplerPlugin::getPluginName());
+            if (plugin == nullptr)
+            {
+                FORGE_LOG_ERROR ("Instrument preset '" + displayName + "': failed to insert Sampler instrument");
+                return {};
+            }
+
+            if (auto* sampler = dynamic_cast<te::SamplerPlugin*> (plugin.get()))
+            {
+                // addSound resolves an absolute path via the Edit's filePathResolver (returns it as-is).
+                // startTime 0, length 0 -> whole file. gainDb 0. Returns "" on success, else an error.
+                const juce::String err = sampler->addSound (sample.getFullPathName(), displayName,
+                                                            0.0, 0.0, 0.0f);
+                if (err.isNotEmpty())
+                {
+                    FORGE_LOG_ERROR ("Instrument preset '" + displayName + "': Sampler addSound failed — " + err);
+                    return plugin;   // the plugin is inserted; it just has no sound
+                }
+
+                // Map the single sound at the sample's root note across the full keyboard so it pitches
+                // chromatically (Sampler resamples per note-on: ratio = f(note)/f(keyNote)).
+                sampler->setSoundParams (0, InstrumentSamples::kRootNote, 0, 127);
+
+                // CAVEAT: the audio loads on an AsyncUpdater — a headless render must pump the message
+                // loop after this before rendering, or getNumSamples()==0 and the note is skipped.
+            }
+            else
+            {
+                FORGE_LOG_ERROR ("Instrument preset '" + displayName + "': inserted instrument was not a SamplerPlugin");
+            }
+
+            return plugin;
+        }
     } // namespace
 
     te::Plugin::Ptr applyInstrumentPreset (te::AudioTrack& track, InstrumentPreset preset)
@@ -457,6 +511,24 @@ namespace PluginHost
             }
 
             return plugin;
+        }
+
+        // PluckBass / Pad / Bell / Clav (B6): a Sampler loaded with the matching self-rendered CC0
+        // melodic one-shot, mapped chromatically from kRootNote — same recipe as Piano, via the shared
+        // insertSamplerOneShot helper. (removeExistingInstruments above already cleared any head synth.)
+        if (preset == InstrumentPreset::PluckBass || preset == InstrumentPreset::Pad
+            || preset == InstrumentPreset::Bell   || preset == InstrumentPreset::Clav)
+        {
+            const auto voice = preset == InstrumentPreset::PluckBass ? InstrumentSamples::MelodicVoice::PluckBass
+                             : preset == InstrumentPreset::Pad       ? InstrumentSamples::MelodicVoice::Pad
+                             : preset == InstrumentPreset::Bell      ? InstrumentSamples::MelodicVoice::Bell
+                                                                     : InstrumentSamples::MelodicVoice::Clav;
+            const char* name = preset == InstrumentPreset::PluckBass ? "Pluck Bass"
+                             : preset == InstrumentPreset::Pad       ? "Pad"
+                             : preset == InstrumentPreset::Bell      ? "Bell"
+                                                                     : "Clav";
+
+            return insertSamplerOneShot (track, InstrumentSamples::ensureMelodicOneShot (voice), name);
         }
 
         // Kick / Bass: insert a 4OSC then program it.

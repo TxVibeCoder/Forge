@@ -466,6 +466,222 @@ namespace InstrumentSamples
         {
             return libraryDir().getChildFile ("drum_" + juce::String (midiNote) + ".wav");
         }
+
+        //==============================================================================
+        // ---- Melodic voices (B6 groundwork) -------------------------------------------------------
+        //
+        // Four more self-rendered CC0 tonal one-shots that fill the gaps between the demo's Kick / Bass /
+        // Piano: a plucked bass, a soft pad swell, a two-operator FM bell, and a bright clav. Same
+        // determinism + CC0 contract as the piano and drum voices (a pure function of fixed constants +
+        // a per-voice seeded Xorshift32 where noise is used — the Pad and Bell use no noise at all, so
+        // they are trivially deterministic). Each is rendered at kRootNote so the Sampler pitches it
+        // chromatically from the SAME root the piano uses. A render fn writes RAW signal into channel 0;
+        // ensureMelodicOneShot() normalises (per-voice target) then writes it — the drum idiom (shared
+        // target in the spec), not the piano's inline normalise. Character over accuracy, as with the kit.
+
+        // PluckBass — a round, fundamental-heavy HARMONIC pluck: a fast attack, the low harmonics each
+        // decaying faster than the last (higher partials die first), and a short filtered-noise pluck
+        // transient. Purely harmonic (vs. the inharmonic piano) and short, so it reads as a synth /
+        // electric bass pluck — distinct from both the piano one-shot and the 4OSC saw-bass preset.
+        void renderPluckBass (AudioBuffer<float>& buffer)
+        {
+            const int numSamples = buffer.getNumSamples();
+            auto* out = buffer.getWritePointer (0);
+
+            const double f0 = midiNoteToHz (kRootNote);
+            Xorshift32 rng (0xB0551234u);                 // fixed seed -> reproducible pluck transient
+
+            const int    attackSamples = jmax (1, (int) (0.002 * kSampleRate));
+            const double bodyTau       = 0.30;            // ~0.9 s to near-silence
+            const int    numPartials   = 6;
+
+            const int    plckSamples   = jmax (1, (int) (0.004 * kSampleRate));
+            float        plckLp        = 0.0f;            // one-pole LP state for the noise transient
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double t = (double) i / kSampleRate;
+
+                double sample = 0.0;
+                for (int p = 1; p <= numPartials; ++p)
+                {
+                    const double pf = (double) p * f0;
+                    if (pf >= kSampleRate * 0.5)          // skip anything past Nyquist
+                        break;
+
+                    const double gain = 1.0 / (double) p;
+                    const double tau  = bodyTau / (1.0 + 0.6 * (double) (p - 1));   // higher = faster
+                    sample += gain * expDecay (t, tau)
+                                * std::sin (MathConstants<double>::twoPi * pf * t);
+                }
+
+                double amp = 1.0;
+                if (i < attackSamples)
+                    amp = (double) i / (double) attackSamples;
+
+                double v = sample * amp;
+
+                if (i < plckSamples)
+                {
+                    plckLp += 0.4f * (rng.nextBipolar() - plckLp);
+                    v += 0.18 * plckLp * expDecay (t, 0.004);
+                }
+
+                out[i] = (float) v;
+            }
+        }
+
+        // Pad — a soft, slow-swelling ensemble: three lightly-detuned additive-saw voices (1/h harmonic
+        // rolloff plus an extra soft high-cut so it stays mellow, not buzzy), a slow attack ramp, a long
+        // sustain plateau, and a short release. The small inter-voice detune produces the slow beating /
+        // chorus that reads as strings/pad. The longest of the melodic one-shots (a fixed swell, since
+        // the Sampler plays it as a one-shot rather than looping). No noise -> fully deterministic.
+        void renderPad (AudioBuffer<float>& buffer)
+        {
+            const int numSamples = buffer.getNumSamples();
+            auto* out = buffer.getWritePointer (0);
+
+            const double f0           = midiNoteToHz (kRootNote);
+            const int    numHarmonics = 12;
+            const double detune[3]    = { -0.0018, 0.0, 0.0020 };   // ~ +-3 cents -> slow beating
+            const double voiceGain    = 1.0 / 3.0;
+
+            const double totalSeconds = (double) numSamples / kSampleRate;
+            const double attackSecs   = 0.45;
+            const double releaseSecs  = 0.55;
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double t = (double) i / kSampleRate;
+
+                double sample = 0.0;
+                for (int v = 0; v < 3; ++v)
+                {
+                    const double vf = f0 * (1.0 + detune[v]);
+                    for (int h = 1; h <= numHarmonics; ++h)
+                    {
+                        const double hf = (double) h * vf;
+                        if (hf >= kSampleRate * 0.5)
+                            break;
+
+                        // 1/h saw rolloff, with an extra soft high-cut so the pad is mellow not buzzy.
+                        const double soft = 1.0 / (1.0 + 0.12 * (double) (h * h));
+                        sample += voiceGain * (1.0 / (double) h) * soft
+                                    * std::sin (MathConstants<double>::twoPi * hf * t);
+                    }
+                }
+
+                // Attack ramp -> sustain plateau -> release ramp (linear, click-free at both ends).
+                double env = 1.0;
+                if (t < attackSecs)
+                    env = t / attackSecs;
+                else if (t > totalSeconds - releaseSecs)
+                    env = jmax (0.0, (totalSeconds - t) / releaseSecs);
+
+                out[i] = (float) (sample * env);
+            }
+        }
+
+        // Bell — a two-operator FM voice with an INHARMONIC modulator ratio (3.5) and a fast-decaying
+        // modulation index, so the metallic "clang" lives in the attack and mellows toward a near-sine
+        // body as the note rings out over a long exponential amp decay (bells ring). This is the
+        // palette's FM method (the piano/pluck/clav are additive) — a genuinely different timbre class.
+        // No noise -> fully deterministic.
+        void renderBell (AudioBuffer<float>& buffer)
+        {
+            const int numSamples = buffer.getNumSamples();
+            auto* out = buffer.getWritePointer (0);
+
+            const double fc     = midiNoteToHz (kRootNote);    // carrier
+            const double fm     = fc * 3.5;                    // inharmonic modulator -> bell clang
+            const double ampTau = 0.55;                        // ~2.2 s ring
+            const double idxTau = 0.18;                        // metallic attack decays fast
+            const double idx0   = 4.5;                         // peak modulation index
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double t   = (double) i / kSampleRate;
+                const double idx = idx0 * expDecay (t, idxTau);
+                const double mod = idx * std::sin (MathConstants<double>::twoPi * fm * t);
+                const double car = std::sin (MathConstants<double>::twoPi * fc * t + mod);
+
+                out[i] = (float) (car * expDecay (t, ampTau));
+            }
+        }
+
+        // Clav — a bright, snappy plucked-keyboard pluck (clavinet / harpsichord character): many
+        // harmonics (1/sqrt(h) so it stays bright), each decaying fast, a hard fast attack, a short
+        // body, and a brief noise key-strike tick. Brighter and shorter than the PluckBass, so the two
+        // plucks are clearly distinct.
+        void renderClav (AudioBuffer<float>& buffer)
+        {
+            const int numSamples = buffer.getNumSamples();
+            auto* out = buffer.getWritePointer (0);
+
+            const double f0 = midiNoteToHz (kRootNote);
+            Xorshift32 rng (0xC1A11235u);                 // fixed seed -> reproducible key-strike tick
+
+            const int    attackSamples = jmax (1, (int) (0.001 * kSampleRate));
+            const double bodyTau       = 0.12;            // short, snappy (~0.4 s)
+            const int    numHarmonics  = 14;
+
+            const int    tickSamples   = jmax (1, (int) (0.002 * kSampleRate));
+            float        tickLp        = 0.0f;
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const double t = (double) i / kSampleRate;
+
+                double sample = 0.0;
+                for (int h = 1; h <= numHarmonics; ++h)
+                {
+                    const double hf = (double) h * f0;
+                    if (hf >= kSampleRate * 0.5)
+                        break;
+
+                    const double gain = 1.0 / std::sqrt ((double) h);              // bright rolloff
+                    const double tau  = bodyTau / (1.0 + 0.4 * (double) (h - 1));
+                    sample += gain * expDecay (t, tau)
+                                * std::sin (MathConstants<double>::twoPi * hf * t);
+                }
+
+                double amp = 1.0;
+                if (i < attackSamples)
+                    amp = (double) i / (double) attackSamples;
+
+                double v = sample * amp;
+
+                if (i < tickSamples)
+                {
+                    tickLp += 0.6f * (rng.nextBipolar() - tickLp);
+                    v += 0.15 * tickLp * expDecay (t, 0.0015);
+                }
+
+                out[i] = (float) v;
+            }
+        }
+
+        //==============================================================================
+        // One melodic voice: its enum id, on-disk filename, display name, buffer length (decay tail +
+        // margin), normalise target (~ -1 dBFS = 0.89; the dense pad sits back a touch), and its render
+        // fn. Order is arbitrary — ensureMelodicOneShot() looks a voice up by id.
+        struct MelodicVoiceSpec
+        {
+            MelodicVoice id;
+            const char*  filename;
+            const char*  name;
+            double       seconds;
+            float        targetPeak;
+            void       (*render) (AudioBuffer<float>&);
+        };
+
+        const MelodicVoiceSpec kMelodicVoices[] =
+        {
+            { MelodicVoice::PluckBass, "pluck_bass.wav", "Pluck Bass", 0.9, 0.89f, &renderPluckBass },
+            { MelodicVoice::Pad,       "pad.wav",        "Pad",        3.0, 0.80f, &renderPad       },
+            { MelodicVoice::Bell,      "bell.wav",       "Bell",       2.4, 0.89f, &renderBell      },
+            { MelodicVoice::Clav,      "clav.wav",       "Clav",       0.5, 0.89f, &renderClav      },
+        };
     } // namespace
 
     //==============================================================================
@@ -551,5 +767,54 @@ namespace InstrumentSamples
                             + juce::String (kNumDrumVoices) + " voices available");
 
         return hits;
+    }
+
+    //==============================================================================
+    juce::File ensureMelodicOneShot (MelodicVoice voice)
+    {
+        // Find the spec for the requested voice.
+        const MelodicVoiceSpec* spec = nullptr;
+        for (const auto& s : kMelodicVoices)
+            if (s.id == voice)
+            {
+                spec = &s;
+                break;
+            }
+
+        if (spec == nullptr)
+        {
+            FORGE_LOG_ERROR ("ensureMelodicOneShot: unknown melodic voice requested");
+            return {};
+        }
+
+        const File out = libraryDir().getChildFile (spec->filename);
+
+        // Idempotent: reuse a previously-generated, non-empty file.
+        if (looksValid (out))
+            return out;
+
+        const File dir = libraryDir();
+        const auto dirResult = dir.createDirectory();
+        if (dirResult.failed())
+        {
+            FORGE_LOG_ERROR ("Failed to create instrument library dir " + dir.getFullPathName()
+                             + " — " + dirResult.getErrorMessage());
+            return {};
+        }
+
+        // Synthesize into a mono buffer, normalise to this voice's target, then write it (mono
+        // 44.1 kHz 16-bit, temp-then-move) via the shared writer the piano + drum voices use.
+        const int numSamples = jmax (1, (int) (spec->seconds * kSampleRate));
+        AudioBuffer<float> buffer (1, numSamples);
+        buffer.clear();
+        spec->render (buffer);
+        normalisePeak (buffer, spec->targetPeak);
+
+        if (! writeMonoWav (out, buffer))
+            return {};   // writeMonoWav logged the specific failure
+
+        FORGE_LOG_INFO ("Rendered CC0 melodic one-shot '" + juce::String (spec->name) + "' to "
+                        + out.getFullPathName());
+        return out;
     }
 }
