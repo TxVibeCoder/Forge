@@ -277,7 +277,9 @@ maintainer and their machine must never leak. **Sanitize before every push.**
 **Author identity.** Commits use the pseudonymous `TxVibeCoder` GitHub-noreply address — never a real name or
 personal email. Verify before pushing: `git config user.name` → `TxVibeCoder`, `git config user.email` →
 `TxVibeCoder@users.noreply.github.com`. Commit trailer on every commit:
-`Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+`Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. The **address is fixed** (the Anthropic noreply —
+never a real identity); the **model name tracks whichever model actually did the work**, so a future model
+updates this line rather than back-dating a false attribution.
 
 **Scrub categories — what must never appear in a committed file:** the maintainer's real name, real email, or
 employer; any personal `C:\Users\…` (or other machine-local) absolute path; the names of the maintainer's *other*
