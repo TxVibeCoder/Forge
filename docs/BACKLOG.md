@@ -24,9 +24,9 @@
 >
 > **Update 2026-08-04 (W25):** **B9 — multi-stem audio import SHIPPED** (a maintainer brief, added to this
 > page and burned down in the same pass). Build clean, **48/48 floor** (`+--selftest-stems`), 12/12
-> screenshots. **W25 is the only unpushed commit** — everything through W24 is on `origin/main` (tip
-> `5ae8418`, verified by `git fetch`), so the "push still held" notes above are stale for W24 and current
-> for W25 only. Still open: item 0, B4, B6-remaining, B8 leftovers.
+> screenshots. ✅ **PUSHED** — `origin/main` tip is **`062c248`**, local `main` == `origin/main` (verified by
+> `git fetch` after the push). W24 turned out to have been pushed already, so every "push still held" note
+> above is stale. **Nothing is currently unpushed.** Still open: item 0, B4, B6-remaining, B8 leftovers.
 
 ---
 

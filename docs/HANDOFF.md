@@ -27,11 +27,12 @@
 > (`getClips()` and `getClipSlotList().getClipSlots()`). New gate **`--selftest-stems`** (floor **47 → 48**, 24
 > legs over 5 phases). Build **clean (0 warnings)** · **48/48 selftest floor** (the 47-gate baseline was run
 > against the pre-change binary first — 47/47 — so the bump is measured, not assumed) · **12/12 screenshots**
-> (unchanged: the wave adds no new UI state). Also corrected `README.md`'s stale "sixteen gates / 9
-> screenshots" → 48 / 12. ⚠ **W25 is committed locally on `main` and NOT pushed — push HELD for the
-> maintainer's OK.** Everything through **W24 IS on `origin/main`** (verified by `git fetch` on 2026-08-04:
-> `origin/main` tip = `5ae8418`, so local `main` is exactly ONE commit ahead — the W24 blocks below saying
-> "NOT pushed" were true when written and are now stale). Out of scope by design (all from the brief, all still open if wanted): Browser
+> (unchanged: the wave adds no new UI state). Also corrected the stale gate/screenshot counts in
+> `README.md` ("sixteen" / 9-state) and `docs/ARCHITECTURE.md` (same claim, plus its ProjectSession seam
+> inventory now names all three import layers). ✅ **PUSHED to `origin/main`** — W25 tip **`062c248`**,
+> local `main` == `origin/main` (verified by `git fetch` after the push, 2026-08-04). W24 turned out to have
+> been pushed already, so the "NOT pushed / push HELD" notes in the W24 blocks below were stale when this
+> wave started; they are corrected in place. Out of scope by design (all from the brief, all still open if wanted): Browser
 > multi-select, folder drops, auto-grouping/aux-routing stems, Session-grid multi-import, gain-staging. Full
 > record → [devlog/wave-25-multistem-import.md](devlog/wave-25-multistem-import.md).
 
