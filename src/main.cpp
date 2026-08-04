@@ -1463,6 +1463,12 @@ private:
     int  sySavedScanInterval = 4;                       // restore on ALL exit paths (persists to storage)
 
     // --selftest-popout state (W04b): parentage/visibility flags captured across the two turns.
+    // --selftest-popout's deferred phase waits on a CONDITION (both popout resets ran) rather than a
+    // fixed sleep. 25 ms x 80 = a ~2 s ceiling, after which it verifies anyway so a hang still reports.
+    static constexpr int popoutWaitTickMs    = 25;
+    static constexpr int popoutMaxWaitTicks  = 80;
+    int  popoutWaitTicks     = 0;
+
     bool poDockedBefore      = false;   // both views were shell children before the tear-off
     bool poMixerWindowSeen   = false, poRollWindowSeen    = false;   // popouts constructed + visible
     bool poMixerOut          = false, poRollOut           = false;   // parent == the popout window
@@ -4455,7 +4461,12 @@ private:
         if (mixerPopout != nullptr)     mixerPopout->closeButtonPressed();
         if (pianoRollPopout != nullptr) pianoRollPopout->closeButtonPressed();
 
-        startTimer (300);   // YIELD: let the deferred window resets run, then verify
+        // YIELD until the deferred window resets have actually run (condition-waited in timerCallback,
+        // not a fixed sleep — see there). 25 ms granularity keeps the common case fast: the resets are
+        // one callAsync away, so this normally completes on the FIRST tick, ~12x quicker than the old
+        // flat 300 ms wait while also tolerating a message loop that is briefly starved.
+        popoutWaitTicks = 0;
+        startTimer (popoutWaitTickMs);
     }
 
     void finishPopoutSelftest()
@@ -4517,6 +4528,23 @@ private:
                                     .getChildFile ("forge_phase0_selftest.log");
         if (! reportFile.replaceWithText (report))
             FORGE_LOG_ERROR ("Failed to write popout selftest report to: " + reportFile.getFullPathName());
+
+        // Every gate writes to the SAME report path, so the next gate in a floor run overwrites this
+        // one — which is exactly how a real, observed --selftest-popout failure escaped diagnosis (the
+        // report was gone before it could be read, and 65 subsequent reproduction runs never failed).
+        // On FAILURE, name the failing legs in the PERSISTENT log, which survives the rest of the run.
+        if (! pass)
+        {
+            juce::StringArray failedLegs;
+
+            for (const auto& line : juce::StringArray::fromLines (report))
+                if (line.endsWith ("=0"))
+                    failedLegs.add (line.upToFirstOccurrenceOf ("=", false, false));
+
+            FORGE_LOG_ERROR ("Popout selftest FAILED legs: " + failedLegs.joinIntoString (", ")
+                             + " (waited " + juce::String (popoutWaitTicks * popoutWaitTickMs)
+                             + " ms for the deferred resets)");
+        }
 
         FORGE_LOG_INFO ("Popout selftest " + juce::String (pass ? "PASS" : "FAIL")
                         + " — report: " + reportFile.getFullPathName());
@@ -9289,8 +9317,27 @@ private:
 
         if (mode == SelfTest::popout)
         {
+            // Wait for the CONDITION (both deferred window resets have actually run), not for a fixed
+            // duration. restoreMixer/restorePianoRoll each defer their `popout.reset()` to a
+            // MessageManager::callAsync, so "has it happened yet" is directly checkable — and a fixed
+            // sleep that merely usually outlasts it is a race by construction. Poll at 25 ms up to
+            // ~2 s; on timeout, proceed ANYWAY so a genuine hang still produces a FAIL report with the
+            // offending legs rather than hanging the gate.
+            ++popoutWaitTicks;
+
+            const bool resetsDone = mixerPopout == nullptr && pianoRollPopout == nullptr;
+
+            if (! resetsDone && popoutWaitTicks < popoutMaxWaitTicks)
+                return;   // keep the timer running
+
             stopTimer();
-            finishPopoutSelftest();   // single yield: the deferred window resets have run
+
+            if (! resetsDone)
+                FORGE_LOG_WARN ("selftest-popout: deferred window resets still pending after "
+                                + juce::String (popoutWaitTicks * popoutWaitTickMs)
+                                + " ms — verifying anyway (the report will show what failed)");
+
+            finishPopoutSelftest();
             return;
         }
 

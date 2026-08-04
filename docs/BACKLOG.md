@@ -232,7 +232,7 @@ EQ / exporter — all verified already working before the brief was written.
 | Scene colour / multi-select | W15 f/u | |
 | Strip re-bind edge + absolute-index re-resolve | W08 QC | **Latent traps, not live bugs.** Add invariant comments now; only fix if a strip-reuse or drag-reorder feature lands. |
 | Aux-return ordering (cosmetic) | W07 f/u | |
-| `--selftest-popout` is intermittent | W25 | Failed **once** in a full-floor run (6 PASS / 1 FAIL on the same binary; PASS on the pre-change baseline), with no WARN/ERROR — a leg assertion flipped. Its window-visibility / focus legs read live OS state behind a fixed 300 ms yield. Widen the yield **only if it recurs**; also archive per-gate reports on failure so the failing leg is knowable. Details → `devlog/wave-25-multistem-import.md`. |
+| `--selftest-popout` intermittency | W25 → hardened W29 | **NOT REPRODUCED.** 65 dedicated runs (40 isolated + 25 in the floor's tray→popout ordering) came back 65/65 PASS, so the single observed failure was never diagnosed — its report had already been overwritten by the next gate. W29 did the two things that ARE defensible without a repro: replaced the fixed 300 ms deferred-phase sleep with a **condition wait** (poll until both popout resets have actually run, 25 ms × 80 ≈ 2 s ceiling, verify anyway on timeout) and made a failure **self-diagnosing** — the failing leg names now go to the PERSISTENT log, which survives the rest of a floor run. Measured: the resets complete in ~25–50 ms, so the old 300 ms already had ~6× margin — which makes plain timing starvation an unlikely cause and is itself a useful datum. **If it recurs, the log will now say which leg.** Details → `devlog/wave-29-popout-hardening.md`. |
 
 ---
 

@@ -1,8 +1,27 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W27 — capture
-> count-in (B4)"** — the last "ready to build" item on the backlog, and one carrying a **wrong inherited
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W29 —
+> `--selftest-popout` hardening"** — and the heading is deliberate: the intermittent failure W25 saw was
+> **NEVER REPRODUCED**, so this is hardening, *not* a confirmed fix. 65 dedicated runs (40 isolated + 25 in
+> the floor's real tray→popout ordering) came back **65/65 PASS**. The single observed failure had shown a
+> normal run with no WARN/ERROR — a leg assertion flipped — but **which** leg was unknowable, because every
+> gate writes the same `%TEMP%` report path and the next gate had already overwritten it. Two things shipped
+> because each is defensible without a repro: **(1)** the deferred phase's fixed `startTimer(300)` became a
+> **condition wait** (poll until both popout resets have actually run — a directly checkable state — 25 ms ×
+> 80 ≈ 2 s ceiling, verifying anyway on timeout so a genuine hang still reports); waiting a fixed duration
+> for an observable event is a race by construction regardless of this bug. **(2)** a failure now **names its
+> own legs in the PERSISTENT log** (`%APPDATA%\Forge\logs\forge.log`), which survives the remaining gates of
+> a floor run — verified by inducing a failure. ⚠ **Datum worth keeping:** the induced run measured the
+> deferred resets completing in **~25–50 ms**, so the old 300 ms already had ~6× margin — which makes plain
+> message-loop starvation a *less* likely cause than it looked, without identifying the real one. **If it
+> recurs the log will say which leg**, and the leg classes split meaningfully: window/visibility/focus legs
+> point at the OS window manager, undo/redo routing legs would point at the FourOsc redo-wipe defect
+> (BACKLOG item 0) instead. Build **clean** · **50/50 floor** · **12/12 screenshots**. Full record →
+> [devlog/wave-29-popout-hardening.md](devlog/wave-29-popout-hardening.md).
+
+> The prior wave, **W27 — capture
+> count-in (B4)** — the last "ready to build" item on the backlog, and one carrying a **wrong inherited
 > rationale**. W22 had deferred it on the reading that *"the only audible-count-in path puts the transport
 > into record-mode for the whole Capture session"*. Reading `TransportControl::record()`
 > (`tracktion_TransportControl.cpp:1483-1489`) refutes that: Tracktion's count-in is only a **position
