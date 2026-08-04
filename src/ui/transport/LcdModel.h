@@ -57,8 +57,13 @@ struct LcdInput
     double punchTimeSeconds = 0.0;      // transport.getTimeWhenStarted() — the punch point
     double currentBeat = 0.0;           // toBeats(pos) — the TIMELINE beat (clicks land on its whole values)
     double punchBeat = 0.0;             // toBeats(punch); NOT beat-snapped by the engine
-    int countInTotal = 0;               // edit.getNumCountInBeats(), latched at the record trigger
+    int countInTotal = 0;               // edit.getNumCountInBeats(), latched at the record/capture trigger
     bool startedFromStopped = false;    // latched: record() fired from a STOPPED transport (guard 1)
+
+    // W27 (B4): the CAPTURE count-in is a second source of the same face. It is NOT a recording — the
+    // transport merely plays through the pre-roll — so `recording` is false and there is no punch time;
+    // the caller supplies the arm beat in punchBeat instead. Digit maths is shared verbatim (see below).
+    bool captureCountIn = false;        // ProjectSession::isCountingIn()
 };
 
 //==============================================================================
@@ -127,19 +132,33 @@ inline LcdState computeLcdState (const LcdInput& in)
                        + "." + juce::String (millis).paddedLeft ('0', 3);
     }
 
-    // Count-in ACTIVE test (dossier recipe + skeptic guard 1): only a record latched from a
-    // stopped transport pre-rolls; while it does, the position runs pre-punch. A mid-playback
-    // record() (startedFromStopped == false) punches in immediately with a stale punch time,
-    // so it must never light the count-in face.
-    if (in.recording && in.startedFromStopped && in.countInTotal > 0
-        && in.positionSeconds < in.punchTimeSeconds)
+    // Count-in ACTIVE test. TWO sources light the same face:
+    //
+    //  (a) RECORD (W04a, dossier recipe + skeptic guard 1): only a record latched from a stopped
+    //      transport pre-rolls; while it does, the position runs pre-punch. A mid-playback record()
+    //      (startedFromStopped == false) punches in immediately with a stale punch time, so it must
+    //      never light the face.
+    //  (b) CAPTURE (W27 / B4): the performance-capture pre-roll. It is not a recording — the transport
+    //      just plays — so `recording` is false and there is no punch TIME; the caller passes the arm
+    //      beat in punchBeat and the state flag directly. The caller owns the "is it running" decision
+    //      (ProjectSession::isCountingIn()), so there is no seconds-based guard to duplicate here; the
+    //      currentBeat < punchBeat test is belt-and-braces for the tick that crosses the arm beat.
+    const bool recordCountIn  = in.recording && in.startedFromStopped && in.countInTotal > 0
+                                && in.positionSeconds < in.punchTimeSeconds;
+    const bool captureCountIn = in.captureCountIn && in.countInTotal > 0
+                                && in.currentBeat < in.punchBeat;
+
+    if (recordCountIn || captureCountIn)
     {
         s.countInActive = true;
 
-        // Digit k flips exactly on CLICK beat k (whole timeline beats), for ANY punch position:
-        // the first click is the first whole beat at least N beats before the punch. Everything
-        // earlier clamps to 0 (the lead-in; also absorbs an Ableton-Link-extended pre-roll), and
-        // a beat just shy of the punch clamps to N.
+        // Digit k flips exactly on CLICK beat k (whole timeline beats), for ANY punch/arm position:
+        // the first click is the first whole beat at least N beats before it. Everything earlier
+        // clamps to 0 (the lead-in; also absorbs an Ableton-Link-extended pre-roll), and a beat just
+        // shy of the punch clamps to N. Shared VERBATIM by both sources — the capture pre-roll rolls
+        // the ordinary transport with the ordinary click, so its clicks land on the same whole-beat
+        // grid and need the same derivation (a mid-beat arm point is handled identically to a
+        // mid-beat punch).
         const int firstClickBeat = (int) std::ceil (in.punchBeat - (double) in.countInTotal
                                                     - countInCeilEpsilonBeats);
         s.countInDigit = juce::jlimit (0, in.countInTotal,

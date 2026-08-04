@@ -127,6 +127,18 @@ void LcdDisplay::refreshNow()
         latchedCountInTotal = 0;
     }
 
+    // W27 (B4): the CAPTURE count-in is a second, independent source of the same face. Latch its beat
+    // total on ITS rising edge for the same reason the record path does — getNumCountInBeats() reads
+    // PropertyStorage, which has no business on a 25 Hz poll.
+    const auto capture = queryCaptureCountIn != nullptr ? queryCaptureCountIn() : CaptureCountIn{};
+
+    if (capture.active && ! prevCaptureCountIn)
+        latchedCaptureCountInTotal = edit->getNumCountInBeats();
+    else if (! capture.active)
+        latchedCaptureCountInTotal = 0;
+
+    prevCaptureCountIn = capture.active;
+
     prevPlaying   = playing;
     prevRecording = recording;
 
@@ -163,6 +175,15 @@ void LcdDisplay::refreshNow()
         in.punchTimeSeconds = punch.inSeconds();
         in.currentBeat      = ts.toBeats (pos).inBeats();
         in.punchBeat        = ts.toBeats (punch).inBeats();
+    }
+    else if (capture.active && latchedCaptureCountInTotal > 0)
+    {
+        // Capture pre-roll: no punch TIME exists (the transport is merely playing), so the arm BEAT
+        // stands in for it. The model shares the click-grid digit derivation verbatim from there.
+        in.captureCountIn = true;
+        in.countInTotal   = latchedCaptureCountInTotal;
+        in.currentBeat    = ts.toBeats (pos).inBeats();
+        in.punchBeat      = capture.armBeat;
     }
 
     const auto next = forge::lcd::computeLcdState (in);

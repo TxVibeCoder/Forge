@@ -108,6 +108,28 @@ public:
     std::function<juce::String()>   querySig;       // current signature as "n/d", seeds the sig popup
     std::function<void (int, int)>  onSigChanged;   // apply an edited (numerator, denominator) to the engine
 
+    /** The B4 performance-capture count-in, as plain values (W27). The LCD knows nothing about
+        ProjectSession — the shell supplies the state, exactly like the tempo/sig seams. */
+    struct CaptureCountIn
+    {
+        bool   active  = false;   // ProjectSession::isCountingIn()
+        double armBeat = 0.0;     // the Edit beat capture arms on (the count-in's target)
+    };
+
+    /** Optional: polled each tick so the count-in face lights for a CAPTURE pre-roll as well as a
+        record one. Unset => capture never lights the face (the pre-W27 behaviour, so an unwired
+        build degrades silently rather than misreporting). */
+    std::function<CaptureCountIn()> queryCaptureCountIn;
+
+    /** The last state the poll computed — the face as rendered. Exposed so a headless gate can prove
+        the count-in face actually lights through the REAL poll + seam chain, not just in the pure
+        model (the standing "a UI seam a gate can't see can ship unwired" lesson). */
+    const forge::lcd::LcdState& getState() const  { return current; }
+
+    /** Runs one poll synchronously. The 25 Hz Timer calls this; exposed so a gate can tick the face
+        deterministically after positioning the transport itself. */
+    void pollNow()  { refreshNow(); }
+
 private:
     void timerCallback() override;
 
@@ -126,6 +148,11 @@ private:
     bool prevPlaying = false, prevRecording = false;
     int  latchedCountInTotal = 0;      // edit.getNumCountInBeats() at the record trigger, else 0
     bool latchedFromStopped  = false;  // that trigger came from a stopped transport
+
+    // W27: the same rising-edge latch for the CAPTURE count-in (an independent source of the face),
+    // so getNumCountInBeats() — a PropertyStorage read — stays off the 25 Hz poll.
+    bool prevCaptureCountIn = false;
+    int  latchedCaptureCountInTotal = 0;
 
     // The last-painted clickable readout rectangles (local coords). Set every paint() so hitTest /
     // mouseUp know where the clickable zones are; each is emptied when its readout is shed at a

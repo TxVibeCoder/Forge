@@ -28,6 +28,12 @@
 > `git fetch` after the push). W24 turned out to have been pushed already, so every "push still held" note
 > above is stale.
 >
+> **Update 2026-08-04 latest (W27 + W28):** **B4 capture count-in SHIPPED** (W27) — and its inherited
+> deferral rationale turned out to be WRONG (see the B4 section). Its LCD-readout follow-up **closed in W28**:
+> the count-in face is no longer record-only. Build clean, **50/50 floor** (`+--selftest-countin` in W27; W28
+> extended `--selftest-lcd` + `--selftest-countin` in place, no new gate). **"Ready to build" is now EMPTY** —
+> what remains is item 0 (Redo, a maintainer decision), the B8 smalls, and optional CC0 library growth.
+>
 > **Update 2026-08-04 later (W26):** **B6 SHIPPED** — the missing browser→track interaction plus two more
 > assignment surfaces, over one new `ProjectSession::setTrackInstrument` seam; the four W24 melodic voices
 > are no longer dead code. **B3 is now fully closed too** (its leftover render slice rides the new gate).
@@ -137,9 +143,16 @@ record and capture alike — one setting, one answer.
 negative-controlled. The W17 footgun holds: `LaunchHandle::nudge`/`setLooping`/`playSynced` stay uncalled, and
 the capture tick is untouched (it simply starts later).
 
-**Known limit (documented, not built):** the LCD's count-in digits still latch only on a *record* rising edge
-(W04a), so the capture count-in is audible but not shown on the LCD. That is a `LcdDisplay` change with its own
-latch logic — a clean follow-up, not a blocker.
+**Follow-up CLOSED in W28:** the LCD count-in face is no longer record-only. `LcdInput` gained a
+`captureCountIn` flag; the model's active test is now `recordCountIn || captureCountIn` and **shares the
+click-grid digit derivation verbatim** (the capture pre-roll rolls the ordinary transport with the ordinary
+click, so its clicks land on the same whole-beat grid; the arm beat stands in for the punch, which does not
+exist when nothing is recording). `LcdDisplay` gained a `queryCaptureCountIn` seam wired by the shell, with the
+same rising-edge latch the record path uses so `getNumCountInBeats()` stays off the 25 Hz poll. Gated by 10 new
+pure-model legs on `--selftest-lcd` **plus 3 wiring legs on `--selftest-countin`** driving the real
+`pollNow()` — a negative control confirmed that unwiring the seam leaves `--selftest-lcd` fully green while the
+wiring legs fail, which is exactly why they live on the engine-backed gate. No floor change (both gates
+extended in place).
 
 ---
 
@@ -241,7 +254,7 @@ edits them (CLAUDE.md, Wave Orchestration Rule, Pillar 3).
 
 | item | owns | conflicts with |
 |---|---|---|
-| ~~B4 capture count-in~~ | ~~`RecordController`, capture path, `TransportBar`~~ | **SHIPPED W27** — the only leftover is the LCD count-in readout. |
+| ~~B4 capture count-in~~ | ~~`RecordController`, capture path, `TransportBar`~~ | **SHIPPED W27**; its LCD-readout follow-up **closed in W28**. Nothing left. |
 | ~~B6 instrument library~~ | ~~`BrowserView`, `PluginHost`, `SessionView`~~ | **SHIPPED W26** — only optional library growth remains, and that is `InstrumentSamples` + the enum alone. |
 
 *(The W24 wave consumed the rest of this table — B1 + B5 + B7 ran as the suggested 3-agent fan-out with

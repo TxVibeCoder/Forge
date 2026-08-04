@@ -403,6 +403,11 @@ bool ProjectSession::isCountingIn() const
     return countingIn;
 }
 
+double ProjectSession::getCountInArmBeat() const
+{
+    return countingIn ? captureArmBeat : 0.0;
+}
+
 void ProjectSession::finishCountIn()
 {
     countingIn = false;

@@ -1665,6 +1665,14 @@ private:
                 pianoRoll.repaint();
             }
         };
+
+        // W27 (B4 follow-up): the LCD's count-in face is no longer record-only — the performance
+        // capture pre-roll drives it too. The LCD knows nothing about ProjectSession; the shell hands
+        // it the two plain values the model needs, exactly like the tempo/sig seams above.
+        lcd.queryCaptureCountIn = [this]
+        {
+            return LcdDisplay::CaptureCountIn { session.isCountingIn(), session.getCountInArmBeat() };
+        };
     }
 
     // Menu-bar model (W04a): the same commands the buttons/keys already run, exposed as a
@@ -8516,7 +8524,8 @@ private:
              clickForcedOn = false, stillCountingBeforeBeat = false,
              armedAfterCountIn = false, clickRestoredAfter = false,
              cancelDisarms = false, cancelRestoresClick = false, cancelStopsTransport = false,
-             rollingSkipsCountIn = false, noCountInArmsImmediately = false, noCountInLeavesTransport = false;
+             rollingSkipsCountIn = false, noCountInArmsImmediately = false, noCountInLeavesTransport = false,
+             lcdCountInLit = false, lcdDigitAdvances = false, lcdFaceOffAfterCountIn = false;
         int  countInBeats = -1;
 
         // ── (1) The pure planner ──────────────────────────────────────────────────────────────
@@ -8568,6 +8577,26 @@ private:
             rolledToPreroll           = std::abs (beatNow() - (16.0 - countInBeats)) < 0.05;
             clickForcedOn             = Metronome::isClickEnabled (*ed);
 
+            // W27 f/u: the LCD count-in face must light for CAPTURE too, not just record. Driven
+            // through the REAL poll + the shell's queryCaptureCountIn seam — the pure-model legs in
+            // --selftest-lcd cannot see whether that seam is actually wired ("a UI seam a gate can't
+            // see can ship unwired"). Digit 1 is asserted at the first click beat, so this proves the
+            // arm beat reached the model correctly, not merely that something lit up.
+            {
+                auto& lcd = controlBar.getLcdDisplay();
+
+                seekTo (16.0 - countInBeats);          // exactly the first click beat
+                lcd.pollNow();
+                lcdCountInLit = lcd.getState().countInActive
+                                && lcd.getState().countInDigit == 1
+                                && lcd.getState().countInTotal == countInBeats;
+
+                seekTo (16.0 - 1.0);                   // last click beat -> final digit
+                lcd.pollNow();
+                lcdDigitAdvances = lcd.getState().countInActive
+                                   && lcd.getState().countInDigit == countInBeats;
+            }
+
             // A tick BEFORE the arm beat must not arm (the count-in actually waits).
             seekTo (16.0 - 1.0);
             session.countInTick();
@@ -8578,6 +8607,10 @@ private:
             session.countInTick();
             armedAfterCountIn  = ! session.isCountingIn() && session.isPerformanceCaptureArmed();
             clickRestoredAfter = ! Metronome::isClickEnabled (*ed);
+
+            // ...and the face must go back to the ordinary zones once capture is armed.
+            controlBar.getLcdDisplay().pollNow();
+            lcdFaceOffAfterCountIn = ! controlBar.getLcdDisplay().getState().countInActive;
 
             session.stopPerformanceCapture (/*commit*/ false);
 
@@ -8626,7 +8659,8 @@ private:
                           && clickForcedOn && stillCountingBeforeBeat && armedAfterCountIn
                           && clickRestoredAfter
                           && cancelDisarms && cancelRestoresClick && cancelStopsTransport
-                          && rollingSkipsCountIn && noCountInArmsImmediately && noCountInLeavesTransport;
+                          && rollingSkipsCountIn && noCountInArmsImmediately && noCountInLeavesTransport
+                          && lcdCountInLit && lcdDigitAdvances && lcdFaceOffAfterCountIn;
 
         String report;
         report << "mode=countin" << newLine
@@ -8649,6 +8683,9 @@ private:
                << "rollingSkipsCountIn="       << (rollingSkipsCountIn ? 1 : 0) << newLine
                << "noCountInArmsImmediately="  << (noCountInArmsImmediately ? 1 : 0) << newLine
                << "noCountInLeavesTransport="  << (noCountInLeavesTransport ? 1 : 0) << newLine
+               << "lcdCountInLit="             << (lcdCountInLit ? 1 : 0) << newLine
+               << "lcdDigitAdvances="          << (lcdDigitAdvances ? 1 : 0) << newLine
+               << "lcdFaceOffAfterCountIn="    << (lcdFaceOffAfterCountIn ? 1 : 0) << newLine
                << "result="                    << (pass ? "PASS" : "FAIL") << newLine
                << "logFile="                   << forge::log::getLogFile().getFullPathName() << newLine;
 
@@ -9603,6 +9640,48 @@ static void runLcdSelfTest()
     { const auto s = countIn ( 0.15,  0.3, 2.3, 1.15); expect ("countInNA_beat2", s.countInActive && s.countInDigit == 2); }
     { const auto s = countIn ( 1.00,  2.0, 2.3, 1.15); expect ("countInNA_beat4", s.countInActive && s.countInDigit == 4); }       // ON click beat 2
     { const auto s = countIn ( 1.15,  2.3, 2.3, 1.15); expect ("countInNA_punch", ! s.countInActive); }
+
+    // -- CAPTURE count-in (W27 / B4): the SECOND source of the same face. It is not a recording —
+    //    the transport merely plays through the pre-roll — so `recording` is false and there is no
+    //    punch TIME; the arm BEAT stands in. The digit derivation is shared verbatim, so the same
+    //    click-grid table must hold. Capture arms at beat 16 with N=4 => clicks on beats 12..15.
+    auto captureCountIn = [&base] (double currentBeat, double armBeat)
+    {
+        auto in = base;
+        in.recording       = false;   // load-bearing: proves the face is NOT gated on record mode
+        in.captureCountIn  = true;
+        in.countInTotal    = 4;
+        in.currentBeat     = currentBeat;
+        in.punchBeat       = armBeat;
+        in.positionSeconds = 6.0;     // arbitrary + POSITIVE: the record path's seconds guard must
+        in.punchTimeSeconds = 0.0;    // not be what admits this (pos > punch would veto it there)
+        return computeLcdState (in);
+    };
+
+    { const auto s = captureCountIn (11.5, 16.0); expect ("captureLeadIn",  s.countInActive && s.countInDigit == 0); }
+    { const auto s = captureCountIn (12.0, 16.0); expect ("captureBeat1",   s.countInActive && s.countInDigit == 1); }
+    { const auto s = captureCountIn (14.0, 16.0); expect ("captureBeat3",   s.countInActive && s.countInDigit == 3); }
+    { const auto s = captureCountIn (15.9, 16.0); expect ("captureBeat4",   s.countInActive && s.countInDigit == 4); }
+    { const auto s = captureCountIn (16.0, 16.0); expect ("captureArmed",  ! s.countInActive && s.countInDigit == 0); }   // reached the arm beat
+
+    // A MID-BEAT arm point behaves exactly like a mid-beat punch: arm at 16.37 => firstClick =
+    // ceil(16.37 - 4) = 13, so digits flip on whole beats 13/14/15/16 — never 0.37 beats early.
+    { const auto s = captureCountIn (12.9, 16.37); expect ("captureNA_leadIn", s.countInActive && s.countInDigit == 0); }
+    { const auto s = captureCountIn (13.0, 16.37); expect ("captureNA_beat1",  s.countInActive && s.countInDigit == 1); }
+    { const auto s = captureCountIn (16.0, 16.37); expect ("captureNA_beat4",  s.countInActive && s.countInDigit == 4); }
+
+    // The flag alone must not light it: no count-in configured => no face (mirrors countInTotal == 0
+    // on the record path), and capture NOT running leaves the ordinary zones on screen.
+    {
+        auto in = base; in.captureCountIn = true; in.countInTotal = 0;
+        in.currentBeat = 12.0; in.punchBeat = 16.0;
+        expect ("captureZeroTotalOff", ! computeLcdState (in).countInActive);
+    }
+    {
+        auto in = base; in.captureCountIn = false; in.countInTotal = 4;
+        in.currentBeat = 12.0; in.punchBeat = 16.0;
+        expect ("captureInactiveOff", ! computeLcdState (in).countInActive);
+    }
 
     // -- Skeptic guard 1: the same pre-punch shape WITHOUT the stopped-transport latch is a
     //    mid-playback punch-in (no pre-roll, stale start time after a backward seek) — the

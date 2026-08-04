@@ -112,8 +112,66 @@ The packet asked to re-verify that `LaunchHandle::getPlayedRange()` span timing 
 - **50/50 selftest floor.**
 - **12/12 screenshots** — no new UI state (the count-in is transport behaviour plus a status line).
 
-## Known limit (documented, not built)
+---
 
-The LCD's count-in digits still latch only on a **record** rising edge (W04a), so the capture count-in is
-audible but not *shown* on the LCD. Wiring it up means touching `LcdDisplay`'s latch logic, which has its own
-carefully-scoped behaviour and its own gate — a clean follow-up rather than something to bolt on here.
+# Follow-up round — the LCD count-in readout
+
+> W27 shipped with one documented limit: the count-in was **audible but not shown**, because the LCD's
+> count-in face latched only on a *record* rising edge (W04a). Closed immediately after, in the same
+> territory. No new gate — both affected gates were extended in place, so the floor stays **50**.
+
+## The model change is one OR
+
+`LcdModel` already derived the count-in digit from the **click grid**:
+`firstClickBeat = ceil(punchBeat − N)`, `digit = floor(currentBeat) − firstClickBeat + 1`. The capture
+pre-roll rolls the *ordinary* transport with the *ordinary* click, so its clicks land on that same whole-beat
+grid — which means the derivation needed no change at all, only a second way to switch it on:
+
+```cpp
+const bool recordCountIn  = in.recording && in.startedFromStopped && in.countInTotal > 0
+                            && in.positionSeconds < in.punchTimeSeconds;
+const bool captureCountIn = in.captureCountIn && in.countInTotal > 0
+                            && in.currentBeat < in.punchBeat;
+
+if (recordCountIn || captureCountIn) { /* …shared digit maths, verbatim… */ }
+```
+
+The one real difference: a capture has **no punch time**, because nothing is recording. The arm beat stands in
+for it (`punchBeat`), and the caller — which already owns the "is it running" decision via
+`ProjectSession::isCountingIn()` — supplies the flag. A mid-beat arm point therefore behaves exactly like a
+mid-beat punch, which the W04a QC pass had already proved was the case the naive distance form gets wrong.
+
+## Wiring
+
+`LcdDisplay` gained a `queryCaptureCountIn` seam returning `{active, armBeat}` — the LCD still knows nothing
+about `ProjectSession`, exactly like the existing tempo/sig seams. The beat total is latched on the capture
+count-in's **rising edge**, mirroring the record path, so `getNumCountInBeats()` (a PropertyStorage read)
+stays off the 25 Hz poll.
+
+## The gating decision worth recording
+
+Ten new legs went on `--selftest-lcd` (the pure model): the click-grid table for an aligned arm beat, the
+same table for a **mid-beat** arm beat, and two "must stay off" cases. Those legs deliberately set
+`recording = false` **and a positive `positionSeconds`** — an input the record path's seconds guard would
+veto — so they prove the capture face is genuinely not gated on record mode.
+
+But a pure model cannot see whether the seam is *connected*. So three more legs went on `--selftest-countin`,
+driving the real `LcdDisplay::pollNow()` through the shell's actual binding, asserting digit **1** at the
+first click beat (proving the arm beat arrived correctly, not merely that something lit up), the final digit
+at the last click beat, and the face going dark once capture arms.
+
+**The negative control makes the split concrete.** Leaving `lcd.queryCaptureCountIn` unwired:
+
+| gate | result |
+|---|---|
+| `--selftest-lcd` | **fully green**, `checksFailed=0` — the model is fine; it simply cannot see wiring |
+| `--selftest-countin` | `lcdCountInLit` → 0, `lcdDigitAdvances` → 0, **FAIL** |
+
+That is the standing *"a UI seam a gate can't see can ship unwired"* lesson demonstrated rather than asserted
+— and the reason the wiring legs live on the engine-backed gate instead of the model one.
+
+## Verification
+
+Build **clean (0 warnings)** · **50/50 floor** (no new gate — `--selftest-lcd` and `--selftest-countin` both
+extended in place) · **12/12 screenshots** (the count-in face already had a screenshot state, driven through
+`LcdDisplay::setDemoState`).

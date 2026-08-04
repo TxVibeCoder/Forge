@@ -1339,5 +1339,44 @@ the default 4/4), never hardcoded.
 > capture when the playhead arrives. The W17 capture tick is untouched; it simply starts later, and spans stay
 > absolute Edit beats.
 >
+### W28 addition — the LCD count-in face (B4 follow-up)
+
+The count-in face was **record-only** (W04a: the latch arms on a record rising edge), so the B4 capture
+pre-roll was audible but not *shown*. `LcdInput` gained a `captureCountIn` flag and the model's active test
+became `recordCountIn || captureCountIn`, **sharing the click-grid digit derivation verbatim** — the capture
+pre-roll rolls the ordinary transport with the ordinary click, so its clicks land on the same whole-beat grid.
+There is no punch *time* for a capture (nothing is recording), so the caller passes the **arm beat** in
+`punchBeat`.
+
+New legs on `--selftest-lcd` (pure model, no floor change) — capture arms at beat 16 with N = 4, so clicks
+land on beats 12–15:
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `captureLeadIn` / `captureBeat1` / `captureBeat3` / `captureBeat4` | beat 11.5 → digit 0 (lead-in), 12 → 1, 14 → 3, 15.9 → 4 | PASS ×4 |
+| `captureArmed` | reaching the arm beat drops the face — capture is running, not counting | PASS |
+| `captureNA_leadIn` / `captureNA_beat1` / `captureNA_beat4` | a **mid-beat** arm point (16.37) behaves like a mid-beat punch: `firstClick = ceil(16.37 − 4) = 13`, so digits flip on whole beats 13/14/15/16, never 0.37 beats early | PASS ×3 |
+| `captureZeroTotalOff` / `captureInactiveOff` | the flag alone does not light it (no count-in configured), and capture not running leaves the ordinary zones on screen | PASS ×2 |
+
+These set `recording = false` and a **positive** `positionSeconds` deliberately: the record path's
+seconds-based guard would veto that input, so the legs prove the capture face is genuinely not gated on
+record mode.
+
+And three legs on `--selftest-countin` that the pure model **cannot** provide — they drive the real
+`LcdDisplay::pollNow()` through the shell's `queryCaptureCountIn` seam:
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `lcdCountInLit` | at the first click beat the live face reads `countInActive`, digit **1**, total = `countInBeats` — so the arm beat reached the model correctly, not merely "something lit up" | 1 |
+| `lcdDigitAdvances` | at the last click beat the digit is `countInBeats` | 1 |
+| `lcdFaceOffAfterCountIn` | once capture arms, the face returns to the ordinary zones | 1 |
+
+> **Negative control (run, then reverted):** leaving `lcd.queryCaptureCountIn` unwired keeps `--selftest-lcd`
+> **fully green** (checksFailed=0 — a pure model cannot see wiring) while `lcdCountInLit` and
+> `lcdDigitAdvances` both drop to 0 and `--selftest-countin` FAILS. That is the standing *"a UI seam a gate
+> can't see can ship unwired"* lesson demonstrated rather than asserted, and it is why the wiring legs live on
+> the engine-backed gate instead of the model one.
+
 > `-countin` is collision-free (no substring overlap with any existing gate name) — placed before the bare
-> `--selftest` in both ladders; verify `mode=countin`. **Floor is now 50 gates.**
+> `--selftest` in both ladders; verify `mode=countin`. **Floor is 50 gates** (the W28 LCD work extends
+> `--selftest-lcd` and `--selftest-countin` in place — no new gate name).

@@ -389,6 +389,11 @@ public:
     /** True while the count-in is running (armed, but not yet accumulating). Const. */
     bool isCountingIn() const;
 
+    /** The absolute Edit BEAT the count-in is running towards — the first beat that will be captured.
+        Meaningful only while isCountingIn(); 0 otherwise. Const. Feeds the LCD count-in face, which
+        derives its digit from the click grid between (armBeat − countInBeats) and armBeat. */
+    double getCountInArmBeat() const;
+
     /** Advances the count-in: arms capture once the transport reaches the planned beat, restoring the
         user's click setting. Called by the owned Timer in production; exposed so a headless gate can
         drive it deterministically after positioning the transport itself. No-op when not counting in.

@@ -24,9 +24,19 @@
 > silently shortened. New gate **`--selftest-countin`** (floor **49 → 50**, 19 legs) with **two independent
 > negative controls**: dropping the beat guard flips `stillCountingBeforeBeat` alone; rolling the transport
 > on the no-count-in path flips `noCountInLeavesTransport` alone. Build **clean (0 warnings)** · **50/50
-> floor** · **12/12 screenshots**. ⚠ **Known limit (documented, not built):** the LCD's count-in digits still
-> latch only on a *record* rising edge (W04a), so the capture count-in is audible but not shown on the LCD.
-> Full record → [devlog/wave-27-capture-countin.md](devlog/wave-27-capture-countin.md).
+> floor** · **12/12 screenshots**. ✅ **Its one documented limit was closed in a follow-up round the same
+> day:** the LCD count-in face was record-only (W04a latches on a record rising edge), so the capture
+> pre-roll was audible but not shown. `LcdInput` gained a `captureCountIn` flag and the model's active test
+> became `recordCountIn || captureCountIn`, **sharing the click-grid digit derivation verbatim** (the
+> capture pre-roll rolls the ordinary transport with the ordinary click, so the clicks land on the same
+> whole-beat grid; the arm beat stands in for the punch, which does not exist when nothing is recording).
+> `LcdDisplay` gained a `queryCaptureCountIn` seam wired by the shell, with the same rising-edge latch the
+> record path uses so `getNumCountInBeats()` stays off the 25 Hz poll. **No new gate — floor stays 50:**
+> 10 pure-model legs on `--selftest-lcd` **plus 3 wiring legs on `--selftest-countin`** driving the real
+> `pollNow()`. A negative control proved the split is load-bearing: unwiring the seam leaves
+> `--selftest-lcd` **fully green** while the wiring legs fail — the standing *"a UI seam a gate can't see
+> can ship unwired"* lesson, demonstrated. Full record →
+> [devlog/wave-27-capture-countin.md](devlog/wave-27-capture-countin.md).
 
 > The prior wave, **W26 — instrument
 > assignment (B6)**: the backlog's last open *feature* item, and it started as a **dead-code report**. W24
