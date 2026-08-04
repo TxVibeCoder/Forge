@@ -1,5 +1,45 @@
 # Forge — Session Handoff
 
+## Session close — 2026-08-04
+
+**State, all verified this session (derived, not asserted):**
+
+| fact | value | how it was verified |
+|---|---|---|
+| `origin/main` tip | **`f977596`** | `git fetch` + `git log origin/main` after the push |
+| local vs remote | **in sync**, 0 ahead / 0 behind, working tree clean | `git rev-list --count` both ways · `git status --porcelain` |
+| build | **clean, 0 warnings** (MSVC Debug) | full `cmake --build` |
+| selftest floor | **50/50 PASS** | full-floor run; count re-derived from `src/main.cpp`, not from these docs |
+| screenshots | **12/12** | `--screenshot`, files counted on disk |
+| sanitize scan | **clean** | whole tracked set (not just the diff) against the full denylist |
+
+**Six commits landed this session, all pushed:**
+
+| commit | what |
+|---|---|
+| `872413e` | docs: record the W25 push + correct stale push-state notes (W24 turned out already pushed) |
+| `7cbafee` | docs: CLAUDE.md commit trailer → Opus 5 (was a stale 4.8 pin, already diverging from practice) |
+| `1da2cd9` | **W26** — B6 instrument assignment: the CC0 voices become reachable (also closed B3's leftover) |
+| `17e4aad` | **W27** — B4 capture count-in, with no record mode (the inherited deferral rationale was refuted) |
+| `f221c93` | **W28** — LCD count-in face lights for capture ⚠ *commit subject reads `[W27 f/u]`* |
+| `f977596` | **W29** — `--selftest-popout` hardening (**not** a confirmed fix — see below) |
+
+**The backlog's "Ready to build" section is now EMPTY.** What remains:
+
+- **Item 0 — the FourOsc redo defect.** Still the only broken *core interaction*: Redo is unavailable
+  immediately after any Undo, in every real project, today. **Blocked on a maintainer A/B/C decision**, not on
+  work — patch the vendored engine / stop `doUndo` saving / leave it. Costed in [BACKLOG.md](BACKLOG.md).
+- **B8 smalls** — Gate-mode immediate launch, random/weighted follow-actions, scene colour + multi-select,
+  aux-return ordering, two latent W08 traps (not live bugs).
+- **B6 library growth** (optional) — no longer blocked on anything: one enum value + one name + one
+  `InstrumentSamples` renderer, and all three picking surfaces pick it up.
+
+⚠ **Carried forward, honestly unresolved:** the `--selftest-popout` intermittency was **never reproduced**
+(65 dedicated runs, 65 PASS). W29 hardened the fragile pattern and made a failure self-diagnosing, but did not
+identify a cause. If it recurs, the persistent log now names the failing leg — start there.
+
+---
+
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
 > [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W29 —
 > `--selftest-popout` hardening"** — and the heading is deliberate: the intermittent failure W25 saw was
@@ -43,8 +83,9 @@
 > silently shortened. New gate **`--selftest-countin`** (floor **49 → 50**, 19 legs) with **two independent
 > negative controls**: dropping the beat guard flips `stillCountingBeforeBeat` alone; rolling the transport
 > on the no-count-in path flips `noCountInLeavesTransport` alone. Build **clean (0 warnings)** · **50/50
-> floor** · **12/12 screenshots**. ✅ **Its one documented limit was closed in a follow-up round the same
-> day:** the LCD count-in face was record-only (W04a latches on a record rising edge), so the capture
+> floor** · **12/12 screenshots**. ✅ **Its one documented limit was closed the same day as W28** (⚠ that
+> commit's subject reads `[W27 f/u]` — the docs call it **W28** throughout; use this line to map `git log`):
+> the LCD count-in face was record-only (W04a latches on a record rising edge), so the capture
 > pre-roll was audible but not shown. `LcdInput` gained a `captureCountIn` flag and the model's active test
 > became `recordCountIn || captureCountIn`, **sharing the click-grid digit derivation verbatim** (the
 > capture pre-roll rolls the ordinary transport with the ordinary click, so the clicks land on the same

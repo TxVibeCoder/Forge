@@ -62,11 +62,15 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FIFTY gates as of W27 (capture count-in):
+- **Selftest floor** (must pass after any change — **FIFTY** gates. The count has been 50 since **W27**
+  (`--selftest-countin`); **W28** (LCD count-in face) and **W29** (popout hardening) both extended existing
+  gates IN PLACE and added none. Derive it, don't trust this line:
+  `grep -oE '"--selftest[a-z-]*"' src/main.cpp | sort -u | wc -l`.
   W27 added `--selftest-countin` (B4 — an audible count-in before performance capture, with NO record mode:
   a pure `forge::capture::planCountIn` planner + the `ProjectSession` state machine, both negative-controlled;
   the W22 deferral rationale "record mode is the only audible count-in path" was REFUTED by reading the engine
-  source — see the gotcha below). Its follow-up round extended `--selftest-lcd` (+10 pure-model legs) and
+  source — see the gotcha below). **W28** (committed with the subject `[W27 f/u]` — the docs use W28
+  throughout) extended `--selftest-lcd` (+10 pure-model legs) and
   `--selftest-countin` (+3 WIRING legs driving the real `LcdDisplay::pollNow()`) IN PLACE — no new gate — so the
   LCD count-in face lights for a CAPTURE pre-roll, not just a record one. The split is deliberate and was
   negative-controlled: unwiring the shell's `queryCaptureCountIn` seam leaves the pure model gate FULLY GREEN

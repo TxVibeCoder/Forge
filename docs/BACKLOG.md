@@ -28,6 +28,14 @@
 > `git fetch` after the push). W24 turned out to have been pushed already, so every "push still held" note
 > above is stale.
 >
+> **Update 2026-08-04 — SESSION CLOSE.** `origin/main` = **`f977596`**, local in sync, tree clean, build
+> clean, **50/50 floor**, 12/12 screenshots — all verified, not assumed. **"Ready to build" is now EMPTY.**
+> Remaining: **item 0** (Redo — a maintainer A/B/C decision, the only broken core interaction), the B8
+> smalls, and optional B6 library growth. ⚠ Unresolved and carried forward: the `--selftest-popout`
+> intermittency was never reproduced (65/65 PASS) — W29 hardened it and made failures self-diagnosing, but
+> found no cause. ⚠ Wave-label note: **W28** (the LCD count-in face) was committed with the subject
+> `[W27 f/u]`; the docs use W28 throughout.
+>
 > **Update 2026-08-04 latest (W27 + W28):** **B4 capture count-in SHIPPED** (W27) — and its inherited
 > deferral rationale turned out to be WRONG (see the B4 section). Its LCD-readout follow-up **closed in W28**:
 > the count-in face is no longer record-only. Build clean, **50/50 floor** (`+--selftest-countin` in W27; W28
