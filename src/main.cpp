@@ -23,6 +23,7 @@
 #include "engine/MidiLearn.h"
 #include "engine/MidiEditHelpers.h"
 #include "engine/AudioEditHelpers.h"    // forge::audioedit::trimLeadingSilence (--selftest-trim audio legs)
+#include "engine/CaptureCountIn.h"      // forge::capture::planCountIn (--selftest-countin planner legs)
 #include "engine/ModifierHelpers.h"
 #include "engine/ForgeUIBehaviour.h"
 #include "engine/LaunchpadDriver.h"
@@ -58,7 +59,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload, stems, instrument };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload, stems, instrument, countin };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -1111,6 +1112,12 @@ public:
             // Synchronous seam work; one callAsync yield is enough (mirrors -midifile).
             MessageManager::callAsync ([this] { runStemsSelftest(); });
         }
+        else if (mode == SelfTest::countin)
+        {
+            // W27 (B4): the capture count-in — a pure planner plus the ProjectSession state machine.
+            // Fully synchronous (the gate drives the transport position itself); one yield to start.
+            MessageManager::callAsync ([this] { runCountInSelftest(); });
+        }
         else if (mode == SelfTest::instrument)
         {
             // W26 (B6): instrument assignment — the seam + both picking surfaces, then a DEFERRED render
@@ -1750,7 +1757,14 @@ private:
             if (arm)
             {
                 session.startPerformanceCapture();
-                setStatusMessage ("Performance capture armed — launch clips, then toggle Capture off to stamp them to the Arrangement");
+
+                // B4: with a count-in configured the arm is PENDING for the pre-roll, so say so —
+                // otherwise the click starts and nothing appears to have happened.
+                if (session.isCountingIn())
+                    setStatusMessage ("Counting in — capture arms on the downbeat, then launch clips");
+                else
+                    setStatusMessage ("Performance capture armed — launch clips, then toggle Capture off to stamp them to the Arrangement");
+
                 return;
             }
 
@@ -8484,6 +8498,171 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-countin (W27, B4): the audible count-in before performance capture. Two halves.
+    //
+    // (1) The PURE planner, forge::capture::planCountIn — exhaustive, engine-free, so the arithmetic that
+    //     decides "roll from here, arm there" is provable without a transport at all.
+    // (2) The STATE MACHINE on the real ProjectSession: arming with a count-in must roll the transport
+    //     from the planned beat with the click forced on and capture NOT yet accumulating; reaching the
+    //     arm beat must flip to armed and restore the user's click; cancelling mid-count-in must restore
+    //     the click AND stop the transport we started; and the two skip paths (transport already rolling /
+    //     no count-in configured) must arm immediately and — critically — leave the transport alone, which
+    //     is the pre-B4 W17 contract this wave must not break.
+    void runCountInSelftest()
+    {
+        bool planNoCountIn = false, planFromZero = false, planMidTimeline = false,
+             planClampsNearStart = false, planNegativeGuard = false,
+             armedDuringCountIn = false, notCapturingDuringCountIn = false, rolledToPreroll = false,
+             clickForcedOn = false, stillCountingBeforeBeat = false,
+             armedAfterCountIn = false, clickRestoredAfter = false,
+             cancelDisarms = false, cancelRestoresClick = false, cancelStopsTransport = false,
+             rollingSkipsCountIn = false, noCountInArmsImmediately = false, noCountInLeavesTransport = false;
+        int  countInBeats = -1;
+
+        // ── (1) The pure planner ──────────────────────────────────────────────────────────────
+        {
+            const auto none = forge::capture::planCountIn (12.0, 0);
+            planNoCountIn = ! none.active && none.prerollBeat == 12.0 && none.captureBeat == 12.0;
+
+            // From the very start there is no room to roll BEFORE beat 0, so the capture point moves
+            // later instead of the count-in being silently shortened.
+            const auto zero = forge::capture::planCountIn (0.0, 8);
+            planFromZero = zero.active && zero.prerollBeat == 0.0 && zero.captureBeat == 8.0;
+
+            // With room, the transport jumps BACK by exactly the count-in and capture keeps its beat.
+            const auto mid = forge::capture::planCountIn (16.0, 8);
+            planMidTimeline = mid.active && mid.prerollBeat == 8.0 && mid.captureBeat == 16.0;
+
+            // Closer to the start than the count-in is long: preroll clamps at 0, capture slides to 8.
+            const auto near = forge::capture::planCountIn (4.0, 8);
+            planClampsNearStart = near.active && near.prerollBeat == 0.0 && near.captureBeat == 8.0;
+
+            const auto neg = forge::capture::planCountIn (-5.0, 4);
+            planNegativeGuard = neg.active && neg.prerollBeat == 0.0 && neg.captureBeat == 4.0;
+        }
+
+        // ── (2) The state machine ─────────────────────────────────────────────────────────────
+        if (auto* ed = session.getEdit())
+        {
+            auto& transport = ed->getTransport();
+            const auto& ts  = ed->tempoSequence;
+
+            auto beatNow = [&] { return ts.toBeats (transport.getPosition()).inBeats(); };
+            auto seekTo  = [&] (double beat)
+            {
+                transport.setPosition (ts.toTime (te::BeatPosition::fromBeats (beat)));
+            };
+
+            Metronome::enableClick (*ed, false);      // start from click OFF so "forced on" is observable
+            Metronome::setCountInBars (*ed, 1);
+            countInBeats = ed->getNumCountInBeats();  // read the ENGINE's answer, never a hardcoded 4
+
+            // --- arm with a count-in from beat 16 -> roll from 16 - countInBeats ---
+            transport.stop (false, false);
+            seekTo (16.0);
+
+            session.startPerformanceCapture();
+
+            armedDuringCountIn        = session.isCountingIn() && session.isPerformanceCaptureArmed();
+            notCapturingDuringCountIn = session.getCapturedSpanCount() == 0;
+            rolledToPreroll           = std::abs (beatNow() - (16.0 - countInBeats)) < 0.05;
+            clickForcedOn             = Metronome::isClickEnabled (*ed);
+
+            // A tick BEFORE the arm beat must not arm (the count-in actually waits).
+            seekTo (16.0 - 1.0);
+            session.countInTick();
+            stillCountingBeforeBeat = session.isCountingIn();
+
+            // Reaching the arm beat flips to armed and hands the click back to the user's setting.
+            seekTo (16.0);
+            session.countInTick();
+            armedAfterCountIn  = ! session.isCountingIn() && session.isPerformanceCaptureArmed();
+            clickRestoredAfter = ! Metronome::isClickEnabled (*ed);
+
+            session.stopPerformanceCapture (/*commit*/ false);
+
+            // --- cancel DURING the count-in ---
+            transport.stop (false, false);
+            seekTo (16.0);
+            session.startPerformanceCapture();
+
+            const bool countingBeforeCancel = session.isCountingIn();
+            session.stopPerformanceCapture (/*commit*/ false);
+
+            cancelDisarms       = countingBeforeCancel && ! session.isCountingIn()
+                                  && ! session.isPerformanceCaptureArmed();
+            cancelRestoresClick = ! Metronome::isClickEnabled (*ed);
+            cancelStopsTransport = ! transport.isPlaying();
+
+            // --- skip path A: transport ALREADY rolling -> arm at once, do not reposition ---
+            transport.stop (false, false);
+            seekTo (24.0);
+            transport.play (false);
+            session.startPerformanceCapture();
+
+            rollingSkipsCountIn = ! session.isCountingIn() && session.isPerformanceCaptureArmed();
+
+            session.stopPerformanceCapture (/*commit*/ false);
+            transport.stop (false, false);
+
+            // --- skip path B: NO count-in configured -> the pre-B4 W17 contract, byte for byte.
+            // "Does NOT start the transport" is the load-bearing half: capture is a passive observer.
+            Metronome::setCountInBars (*ed, 0);
+            transport.stop (false, false);
+            seekTo (32.0);
+
+            session.startPerformanceCapture();
+
+            noCountInArmsImmediately = ! session.isCountingIn() && session.isPerformanceCaptureArmed();
+            noCountInLeavesTransport = ! transport.isPlaying() && std::abs (beatNow() - 32.0) < 0.05;
+
+            session.stopPerformanceCapture (/*commit*/ false);
+            Metronome::enableClick (*ed, false);
+        }
+
+        const bool pass = planNoCountIn && planFromZero && planMidTimeline && planClampsNearStart
+                          && planNegativeGuard
+                          && armedDuringCountIn && notCapturingDuringCountIn && rolledToPreroll
+                          && clickForcedOn && stillCountingBeforeBeat && armedAfterCountIn
+                          && clickRestoredAfter
+                          && cancelDisarms && cancelRestoresClick && cancelStopsTransport
+                          && rollingSkipsCountIn && noCountInArmsImmediately && noCountInLeavesTransport;
+
+        String report;
+        report << "mode=countin" << newLine
+               << "countInBeats="              << countInBeats << newLine
+               << "planNoCountIn="             << (planNoCountIn ? 1 : 0) << newLine
+               << "planFromZero="              << (planFromZero ? 1 : 0) << newLine
+               << "planMidTimeline="           << (planMidTimeline ? 1 : 0) << newLine
+               << "planClampsNearStart="       << (planClampsNearStart ? 1 : 0) << newLine
+               << "planNegativeGuard="         << (planNegativeGuard ? 1 : 0) << newLine
+               << "armedDuringCountIn="        << (armedDuringCountIn ? 1 : 0) << newLine
+               << "notCapturingDuringCountIn=" << (notCapturingDuringCountIn ? 1 : 0) << newLine
+               << "rolledToPreroll="           << (rolledToPreroll ? 1 : 0) << newLine
+               << "clickForcedOn="             << (clickForcedOn ? 1 : 0) << newLine
+               << "stillCountingBeforeBeat="   << (stillCountingBeforeBeat ? 1 : 0) << newLine
+               << "armedAfterCountIn="         << (armedAfterCountIn ? 1 : 0) << newLine
+               << "clickRestoredAfter="        << (clickRestoredAfter ? 1 : 0) << newLine
+               << "cancelDisarms="             << (cancelDisarms ? 1 : 0) << newLine
+               << "cancelRestoresClick="       << (cancelRestoresClick ? 1 : 0) << newLine
+               << "cancelStopsTransport="      << (cancelStopsTransport ? 1 : 0) << newLine
+               << "rollingSkipsCountIn="       << (rollingSkipsCountIn ? 1 : 0) << newLine
+               << "noCountInArmsImmediately="  << (noCountInArmsImmediately ? 1 : 0) << newLine
+               << "noCountInLeavesTransport="  << (noCountInLeavesTransport ? 1 : 0) << newLine
+               << "result="                    << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="                   << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write count-in selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Count-in selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -9674,6 +9853,7 @@ public:
                             : commandLine.contains ("--selftest-reload")         ? "selftest-reload"         // before bare --selftest (collision-free, W24)
                             : commandLine.contains ("--selftest-stems")          ? "selftest-stems"          // before bare --selftest (collision-free vs -stepclip, W25)
                             : commandLine.contains ("--selftest-instrument")     ? "selftest-instrument"     // before bare --selftest (collision-free, W26)
+                            : commandLine.contains ("--selftest-countin")        ? "selftest-countin"        // before bare --selftest (collision-free, W27)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -9755,6 +9935,7 @@ public:
                         : commandLine.contains ("--selftest-reload")         ? SelfTest::reload         // before bare --selftest (collision-free, W24)
                         : commandLine.contains ("--selftest-stems")          ? SelfTest::stems          // before bare --selftest (collision-free vs -stepclip, W25)
                         : commandLine.contains ("--selftest-instrument")     ? SelfTest::instrument     // before bare --selftest (collision-free, W26)
+                        : commandLine.contains ("--selftest-countin")        ? SelfTest::countin        // before bare --selftest (collision-free, W27)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

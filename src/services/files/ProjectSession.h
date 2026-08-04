@@ -365,10 +365,35 @@ public:
     // this cell now", so clearing/replacing a clip in a cell mid-capture-session can't stamp the replacement
     // clip's content at the original clip's captured beat (QC-caught + fixed). Message-thread only.
 
-    /** Arms performance capture: clears prior history and starts the message-thread sampler. Does NOT
-        start the transport — the user launches clips/scenes as usual and capture accumulates whatever
-        plays while armed. Idempotent. No-op if no edit. */
+    /** Arms performance capture: clears prior history and starts the message-thread sampler.
+        Idempotent. No-op if no edit.
+
+        COUNT-IN (B4): when the Edit has a count-in configured (Edit::getNumCountInBeats() > 0 — the
+        SAME setting the record count-in and the transport bar's selector use) AND the transport is
+        STOPPED, arming first runs an audible count-in: the click is forced on, the transport rolls
+        from `prerollBeat`, and capture arms only when the playhead reaches `captureBeat` (both from
+        forge::capture::planCountIn). The click is restored to the user's setting at that moment, and
+        the pending state is visible via isCountingIn() — isPerformanceCaptureArmed() reads TRUE
+        throughout, so the Capture toggle stays lit rather than popping back off.
+
+        This does NOT use record mode: Tracktion's native count-in lives inside record(), but it is
+        only a position offset plus an audible click, both reproducible on a plain play() (see
+        CaptureCountIn.h). The W17 capture tick is untouched — it simply starts later, and spans stay
+        absolute Edit beats.
+
+        A count-in is SKIPPED (capture arms at once, logged) when the transport is already rolling —
+        repositioning it would interrupt whatever is already playing. With no count-in configured this
+        is byte-identical to the pre-B4 behaviour: arm now, never touch the transport. */
     void startPerformanceCapture();
+
+    /** True while the count-in is running (armed, but not yet accumulating). Const. */
+    bool isCountingIn() const;
+
+    /** Advances the count-in: arms capture once the transport reaches the planned beat, restoring the
+        user's click setting. Called by the owned Timer in production; exposed so a headless gate can
+        drive it deterministically after positioning the transport itself. No-op when not counting in.
+        Message-thread only. */
+    void countInTick();
 
     /** Disarms capture. Seals any still-open spans first. When `commit`, STAMPS one one-shot clip per
         captured span onto its track's linear timeline at the span's ABSOLUTE captured Edit beat (via the
@@ -674,6 +699,15 @@ private:
     bool capturing = false;
     std::map<std::pair<int,int>, OpenSpan> openSpans;   // per active cell
     std::vector<CaptureSpan>               capturedSpans;
+
+    // B4 count-in. `countingIn` and `capturing` are mutually exclusive: while counting in, the sampler
+    // tick is NOT run, so no span can open before the downbeat. clickWasEnabled remembers the user's
+    // click setting across the forced-on pre-roll so cancelling or completing restores it exactly.
+    bool   countingIn      = false;
+    double captureArmBeat  = 0.0;
+    bool   clickWasEnabled = false;
+
+    void finishCountIn();   // arm capture + restore the click (shared by the tick and a cancel)
 
     void sealCaptureSpan (int track, int scene, const OpenSpan&);   // push a CaptureSpan (guards tiny/neg len)
 

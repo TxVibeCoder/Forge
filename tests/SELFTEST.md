@@ -1289,6 +1289,55 @@ with no gate rendering them. First green run: `weakestPeak ≈ 0.31`, i.e. a gen
 > CLAUDE.md warns about ("a UI seam a gate can't see can ship unwired").
 >
 > `-instrument` is collision-free (no substring overlap with any existing gate name) — placed before the bare
-> `--selftest` in both ladders; verify `mode=instrument`. **Floor is now 49 gates.** There is deliberately no
+> `--selftest` in both ladders; verify `mode=instrument`. There is deliberately no
 > per-SLOT assignment: the engine is track-level, so a slot clip plays through whatever its track hosts (see
 > the W21 "first-instrument-wins" gotcha and the W22 "Move to its own track" fix).
+
+## `Forge --selftest-countin` (W27 — capture count-in, B4)
+
+The acceptance gate for **B4 — an audible count-in before performance capture**, WITHOUT record mode. Two
+halves: a pure planner and the real `ProjectSession` state machine.
+
+**(1) The planner** — `forge::capture::planCountIn(currentBeat, countInBeats)` is engine-free and
+Component-free (`src/engine/CaptureCountIn.h`), so the "roll from here, arm there" arithmetic is exhaustively
+provable with no transport at all.
+
+| field | case | PASS requires |
+|---|---|---|
+| `planNoCountIn` | `(12, 0)` → inactive, preroll = capture = 12 | 1 |
+| `planFromZero` | `(0, 8)` → active, preroll 0, capture **8** — no room to roll before beat 0, so the CAPTURE POINT moves rather than the count-in being silently shortened | 1 |
+| `planMidTimeline` | `(16, 8)` → preroll 8, capture 16 — with room, the transport jumps back by exactly the count-in and capture keeps its beat | 1 |
+| `planClampsNearStart` | `(4, 8)` → preroll 0, capture 8 — never a negative pre-roll | 1 |
+| `planNegativeGuard` | `(−5, 4)` → preroll 0, capture 4 | 1 |
+
+**(2) The state machine** — driven on the live edit with the gate positioning the transport itself, so it is
+fully synchronous and never waits on real time. `countInBeats` is read from `Edit::getNumCountInBeats()` (4 at
+the default 4/4), never hardcoded.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `armedDuringCountIn` | during the pre-roll `isCountingIn()` **and** `isPerformanceCaptureArmed()` are both true — the Capture toggle stays lit rather than popping back off | 1 |
+| `notCapturingDuringCountIn` | no span can open before the downbeat (the sampler tick does not run at all while counting in) | 1 |
+| `rolledToPreroll` | the transport was repositioned to `16 − countInBeats` and rolled | 1 |
+| `clickForcedOn` | the click is forced ON for the pre-roll — a silent count-in is useless | 1 |
+| `stillCountingBeforeBeat` | a tick BEFORE the arm beat does **not** arm — the count-in genuinely waits | 1 |
+| `armedAfterCountIn` / `clickRestoredAfter` | reaching the arm beat flips to armed and hands the click back to the user's setting exactly | 1 / 1 |
+| `cancelDisarms` / `cancelRestoresClick` / `cancelStopsTransport` | cancelling mid-count-in disarms, restores the click, and stops the transport **we** started (leaving it rolling would be a side effect the user never asked for) | 1 / 1 / 1 |
+| `rollingSkipsCountIn` | with the transport already rolling, capture arms at once — repositioning would cut off whatever is playing | 1 |
+| `noCountInArmsImmediately` / `noCountInLeavesTransport` | with no count-in configured the pre-B4 **W17 contract** holds byte for byte: arm now, and *never touch the transport* (capture is a passive observer) | 1 / 1 |
+
+> **Negative controls run during the build** (each reverted): dropping the beat guard in `countInTick` so it
+> arms instantly flips `stillCountingBeforeBeat` to 0 **alone**; making `startPerformanceCapture` roll the
+> transport on the no-count-in path flips `noCountInLeavesTransport` to 0 **alone**. The two load-bearing
+> rules — "the count-in waits" and "W17's passive-observer contract is intact" — are therefore each
+> independently pinned.
+>
+> **Why this needed no record mode:** Tracktion's count-in lives inside `TransportControl::record()`
+> (`tracktion_TransportControl.cpp:1483-1489`), which is what W22 read as "record mode is the only audible
+> path" when it deferred B4. The source shows the count-in is just a POSITION OFFSET plus an audible click —
+> both reproducible on a plain `play()`. Forge rolls the ordinary transport with the ordinary click and arms
+> capture when the playhead arrives. The W17 capture tick is untouched; it simply starts later, and spans stay
+> absolute Edit beats.
+>
+> `-countin` is collision-free (no substring overlap with any existing gate name) — placed before the bare
+> `--selftest` in both ladders; verify `mode=countin`. **Floor is now 50 gates.**

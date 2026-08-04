@@ -2,6 +2,8 @@
 #include "engine/EngineHelpers.h"
 #include "engine/PluginHost.h"
 #include "engine/ClipFades.h"
+#include "engine/Metronome.h"        // click on/off across the B4 capture count-in
+#include "engine/CaptureCountIn.h"   // forge::capture::planCountIn — the count-in beat arithmetic
 #include "core/Log.h"
 
 #include <algorithm>   // std::sort — the multi-file drop's deterministic filename ordering
@@ -351,13 +353,89 @@ void ProjectSession::startPerformanceCapture()
 
     capturedSpans.clear();
     openSpans.clear();
+    countingIn = false;
+
+    auto& transport      = edit->getTransport();
+    const int countInBeats = edit->getNumCountInBeats();   // the SAME setting record uses
+
+    // A count-in only makes sense from a STOPPED transport: repositioning a rolling one would cut off
+    // whatever is already playing, and the user who is already playing wants capture NOW.
+    if (countInBeats > 0 && ! transport.isPlaying())
+    {
+        const auto& ts   = edit->tempoSequence;
+        const auto  plan = forge::capture::planCountIn (ts.toBeats (transport.getPosition()).inBeats(),
+                                                        countInBeats);
+
+        if (plan.active)
+        {
+            captureArmBeat = plan.captureBeat;
+
+            // A silent count-in is useless, so force the click on for the pre-roll and remember the
+            // user's setting to restore at the downbeat (or on cancel).
+            clickWasEnabled = Metronome::isClickEnabled (*edit);
+            if (! clickWasEnabled)
+                Metronome::enableClick (*edit, true);
+
+            transport.setPosition (ts.toTime (te::BeatPosition::fromBeats (plan.prerollBeat)));
+            transport.play (false);   // plain play — NOT record(): no punch-in, no record-mode latch
+
+            countingIn = true;
+            capturing  = false;       // mutually exclusive: no span can open before the downbeat
+            startTimerHz (30);
+
+            FORGE_LOG_INFO ("Performance capture: counting in " + juce::String (countInBeats)
+                            + " beats (roll from beat " + juce::String (plan.prerollBeat, 2)
+                            + ", arm at beat " + juce::String (plan.captureBeat, 2) + ")");
+            return;
+        }
+    }
+
+    if (countInBeats > 0)
+        FORGE_LOG_INFO ("Performance capture: count-in skipped (transport already rolling) — arming now");
+
     capturing = true;
     startTimerHz (30);   // message-thread sampler; getPlayedRange is read-only + message-safe
     FORGE_LOG_INFO ("Performance capture armed");
 }
 
+bool ProjectSession::isCountingIn() const
+{
+    return countingIn;
+}
+
+void ProjectSession::finishCountIn()
+{
+    countingIn = false;
+
+    if (edit != nullptr && ! clickWasEnabled)
+        Metronome::enableClick (*edit, false);   // restore the user's setting exactly
+}
+
+void ProjectSession::countInTick()
+{
+    if (! countingIn || edit == nullptr)
+        return;
+
+    const auto beat = edit->tempoSequence.toBeats (edit->getTransport().getPosition()).inBeats();
+
+    if (beat + 1.0e-6 < captureArmBeat)
+        return;   // still counting
+
+    finishCountIn();
+    capturing = true;
+    FORGE_LOG_INFO ("Performance capture armed (count-in complete)");
+}
+
 void ProjectSession::timerCallback()
 {
+    // While counting in, the SAMPLER does not run at all — that is what guarantees no span can open
+    // before the downbeat, without the capture tick needing to know a count-in exists.
+    if (countingIn)
+    {
+        countInTick();
+        return;
+    }
+
     performanceCaptureTick();
 }
 
@@ -436,6 +514,21 @@ void ProjectSession::performanceCaptureTick()
 int ProjectSession::stopPerformanceCapture (bool commit)
 {
     stopTimer();
+
+    // Cancelling DURING the count-in (B4): nothing has played yet, so there is nothing to seal or
+    // commit. Restore the user's click setting and stop the transport WE started — leaving it rolling
+    // after the user cancelled would be a side effect they never asked for. A normally-armed capture
+    // still leaves the transport alone (pre-B4 behaviour, unchanged).
+    if (countingIn)
+    {
+        finishCountIn();
+
+        if (edit != nullptr)
+            edit->getTransport().stop (false, false);
+
+        FORGE_LOG_INFO ("Performance capture cancelled during count-in");
+    }
+
     capturing = false;
 
     if (edit == nullptr)
@@ -503,7 +596,9 @@ int ProjectSession::stopPerformanceCapture (bool commit)
 
 bool ProjectSession::isPerformanceCaptureArmed() const
 {
-    return capturing;
+    // TRUE through the count-in as well: the user asked for capture and it is pending, so the Capture
+    // toggle must stay lit rather than popping back off for the length of the pre-roll.
+    return capturing || countingIn;
 }
 
 int ProjectSession::getCapturedSpanCount() const

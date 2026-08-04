@@ -1,8 +1,35 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W26 — instrument
-> assignment (B6)"**: the backlog's last open *feature* item, and it started as a **dead-code report**. W24
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W27 — capture
+> count-in (B4)"** — the last "ready to build" item on the backlog, and one carrying a **wrong inherited
+> rationale**. W22 had deferred it on the reading that *"the only audible-count-in path puts the transport
+> into record-mode for the whole Capture session"*. Reading `TransportControl::record()`
+> (`tracktion_TransportControl.cpp:1483-1489`) refutes that: Tracktion's count-in is only a **position
+> offset** (`startTime − countInBeats`) plus a forced click range — both reproducible on a plain
+> `transport.play()`. It is reachable only *through* `record()`, which is not the same as being a property
+> *of* record mode (now a CLAUDE.md gotcha, because the shape recurs). **Shipped:**
+> `forge::capture::planCountIn` (new header-only `src/engine/CaptureCountIn.h` — pure, engine-free,
+> exhaustively gate-able) decides where to roll and where to arm; `ProjectSession` gained a `countingIn`
+> state **mutually exclusive with `capturing`** (the sampler tick does not run at all during the pre-roll, so
+> no span can open before the downbeat) that rolls the transport from the pre-roll beat with the click forced
+> on, arms on the downbeat, and restores the user's click setting exactly. `isPerformanceCaptureArmed()`
+> reads true throughout so the Capture toggle stays lit; `isCountingIn()` exposes the pending state; the
+> status strip says "Counting in". Cancelling mid-count-in disarms, restores the click and **stops the
+> transport Forge started**. Two skip paths protect prior behaviour: already-rolling arms at once, and **no
+> count-in configured is byte-identical to pre-B4** — arm now, never touch the transport (W17's
+> passive-observer contract, pinned by its own gate leg). **No new UI**: it reads
+> `Edit::getNumCountInBeats()`, so the existing transport-bar count-in selector serves record and capture
+> alike. When there is no room before beat 0 the **capture point moves later** rather than the count-in being
+> silently shortened. New gate **`--selftest-countin`** (floor **49 → 50**, 19 legs) with **two independent
+> negative controls**: dropping the beat guard flips `stillCountingBeforeBeat` alone; rolling the transport
+> on the no-count-in path flips `noCountInLeavesTransport` alone. Build **clean (0 warnings)** · **50/50
+> floor** · **12/12 screenshots**. ⚠ **Known limit (documented, not built):** the LCD's count-in digits still
+> latch only on a *record* rising edge (W04a), so the capture count-in is audible but not shown on the LCD.
+> Full record → [devlog/wave-27-capture-countin.md](devlog/wave-27-capture-countin.md).
+
+> The prior wave, **W26 — instrument
+> assignment (B6)**: the backlog's last open *feature* item, and it started as a **dead-code report**. W24
 > had shipped four self-rendered CC0 melodic voices (PluckBass / Pad / Bell / Clav); a grep showed every
 > reference in `src/engine/` and **zero in `src/ui/` or `main.cpp`** — compiled into the binary and
 > unreachable. `PluginHost::applyInstrumentPreset` already did the whole engine job, so this wave built only

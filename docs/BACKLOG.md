@@ -112,23 +112,34 @@ pass after a 900 ms pump; first run `weakestPeak ≈ 0.31`. **B3 is fully done.*
 
 ---
 
-### B4 — Capture count-in
-**Value: medium. Effort: medium-high. Risk: medium — its own focused wave.**
+### B4 — Capture count-in — ✅ SHIPPED (W27)
 
-- **[inherited]** (W22 deferral rationale, **not re-verified**): the only audible-count-in path puts the
-  transport into **record-mode for the whole Capture session**, which risks the carefully-timed W17
-  performance-capture path and would light the Rec button for a non-recording action.
+**The inherited deferral rationale was WRONG, and checking it was most of the work.** W22 recorded (flagged
+"not re-verified") that *"the only audible-count-in path puts the transport into record-mode for the whole
+Capture session"*. Reading `TransportControl::record()` (`tracktion_TransportControl.cpp:1483-1489`) shows the
+count-in is only a **position offset** (`startTime − countInBeats`) plus a forced click range — both
+reproducible on a plain `play()`. No record mode, no Rec-button lie, no risk to the W17 capture path. See the
+new CLAUDE.md gotcha.
 
-**Build:** find a count-in that does not hold the transport in record-mode for the capture duration (a
-metronome pre-roll driven independently, or a transient record-mode window that ends before capture arms).
-Re-verify the W17 `LaunchHandle::getPlayedRange()` span timing is unaffected.
+**Shipped:** `forge::capture::planCountIn` (`src/engine/CaptureCountIn.h` — pure, engine-free, exhaustively
+gate-able) decides where to roll and where to arm; `ProjectSession` gained a `countingIn` state that rolls the
+transport from the pre-roll beat with the click forced on, arms capture on the downbeat, and restores the
+user's click setting exactly. `isPerformanceCaptureArmed()` reads true throughout so the Capture toggle stays
+lit; `isCountingIn()` exposes the pending state; the status strip says "Counting in". Cancelling mid-count-in
+disarms, restores the click and stops the transport Forge started. Two skip paths keep prior behaviour intact:
+already-rolling arms at once, and **no count-in configured is byte-identical to pre-B4** (arm now, never touch
+the transport — the W17 passive-observer contract, pinned by its own gate leg).
 
-**Footguns:** W17's capture reseal heuristic depends on `LaunchHandle::nudge`/`setLooping`/`playSynced`
-staying uncalled (CLAUDE.md gotcha). The count-in digits derive from the engine's **click grid**, not the
-time-sig numerator (verified during W23's time-sig work) — don't "fix" the count-in to follow the meter.
+**No new UI:** it reads `Edit::getNumCountInBeats()`, so the existing transport-bar count-in selector serves
+record and capture alike — one setting, one answer.
 
-**Territory:** `RecordController` / `ProjectSession` capture path + `TransportBar` + `main.cpp`. **Not
-parallel-safe** with anything touching the capture path.
+**Gate:** `--selftest-countin` (floor 49 → 50), 19 legs, both load-bearing rules independently
+negative-controlled. The W17 footgun holds: `LaunchHandle::nudge`/`setLooping`/`playSynced` stay uncalled, and
+the capture tick is untouched (it simply starts later).
+
+**Known limit (documented, not built):** the LCD's count-in digits still latch only on a *record* rising edge
+(W04a), so the capture count-in is audible but not shown on the LCD. That is a `LcdDisplay` change with its own
+latch logic — a clean follow-up, not a blocker.
 
 ---
 
@@ -230,7 +241,7 @@ edits them (CLAUDE.md, Wave Orchestration Rule, Pillar 3).
 
 | item | owns | conflicts with |
 |---|---|---|
-| B4 capture count-in | `RecordController`, capture path, `TransportBar` | — |
+| ~~B4 capture count-in~~ | ~~`RecordController`, capture path, `TransportBar`~~ | **SHIPPED W27** — the only leftover is the LCD count-in readout. |
 | ~~B6 instrument library~~ | ~~`BrowserView`, `PluginHost`, `SessionView`~~ | **SHIPPED W26** — only optional library growth remains, and that is `InstrumentSamples` + the enum alone. |
 
 *(The W24 wave consumed the rest of this table — B1 + B5 + B7 ran as the suggested 3-agent fan-out with
@@ -242,7 +253,7 @@ could even run together, but B4 wants its own focused wave per its risk note.)*
 ## The process (unchanged)
 
 Build → **one** integration build (`cmake --build .\build --config Debug`; kill `Forge.exe` first) → the
-**full selftest floor** (currently 49 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
+**full selftest floor** (currently 50 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
 docs (`HANDOFF` / `STATUS` / `CLAUDE.md` counts / `SELFTEST.md` / a devlog) → **sanitize scan** → scoped
 commit → **hold the push for the maintainer's OK**.
 

@@ -97,7 +97,7 @@ cmake --build build --config Debug
 
 ### Headless self-tests
 
-The verification floor is **forty-nine** headless PASS/FAIL gates (each writes a report to
+The verification floor is **fifty** headless PASS/FAIL gates (each writes a report to
 `%TEMP%\forge_phase0_selftest.log` and quits), plus `--screenshot` (renders a 12-state UI matrix incl. the
 window-level `shell_window` to `%TEMP%\forge_shot_*.png` — not a gate). A representative few:
 
@@ -116,6 +116,9 @@ window-level `shell_window` to `%TEMP%\forge_shot_*.png` — not a gate). A repr
 - `Forge --selftest-instrument` — assigns each built-in CC0 voice through the real Session and Browser
   entry points, proves re-assignment replaces rather than stacks, and renders all four melodic voices to
   confirm they are audible (W26 instrument assignment).
+- `Forge --selftest-countin` — proves the audible count-in before performance capture: where the transport
+  rolls from, that capture waits for the downbeat, and that the no-count-in path still never touches the
+  transport (W27).
 
 The rest cover MIDI-learn (`-midilearn`, `-midiinput`), the control surface (`-controlsurface`), offline
 LUFS (`-lufs`), automation (`-automation`), MIDI-clock (`-sync`), live cross-surface refresh (`-livesync`),

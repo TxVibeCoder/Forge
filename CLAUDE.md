@@ -62,7 +62,11 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY-NINE gates as of W26 (instrument assignment):
+- **Selftest floor** (must pass after any change — FIFTY gates as of W27 (capture count-in):
+  W27 added `--selftest-countin` (B4 — an audible count-in before performance capture, with NO record mode:
+  a pure `forge::capture::planCountIn` planner + the `ProjectSession` state machine, both negative-controlled;
+  the W22 deferral rationale "record mode is the only audible count-in path" was REFUTED by reading the engine
+  source — see the gotcha below).
   W26 added `--selftest-instrument` (the B6 seam `ProjectSession::setTrackInstrument` + BOTH picking
   surfaces driven through their real public entry points — `SessionView::applyInstrumentToTrack` and
   `BrowserView::activateInstrumentRow`, the latter WITHOUT stubbing the shell callback so it proves
@@ -98,8 +102,8 @@ conflict, surface it.
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`,
   `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`, `--selftest-reload`,
-  `--selftest-stems`, `--selftest-instrument`;
-  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload`/`-stems`/`-instrument` are collision-free —
+  `--selftest-stems`, `--selftest-instrument`, `--selftest-countin`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload`/`-stems`/`-instrument`/`-countin` are collision-free —
   `-stems` shares no substring with `-stepclip` (they diverge at `ste[m|p]`) —
   placed before bare `--selftest`
   (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).
@@ -255,6 +259,18 @@ conflict, surface it.
   `track->playSlotClips` is already true; `ProjectSession::commitRetrospectiveToSlot` relocates UNCONDITIONALLY (a
   first capture never has `playSlotClips` set) and so MUST hold the Ptr — QC-caught crash (`ClipSlot::setClip` →
   `ValueTree::getParent` on freed state).
+- **Tracktion's count-in is a POSITION OFFSET, not a property of record mode (W27).** It looks welded to
+  recording because the only code that consumes it lives in `TransportControl::record()`
+  (`tracktion_TransportControl.cpp:1483-1489`), which does exactly two things: rolls the transport from
+  `startTime − (getNumCountInBeats() + 0.5)` beats, and forces a click range over the pre-roll. Both are
+  reproducible on a plain `transport.play()` with `clickTrackEnabled` on — so **any** feature can have an
+  audible count-in without entering record mode, latching the Rec button, or arming an input.
+  W22 deferred B4 on the opposite reading ("the only audible-count-in path puts the transport into
+  record-mode for the whole Capture session"); W27 refuted it by reading the source and shipped the count-in
+  as `forge::capture::planCountIn` + a `ProjectSession` state machine. **The general lesson: an engine
+  behaviour reachable only through one API is not necessarily a property OF that API — read what the API
+  actually does before designing around it.** (Forge's own version deliberately drops the engine's `+ 0.5`
+  beat fudge, which exists only to align the record click RANGE and would make the count math non-integral.)
 - **`AudioTrack::getName()` can never tell you whether the USER named a track (W25).** It returns the stored
   name only if non-empty and otherwise **synthesises** `"Track N"` from the track's position
   (`tracktion_AudioTrack.cpp:213` → `getNameAsTrackNumber`), so it is never empty and a `getName().isEmpty()`

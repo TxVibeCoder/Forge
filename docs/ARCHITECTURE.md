@@ -214,7 +214,7 @@ forge/
 >   windows, W04b), **`ui/common/`** (`PeakMeter.h` + `StripWidgets.h` — shared meter + strip styling),
 >   **`ui/markers/MarkerBar`**, and **`ui/export/ExportProgress`**.
 >
-> **Headless verification** is **forty-nine** PASS/FAIL selftests (as of W26) — plus `--screenshot`, which
+> **Headless verification** is **fifty** PASS/FAIL selftests (as of W27) — plus `--screenshot`, which
 > renders a **12-state UI matrix** incl. the window-level `shell_window` (not a gate). The gate list changes
 > most waves, so it is NOT mirrored here: [`../tests/SELFTEST.md`](../tests/SELFTEST.md) is the single
 > canonical source for both the roster and every gate's field contract.
