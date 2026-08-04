@@ -195,7 +195,10 @@ forge/
 >   (`importMidiFileMultiTrack`, W24 — one clip per non-empty source part), and **many-files-to-many-lanes**
 >   (`importFilesMultiTrack` / `importAudioFilesMultiTrack`, W25 — the multi-stem drop: filename-sorted, one
 >   consecutive lane per file, lanes named after their files, audio and `.mid` dispatched in one walk).
->   The UI never imports directly — `ArrangeView` bubbles a drop up and the shell calls the seam.
+>   The UI never imports directly — `ArrangeView` bubbles a drop up and the shell calls the seam. W26 adds
+>   `setTrackInstrument` (the B6 instrument-assignment seam): all three picking surfaces — the Arrange
+>   lane-header menu, the Session track-header menu and the Browser's INSTRUMENTS list — route through it,
+>   and none touches the plugin chain itself.
 > - **`services/export/Exporter`** — WAV mixdown + per-track stems, with **async** off-message-thread variants
 >   (`renderEditToWavAsync` / `renderStemsAsync`, progress + cancel) alongside the preserved sync API.
 > - **`engine/`** — `EngineHelpers` · `RecordController` (incl. MIDI slot-record) · `PluginHost` (incl. the 4OSC
@@ -211,7 +214,7 @@ forge/
 >   windows, W04b), **`ui/common/`** (`PeakMeter.h` + `StripWidgets.h` — shared meter + strip styling),
 >   **`ui/markers/MarkerBar`**, and **`ui/export/ExportProgress`**.
 >
-> **Headless verification** is **forty-eight** PASS/FAIL selftests (as of W25) — plus `--screenshot`, which
+> **Headless verification** is **forty-nine** PASS/FAIL selftests (as of W26) — plus `--screenshot`, which
 > renders a **12-state UI matrix** incl. the window-level `shell_window` (not a gate). The gate list changes
 > most waves, so it is NOT mirrored here: [`../tests/SELFTEST.md`](../tests/SELFTEST.md) is the single
 > canonical source for both the roster and every gate's field contract.

@@ -1,8 +1,33 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W25 — multi-stem audio
-> import"**: a maintainer brief ("the last gap between Forge and a complete stem-mixing workflow"), filed as
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W26 — instrument
+> assignment (B6)"**: the backlog's last open *feature* item, and it started as a **dead-code report**. W24
+> had shipped four self-rendered CC0 melodic voices (PluckBass / Pad / Bell / Clav); a grep showed every
+> reference in `src/engine/` and **zero in `src/ui/` or `main.cpp`** — compiled into the binary and
+> unreachable. `PluginHost::applyInstrumentPreset` already did the whole engine job, so this wave built only
+> the missing path: **one seam** (`ProjectSession::setTrackInstrument`), **one catalogue**
+> (`PluginHost::getInstrumentChoices` / `getInstrumentPresetName` — now also the source of the Sampler sound
+> name, so a picker label and the loaded sound cannot drift; two inline copies of those strings deleted), and
+> **three surfaces** that all render from it: an `Instrument ▸` submenu **appended** to the Arrange
+> lane-header menu, a **new** right-click menu on the Session track header (`TrackColumnComponent` gained its
+> first header mouse handler + a static `isInHeaderBand` hit test), and an **INSTRUMENTS** list above the
+> Browser's file tree. The Browser list is deliberately track-agnostic — the shell picks the target via
+> `instrumentTargetTrack()` (focused Session column → else last-selected Arrange lane, clamped to the live
+> list) and the status strip names **both** voice and track, because loading an instrument changes nothing
+> visible on the grid. **No per-slot assignment, by design:** the engine is track-level (the W21
+> "first-instrument-wins" gotcha; the W22 "Move to its own track" fix), so a per-slot picker would lie about
+> what the engine does. New gate **`--selftest-instrument`** (floor **48 → 49**) drives BOTH surfaces through
+> their real public entry points — `SessionView::applyInstrumentToTrack` and
+> `BrowserView::activateInstrumentRow`, the latter **without stubbing the shell callback**, so it proves
+> browser → shell → seam end to end; a negative control confirmed that unwiring the shell binding flips
+> exactly that leg. Its phase 2 also **closes the B3 leftover** — all four melodic voices render non-silent
+> in one deferred `renderStems` pass (`weakestPeak ≈ 0.31`, a genuine PASS, not a SKIP). Build **clean (0
+> warnings)** · **49/49 floor** · **12/12 screenshots** (no new state — the surfaces are menus and a list).
+> Full record → [devlog/wave-26-instrument-assignment.md](devlog/wave-26-instrument-assignment.md).
+
+> The prior wave, **W25 — multi-stem audio
+> import**: a maintainer brief ("the last gap between Forge and a complete stem-mixing workflow"), filed as
 > backlog **B9** and burned down the same day. **Dropping N files onto an Arrange lane now lands one clip per
 > file on N consecutive tracks, named after the files** — it previously imported the first file and discarded
 > the rest, so a 6-stem separation meant six separate drags. New `ProjectSession::importFilesMultiTrack` (+ the

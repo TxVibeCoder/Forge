@@ -1612,6 +1612,33 @@ void ArrangeView::showLaneContextMenu (TrackLaneComponent& lane, const MouseEven
         }
     });
 
+    // Instrument ▸ (B6): assign one of the built-in CC0 voices to THIS lane's track. The submenu is
+    // rendered from PluginHost's single catalogue, and the choice bubbles up — the view never touches
+    // the plugin chain (the shell routes it through ProjectSession::setTrackInstrument). Appended to
+    // the existing menu, never a competing rewrite.
+    menu.addSeparator();
+    {
+        PopupMenu instrumentMenu;
+
+        for (const auto& choice : PluginHost::getInstrumentChoices())
+        {
+            const auto preset = choice.preset;
+            instrumentMenu.addItem (choice.name, [safeThis, track, preset]
+            {
+                if (safeThis == nullptr || track == nullptr || safeThis->edit == nullptr
+                      || safeThis->onInstrumentChosen == nullptr)
+                    return;
+
+                const auto tracks = te::getAudioTracks (*safeThis->edit);
+                const int trackIndex = tracks.indexOf (track);
+                if (trackIndex >= 0)
+                    safeThis->onInstrumentChosen (trackIndex, preset);
+            });
+        }
+
+        menu.addSubMenu ("Instrument", instrumentMenu);
+    }
+
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&lane));
 }
 

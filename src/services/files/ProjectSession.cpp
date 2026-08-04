@@ -110,6 +110,36 @@ te::WaveAudioClip::Ptr ProjectSession::importAudioFile (const juce::File& f, te:
     return clip;
 }
 
+bool ProjectSession::setTrackInstrument (int trackIndex, PluginHost::InstrumentPreset preset)
+{
+    if (edit == nullptr || trackIndex < 0)
+    {
+        FORGE_LOG_WARN ("setTrackInstrument: no edit / bad track index " + juce::String (trackIndex));
+        return false;
+    }
+
+    auto* track = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackIndex);
+
+    if (track == nullptr)
+    {
+        FORGE_LOG_ERROR ("setTrackInstrument: failed to create or access track " + juce::String (trackIndex));
+        return false;
+    }
+
+    // applyInstrumentPreset removes any existing head synth FIRST, so re-assigning never stacks.
+    const auto plugin = PluginHost::applyInstrumentPreset (*track, preset);
+
+    if (plugin == nullptr)
+    {
+        FORGE_LOG_ERROR ("setTrackInstrument: failed to apply '" + PluginHost::getInstrumentPresetName (preset)
+                         + "' to track " + juce::String (trackIndex));
+        return false;
+    }
+
+    edit->markAsChanged();
+    return true;
+}
+
 te::MidiClip::Ptr ProjectSession::createMidiClip (int trackIndex, te::TimeRange range, const juce::String& name)
 {
     if (edit == nullptr)

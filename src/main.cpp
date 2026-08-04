@@ -58,7 +58,7 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload, stems };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload, stems, instrument };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
@@ -422,6 +422,13 @@ public:
             auto* at = dynamic_cast<te::AudioTrack*> (t);
             channelTray.setTrack (at);
 
+            // Remember the ARRANGE selection as an INDEX (never a pointer — R1) so the Browser's
+            // Instruments list knows which lane to load a voice onto. Deselection leaves the last
+            // pick standing rather than silently retargeting track 0.
+            if (auto* ed = session.getEdit(); ed != nullptr && at != nullptr)
+                if (const int idx = te::getAudioTracks (*ed).indexOf (at); idx >= 0)
+                    arrangeSelectedTrack = idx;
+
             if (at != nullptr && browserVisible && ! userPinnedBrowser
                 && sidebarMode != SidebarMode::Channel)
             {
@@ -513,6 +520,52 @@ public:
                 session.save();
 
             arrangeView.rebuild();
+        };
+
+        // B6: the Arrange lane header's Instrument ▸ submenu. The view already resolved which lane was
+        // right-clicked, so the target is unambiguous. Seal + save like every mutation, and rebuild the
+        // lanes so the header's MIDI/instrument tag reflects the new chain.
+        arrangeView.onInstrumentChosen = [this] (int trackIndex, PluginHost::InstrumentPreset preset)
+        {
+            if (! session.setTrackInstrument (trackIndex, preset))
+            {
+                setStatusMessage ("Could not load " + PluginHost::getInstrumentPresetName (preset));
+                return;
+            }
+
+            sealUndoTransaction();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
+
+            arrangeView.rebuild();
+            channelTray.refreshNow();   // the tray's insert list now shows the new head instrument
+            announceInstrument (trackIndex, preset);
+        };
+
+        // B6: the Browser's INSTRUMENTS list. Unlike the lane menu this carries NO track — the list
+        // knows nothing about tracks — so the shell picks the target: the focused Session column, or
+        // the last-selected Arrange lane. The status message names the track so the user is never left
+        // guessing where the sound landed.
+        browserPanel.onInstrumentChosen = [this] (PluginHost::InstrumentPreset preset)
+        {
+            const int trackIndex = instrumentTargetTrack();
+
+            if (! session.setTrackInstrument (trackIndex, preset))
+            {
+                setStatusMessage ("Could not load " + PluginHost::getInstrumentPresetName (preset));
+                return;
+            }
+
+            sealUndoTransaction();
+            if (! session.save())
+                FORGE_LOG_ERROR ("Failed to save project — I/O error");
+
+            // Both surfaces can be showing the affected track, so refresh whichever is live.
+            if (sessionViewBinds())
+                sessionView.rebuild();
+            arrangeView.rebuild();
+            channelTray.refreshNow();
+            announceInstrument (trackIndex, preset);
         };
 
         // Double-clicking a file in the Browser imports it onto the project. W24 (B1): a .mid/.midi
@@ -1058,6 +1111,12 @@ public:
             // Synchronous seam work; one callAsync yield is enough (mirrors -midifile).
             MessageManager::callAsync ([this] { runStemsSelftest(); });
         }
+        else if (mode == SelfTest::instrument)
+        {
+            // W26 (B6): instrument assignment — the seam + both picking surfaces, then a DEFERRED render
+            // of the four melodic voices (the gate defers its own phase 2; one yield to start).
+            MessageManager::callAsync ([this] { runInstrumentSelftest(); });
+        }
         else if (mode == SelfTest::demo)
         {
             // Wave 4 (W09): the audible-demo gate — instrument presets applied + notes seeded. Synchronous.
@@ -1454,6 +1513,41 @@ private:
     // W22 "Modulate" picker (Ctrl+M): menu ids from showModulateMenu() index into this; each holds a live
     // param pointer the selection attaches an LFO to (forge::modifier::addLFO + assign).
     juce::Array<PluginHost::LearnableParam> modulateTargets;
+
+    // B6: the ARRANGE track selection, as an index (R1 — never a cached te:: pointer). Together with
+    // SessionView's own focus index this answers "which track does the Browser's Instruments list load
+    // onto?" — see instrumentTargetTrack(). Starts at 0: a fresh project has exactly one track, so the
+    // first double-click before any selection does the obviously-right thing.
+    int arrangeSelectedTrack = 0;
+
+    /** The track a Browser instrument double-click targets: the focused column in Session (the primary
+        view owns its own focus index), the last-selected lane in Arrange/Mixer. Clamped to the live
+        track list so a since-deleted selection can never address past the end. */
+    int instrumentTargetTrack() const
+    {
+        const int raw = (viewMode == ViewMode::Session) ? sessionView.getFocusTrackIndex()
+                                                        : arrangeSelectedTrack;
+        const int count = session.getNumAudioTracks();
+        return count > 0 ? juce::jlimit (0, count - 1, raw) : 0;
+    }
+
+    /** Status-strip feedback naming BOTH the voice and the destination track. Loading an instrument
+        changes nothing visible on the grid, and from the Browser the user did not pick the track at
+        all — so without this the gesture would be a silent state change. */
+    void announceInstrument (int trackIndex, PluginHost::InstrumentPreset preset)
+    {
+        juce::String trackName = "Track " + juce::String (trackIndex + 1);
+
+        if (auto* ed = session.getEdit())
+        {
+            const auto tracks = te::getAudioTracks (*ed);
+
+            if (trackIndex >= 0 && trackIndex < tracks.size() && tracks[trackIndex] != nullptr)
+                trackName = tracks[trackIndex]->getName();
+        }
+
+        setStatusMessage (PluginHost::getInstrumentPresetName (preset) + " -> " + trackName);
+    }
 
     ViewMode viewMode = ViewMode::Session;
     BottomMode bottomMode = BottomMode::Detail;   // Detail (audio) vs PianoRoll (MIDI) in the drawer
@@ -8080,6 +8174,316 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-instrument (W26, B6): the instrument-assignment path — the ONE seam
+    // (ProjectSession::setTrackInstrument) plus BOTH picking surfaces driven through their real public
+    // entry points, never a mirror. Phase 1 is structural + hermetic; phase 2 defers a RENDER of all four
+    // W24 melodic voices (the B3 leftover: PluckBass / Pad / Bell / Clav shipped ungated), pumping the
+    // Sampler's async ingestion first — three-state PASS/FAIL/SKIP, same semantics as -demo / -drumkit.
+    //
+    // The two surfaces are proved through code a mouse would reach, so wiring cannot rot silently:
+    //   Session  -> SessionView::applyInstrumentToTrack (what the header menu's callback invokes)
+    //   Browser  -> BrowserView::activateInstrumentRow  (what a row double-click invokes) — and this leg
+    //               deliberately does NOT stub the callback: it asserts the SHELL's own binding landed the
+    //               instrument on the target track, so it covers browser -> shell -> seam end to end.
+    void runInstrumentSelftest()
+    {
+        bool catalogueOk = false, namesMatchTable = false, seamAppliesAll = false, noStackOnRepeat = false,
+             badIndexGuard = false, sessionRouteOk = false, browserRowsOk = false,
+             browserActivateApplied = false, headerHitTestOk = false;
+        int  choiceCount = -1, instrumentsAfterRepeat = -1;
+
+        // The four W24 melodic voices — the B3 leftover this gate closes. Each lands on its own track so
+        // ONE renderStems pass yields one stem per voice.
+        struct Voice { PluginHost::InstrumentPreset preset; const char* trackName; };
+        const Voice voices[4] = { { PluginHost::InstrumentPreset::PluckBass, "VoicePluckBass" },
+                                  { PluginHost::InstrumentPreset::Pad,       "VoicePad"       },
+                                  { PluginHost::InstrumentPreset::Bell,      "VoiceBell"      },
+                                  { PluginHost::InstrumentPreset::Clav,      "VoiceClav"      } };
+        bool renderClipsMade = false;
+
+        // Counts the head instruments (synth / MIDI-consuming plugins) on a track — the no-stacking proof.
+        auto countInstruments = [] (te::AudioTrack& t)
+        {
+            int n = 0;
+            for (auto* p : t.pluginList)
+                if (p != nullptr && (p->isSynth() || p->takesMidiInput()))
+                    ++n;
+            return n;
+        };
+
+        const auto choices = PluginHost::getInstrumentChoices();
+        choiceCount = choices.size();
+
+        // ── Catalogue ─────────────────────────────────────────────────────────────────────────
+        // Non-empty, no blank labels, no duplicates, and every entry's name is EXACTLY what
+        // getInstrumentPresetName returns — the "one name table" claim, asserted rather than assumed.
+        {
+            juce::StringArray seen;
+            catalogueOk = choiceCount > 0;
+            namesMatchTable = true;
+
+            for (const auto& c : choices)
+            {
+                if (c.name.isEmpty() || seen.contains (c.name))
+                    catalogueOk = false;
+                seen.add (c.name);
+
+                if (c.name != PluginHost::getInstrumentPresetName (c.preset))
+                    namesMatchTable = false;
+            }
+        }
+
+        if (auto* ed = session.getEdit())
+        {
+            // ── The seam: every preset applies, and exactly ONE instrument ends up on the track ──
+            {
+                seamAppliesAll = choiceCount > 0;
+                const int base = session.getNumAudioTracks();
+
+                for (int i = 0; i < choices.size(); ++i)
+                {
+                    const int idx = base + i;   // one fresh track per preset
+
+                    if (! session.setTrackInstrument (idx, choices[i].preset))
+                    {
+                        seamAppliesAll = false;
+                        continue;
+                    }
+
+                    auto tracks = te::getAudioTracks (*ed);
+                    if (idx >= tracks.size() || tracks[idx] == nullptr || countInstruments (*tracks[idx]) != 1)
+                        seamAppliesAll = false;
+                }
+            }
+
+            // ── Re-assignment REPLACES, never stacks (applyInstrumentPreset clears the head first) ──
+            {
+                const int idx = session.getNumAudioTracks();
+                session.setTrackInstrument (idx, PluginHost::InstrumentPreset::Kick);
+                session.setTrackInstrument (idx, PluginHost::InstrumentPreset::Piano);
+                session.setTrackInstrument (idx, PluginHost::InstrumentPreset::Bell);
+
+                auto tracks = te::getAudioTracks (*ed);
+                if (idx < tracks.size() && tracks[idx] != nullptr)
+                    instrumentsAfterRepeat = countInstruments (*tracks[idx]);
+
+                noStackOnRepeat = instrumentsAfterRepeat == 1;
+            }
+
+            // ── Guard: a negative index mutates nothing ───────────────────────────────────────
+            {
+                const int before = session.getNumAudioTracks();
+                badIndexGuard = ! session.setTrackInstrument (-1, PluginHost::InstrumentPreset::Piano)
+                                && session.getNumAudioTracks() == before;
+            }
+
+            // ── Surface 1: the SESSION track-header route, through its real public entry point ──
+            {
+                const int idx = session.getNumAudioTracks();
+                session.setTrackInstrument (idx, PluginHost::InstrumentPreset::Kick);   // a 4OSC to displace
+                sessionView.rebuild();                                                  // the column must exist
+
+                if (sessionView.applyInstrumentToTrack (idx, PluginHost::InstrumentPreset::Piano))
+                {
+                    auto tracks = te::getAudioTracks (*ed);
+                    if (idx < tracks.size() && tracks[idx] != nullptr)
+                    {
+                        // Piano is Sampler-backed, Kick is a 4OSC — so a real swap is observable by TYPE.
+                        bool sampler = false;
+                        for (auto* p : tracks[idx]->pluginList)
+                            if (dynamic_cast<te::SamplerPlugin*> (p) != nullptr) { sampler = true; break; }
+
+                        sessionRouteOk = sampler && countInstruments (*tracks[idx]) == 1;
+                    }
+                }
+            }
+
+            // ── Surface 2: the BROWSER route, end to end through the SHELL's own binding ───────
+            // The list is track-agnostic, so the shell picks the target (instrumentTargetTrack()). Drive
+            // the same index here and assert that exact track received the row's voice.
+            {
+                browserRowsOk = browserPanel.getNumInstrumentRows() == choiceCount;
+
+                // Park the target on a known track by driving instrumentTargetTrack()'s ARRANGE branch —
+                // these are our own members, so no test-only setter has to be added to SessionView.
+                const int idx = session.getNumAudioTracks();
+                session.setTrackInstrument (idx, PluginHost::InstrumentPreset::Kick);
+
+                const auto restoreView = viewMode;
+                viewMode             = ViewMode::Arrange;
+                arrangeSelectedTrack = idx;
+
+                const int target = instrumentTargetTrack();
+
+                // Piano is Sampler-backed while the seeded Kick is a 4OSC, so a real swap is observable
+                // by plugin TYPE — not merely "something changed".
+                int pianoRow = -1;
+                for (int i = 0; i < choices.size(); ++i)
+                    if (choices[i].preset == PluginHost::InstrumentPreset::Piano)
+                        pianoRow = i;
+
+                if (target == idx && pianoRow >= 0 && browserPanel.activateInstrumentRow (pianoRow))
+                {
+                    auto tracks = te::getAudioTracks (*ed);
+                    if (idx < tracks.size() && tracks[idx] != nullptr)
+                    {
+                        bool sampler = false;
+                        for (auto* p : tracks[idx]->pluginList)
+                            if (dynamic_cast<te::SamplerPlugin*> (p) != nullptr) { sampler = true; break; }
+
+                        browserActivateApplied = sampler && countInstruments (*tracks[idx]) == 1;
+                    }
+                }
+
+                viewMode = restoreView;
+            }
+
+            // ── The header hit-test the Session right-click depends on ────────────────────────
+            headerHitTestOk = TrackColumnComponent::isInHeaderBand (0)
+                              && TrackColumnComponent::isInHeaderBand (SessionLayout::headerH - 1)
+                              && ! TrackColumnComponent::isInHeaderBand (SessionLayout::headerH)
+                              && ! TrackColumnComponent::isInHeaderBand (-1);
+
+            // ── Seed the four melodic voices for the deferred render (B3's leftover) ──────────
+            {
+                renderClipsMade = true;
+
+                for (const auto& v : voices)
+                {
+                    const int idx = session.getNumAudioTracks();
+
+                    if (! session.setTrackInstrument (idx, v.preset))
+                    {
+                        renderClipsMade = false;
+                        continue;
+                    }
+
+                    auto tracks = te::getAudioTracks (*ed);
+                    if (idx < tracks.size() && tracks[idx] != nullptr)
+                        tracks[idx]->setName (v.trackName);   // so the stem is identifiable by file name
+
+                    if (auto rc = session.createMidiClip (idx,
+                                                          te::TimeRange (te::TimePosition(),
+                                                                         te::TimePosition::fromSeconds (1.5)),
+                                                          v.trackName))
+                        rc->getSequence().addNote (InstrumentSamples::kRootNote, te::BeatPosition::fromBeats (0.0),
+                                                   te::BeatDuration::fromBeats (1.0), 110, 0,
+                                                   &ed->getUndoManager());
+                    else
+                        renderClipsMade = false;
+                }
+            }
+        }
+
+        // The Sampler ingests its one-shot on an AsyncUpdater — defer the render+report phase so the
+        // message loop pumps ingestion first, or every voice renders silent and we would call it a bug.
+        juce::Timer::callAfterDelay (900,
+            [this, catalogueOk, namesMatchTable, seamAppliesAll, noStackOnRepeat, badIndexGuard,
+             sessionRouteOk, browserRowsOk, browserActivateApplied, headerHitTestOk,
+             choiceCount, instrumentsAfterRepeat, renderClipsMade]
+            { finishInstrumentSelftest (catalogueOk, namesMatchTable, seamAppliesAll, noStackOnRepeat,
+                                        badIndexGuard, sessionRouteOk, browserRowsOk, browserActivateApplied,
+                                        headerHitTestOk, choiceCount, instrumentsAfterRepeat, renderClipsMade); });
+    }
+
+    // Phase 2 of --selftest-instrument: render the four melodic-voice tracks in ONE renderStems pass and
+    // sample each stem's peak. Closes the B3 leftover ("the four W24 melodic voices are still ungated").
+    // Three-state: SKIP if the render could not run (honest, non-blocking); FAIL only on a stem that was
+    // produced and is silent; never a fictional PASS.
+    void finishInstrumentSelftest (bool catalogueOk, bool namesMatchTable, bool seamAppliesAll,
+                                   bool noStackOnRepeat, bool badIndexGuard, bool sessionRouteOk,
+                                   bool browserRowsOk, bool browserActivateApplied, bool headerHitTestOk,
+                                   int choiceCount, int instrumentsAfterRepeat, bool renderClipsMade)
+    {
+        juce::String voicesAudible = "SKIP";
+        int   voicesRendered = 0;
+        float weakestPeak    = -1.0f;
+
+        const char* voiceTrackNames[4] = { "VoicePluckBass", "VoicePad", "VoiceBell", "VoiceClav" };
+
+        if (auto* ed = session.getEdit(); ed != nullptr && renderClipsMade)
+        {
+            auto renderDir = File::getSpecialLocation (File::tempDirectory)
+                                 .getChildFile ("forge_instrument_render");
+            renderDir.deleteRecursively();
+
+            juce::String renderErr;
+            if (Exporter::renderStems (*ed, renderDir, renderErr))
+            {
+                const auto stems = renderDir.findChildFiles (File::findFiles, false, "*.wav");
+                int audible = 0;
+
+                for (const char* name : voiceTrackNames)
+                {
+                    File stem;
+                    for (const auto& s : stems)
+                        if (s.getFileName().contains (name))
+                            stem = s;
+
+                    if (stem == File())
+                    {
+                        FORGE_LOG_WARN ("selftest-instrument: no stem matched " + juce::String (name));
+                        continue;
+                    }
+
+                    ++voicesRendered;
+                    const float peak = readPeakMagnitude (stem);
+
+                    if (weakestPeak < 0.0f || peak < weakestPeak)
+                        weakestPeak = peak;
+
+                    if (peak > 0.01f)
+                        ++audible;
+                }
+
+                if (voicesRendered == 4)
+                    voicesAudible = audible == 4 ? "PASS" : "FAIL";
+                else
+                    FORGE_LOG_WARN ("selftest-instrument: only " + juce::String (voicesRendered)
+                                    + "/4 voice stems found — voicesAudible stays SKIP");
+            }
+            else
+                FORGE_LOG_WARN ("selftest-instrument: renderStems failed — " + renderErr
+                                + " — voicesAudible stays SKIP (never a fictional PASS)");
+
+            renderDir.deleteRecursively();
+        }
+
+        const bool pass = catalogueOk && namesMatchTable && seamAppliesAll && noStackOnRepeat
+                          && badIndexGuard && sessionRouteOk && browserRowsOk && browserActivateApplied
+                          && headerHitTestOk
+                          && voicesAudible != "FAIL";   // SKIP is honest + non-blocking; proven silence fails
+
+        String report;
+        report << "mode=instrument" << newLine
+               << "choiceCount="            << choiceCount << newLine
+               << "catalogueOk="            << (catalogueOk ? 1 : 0) << newLine
+               << "namesMatchTable="        << (namesMatchTable ? 1 : 0) << newLine
+               << "seamAppliesAll="         << (seamAppliesAll ? 1 : 0) << newLine
+               << "instrumentsAfterRepeat=" << instrumentsAfterRepeat << newLine
+               << "noStackOnRepeat="        << (noStackOnRepeat ? 1 : 0) << newLine
+               << "badIndexGuard="          << (badIndexGuard ? 1 : 0) << newLine
+               << "sessionRouteOk="         << (sessionRouteOk ? 1 : 0) << newLine
+               << "browserRowsOk="          << (browserRowsOk ? 1 : 0) << newLine
+               << "browserActivateApplied=" << (browserActivateApplied ? 1 : 0) << newLine
+               << "headerHitTestOk="        << (headerHitTestOk ? 1 : 0) << newLine
+               << "voicesRendered="         << voicesRendered << newLine
+               << "weakestPeak="            << weakestPeak << newLine
+               << "voicesAudible="          << voicesAudible << newLine
+               << "result="                 << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="                << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write instrument selftest report to: " + reportFile.getFullPathName());
+
+        FORGE_LOG_INFO ("Instrument selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -9269,6 +9673,7 @@ public:
                             : commandLine.contains ("--selftest-trim")           ? "selftest-trim"           // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest-reload")         ? "selftest-reload"         // before bare --selftest (collision-free, W24)
                             : commandLine.contains ("--selftest-stems")          ? "selftest-stems"          // before bare --selftest (collision-free vs -stepclip, W25)
+                            : commandLine.contains ("--selftest-instrument")     ? "selftest-instrument"     // before bare --selftest (collision-free, W26)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -9349,6 +9754,7 @@ public:
                         : commandLine.contains ("--selftest-trim")           ? SelfTest::trim           // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest-reload")         ? SelfTest::reload         // before bare --selftest (collision-free, W24)
                         : commandLine.contains ("--selftest-stems")          ? SelfTest::stems          // before bare --selftest (collision-free vs -stepclip, W25)
+                        : commandLine.contains ("--selftest-instrument")     ? SelfTest::instrument     // before bare --selftest (collision-free, W26)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

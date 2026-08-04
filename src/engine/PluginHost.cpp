@@ -463,6 +463,40 @@ namespace PluginHost
         }
     } // namespace
 
+    juce::String getInstrumentPresetName (InstrumentPreset preset)
+    {
+        switch (preset)
+        {
+            case InstrumentPreset::Kick:      return "Kick";
+            case InstrumentPreset::Bass:      return "Bass";
+            case InstrumentPreset::Piano:     return "Piano";
+            case InstrumentPreset::PluckBass: return "Pluck Bass";
+            case InstrumentPreset::Pad:       return "Pad";
+            case InstrumentPreset::Bell:      return "Bell";
+            case InstrumentPreset::Clav:      return "Clav";
+        }
+
+        jassertfalse;   // a new enum value was added without a name — the catalogue would show blank
+        return "Instrument";
+    }
+
+    juce::Array<InstrumentChoice> getInstrumentChoices()
+    {
+        // Enum order. Kick/Bass are programmed 4OSC presets; the rest are self-rendered CC0 Sampler
+        // one-shots. Built from getInstrumentPresetName so there is exactly one name table.
+        static const InstrumentPreset all[] = { InstrumentPreset::Kick,  InstrumentPreset::Bass,
+                                                InstrumentPreset::Piano, InstrumentPreset::PluckBass,
+                                                InstrumentPreset::Pad,   InstrumentPreset::Bell,
+                                                InstrumentPreset::Clav };
+
+        juce::Array<InstrumentChoice> choices;
+
+        for (auto p : all)
+            choices.add ({ p, getInstrumentPresetName (p) });
+
+        return choices;
+    }
+
     te::Plugin::Ptr applyInstrumentPreset (te::AudioTrack& track, InstrumentPreset preset)
     {
         // Clear any existing head synth so presets never stack.
@@ -490,7 +524,8 @@ namespace PluginHost
             {
                 // addSound resolves an absolute path via the Edit's filePathResolver (returns it as-is).
                 // startTime 0, length 0 -> whole file. gainDb 0. Returns "" on success, else an error.
-                const juce::String err = sampler->addSound (sample.getFullPathName(), "Piano",
+                const juce::String err = sampler->addSound (sample.getFullPathName(),
+                                                            getInstrumentPresetName (InstrumentPreset::Piano),
                                                             0.0, 0.0, 0.0f);
                 if (err.isNotEmpty())
                 {
@@ -523,12 +558,11 @@ namespace PluginHost
                              : preset == InstrumentPreset::Pad       ? InstrumentSamples::MelodicVoice::Pad
                              : preset == InstrumentPreset::Bell      ? InstrumentSamples::MelodicVoice::Bell
                                                                      : InstrumentSamples::MelodicVoice::Clav;
-            const char* name = preset == InstrumentPreset::PluckBass ? "Pluck Bass"
-                             : preset == InstrumentPreset::Pad       ? "Pad"
-                             : preset == InstrumentPreset::Bell      ? "Bell"
-                                                                     : "Clav";
 
-            return insertSamplerOneShot (track, InstrumentSamples::ensureMelodicOneShot (voice), name);
+            // Name from the ONE table (getInstrumentPresetName), so the Sampler sound carries exactly the
+            // label the picker showed — no second copy of these strings to drift.
+            return insertSamplerOneShot (track, InstrumentSamples::ensureMelodicOneShot (voice),
+                                         getInstrumentPresetName (preset));
         }
 
         // Kick / Bass: insert a 4OSC then program it.

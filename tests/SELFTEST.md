@@ -1255,5 +1255,40 @@ is false) sorted **between** two good files. The good files must still land on *
 >
 > `-stems` is collision-free — it shares no substring with `--selftest-stepclip` (they diverge at `ste[m|p]`)
 > or any other gate name — so it only needs to sit **before** the bare `--selftest` in both ladders; verify
-> `mode=stems`. **Floor is now 48 gates.** The Session-grid (clip-slot) drop path is deliberately untouched:
+> `mode=stems`. The Session-grid (clip-slot) drop path is deliberately untouched:
 > it stays single-file, and `--selftest-dragdrop` still covers it.
+
+## `Forge --selftest-instrument` (W26 — instrument assignment, B6)
+
+The acceptance gate for **B6 — the browsable CC0 instrument library**: the seam
+(`ProjectSession::setTrackInstrument`) plus **both** picking surfaces, each driven through the real public
+entry point a mouse would reach — never a mirror. Two phases; phase 2 defers a render so the Sampler's async
+ingestion can pump first.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `choiceCount` / `catalogueOk` | `PluginHost::getInstrumentChoices()` is non-empty, has no blank labels and no duplicates | 7 / 1 |
+| `namesMatchTable` | every entry's name is EXACTLY `getInstrumentPresetName(preset)` — the "one name table" claim asserted, not assumed (the same function names the loaded Sampler sound, so a menu label and the sound on the track cannot drift) | 1 |
+| `seamAppliesAll` | every one of the 7 presets applies to its own fresh track, and each lands **exactly one** head instrument | 1 |
+| `instrumentsAfterRepeat` / `noStackOnRepeat` | three different presets applied to the SAME track in a row leave exactly one instrument — re-assignment REPLACES (`applyInstrumentPreset` clears the head first), never stacks | 1 / 1 |
+| `badIndexGuard` | `setTrackInstrument(-1, …)` returns false **and** the track count is unchanged | 1 |
+| `sessionRouteOk` | `SessionView::applyInstrumentToTrack` (what the track-header menu's callback invokes) swaps a seeded 4OSC for a Sampler-backed voice — observable by plugin **type**, not merely "something changed" | 1 |
+| `browserRowsOk` | the Browser's INSTRUMENTS list has one row per catalogue entry | 1 |
+| `browserActivateApplied` | `BrowserView::activateInstrumentRow` (what a row double-click invokes) lands the voice on the shell's target track — driven **without stubbing the callback**, so it covers browser → shell → seam end to end | 1 |
+| `headerHitTestOk` | `TrackColumnComponent::isInHeaderBand` is true at 0 and `headerH-1`, false at `headerH` and −1 — the right-click target band the Session menu depends on | 1 |
+| `voicesRendered` / `weakestPeak` / `voicesAudible` | **phase 2** — all four W24 melodic voices (PluckBass / Pad / Bell / Clav) on their own named tracks, one note each, rendered in ONE `Exporter::renderStems` pass after a 900 ms ingestion pump; every stem's peak sampled | 4 / >0.01 / not `FAIL` |
+
+`voicesAudible` is three-state, same semantics as `--selftest-demo` / `--selftest-drumkit`: **SKIP** when the
+render could not run (honest and non-blocking), **FAIL** only for a stem that was produced and is silent,
+never a fictional PASS. This closes the **B3 leftover** — the four melodic voices shipped in W24 (`13a1f0f`)
+with no gate rendering them. First green run: `weakestPeak ≈ 0.31`, i.e. a genuine PASS, not a SKIP.
+
+> **Negative control run during the build** (then reverted): stubbing out the shell's
+> `browserPanel.onInstrumentChosen` binding flips `browserActivateApplied` to 0 **with `sessionRouteOk` and
+> `browserRowsOk` still 1** — so the gate catches an unwired UI seam, which is exactly the failure class
+> CLAUDE.md warns about ("a UI seam a gate can't see can ship unwired").
+>
+> `-instrument` is collision-free (no substring overlap with any existing gate name) — placed before the bare
+> `--selftest` in both ladders; verify `mode=instrument`. **Floor is now 49 gates.** There is deliberately no
+> per-SLOT assignment: the engine is track-level, so a slot clip plays through whatever its track hosts (see
+> the W21 "first-instrument-wins" gotcha and the W22 "Move to its own track" fix).

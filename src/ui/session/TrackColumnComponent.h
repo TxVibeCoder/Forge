@@ -47,6 +47,14 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    /** Right-click anywhere on the HEADER band (outside the M/S/R buttons, which are child components
+        and eat their own clicks) opens the track menu via onHeaderRightClicked. Left-clicks and clicks
+        below the header are ignored here — the pads are children and handle their own mouse. */
+    void mouseDown (const juce::MouseEvent&) override;
+
+    /** True if `y` (column-local) falls inside the header band — the hit test mouseDown uses, exposed
+        so a headless gate can prove the header is right-clickable without an OS mouse event. */
+    static bool isInHeaderBand (int y);
 
     //==============================================================================
     // Push-down API — the parent/poll drives the column's pads and chrome on the message thread.
@@ -89,6 +97,10 @@ public:
 
     /** The track's clip-stop ■ was clicked — stop every clip on this track. */
     std::function<void (int trackIdx)> onTrackStopAll;
+
+    /** Right-click on the track HEADER band; param is the event for context-menu placement. The
+        parent (SessionView) shows the track menu — Instrument ▸ today (B6). */
+    std::function<void (int trackIdx, const juce::MouseEvent&)> onHeaderRightClicked;
 
     /** M / S / R toggled — the parent routes mute/solo/arm through ProjectSession / the shell. */
     std::function<void (int trackIdx)> onMute;

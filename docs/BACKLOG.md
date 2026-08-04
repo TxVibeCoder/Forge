@@ -26,7 +26,13 @@
 > page and burned down in the same pass). Build clean, **48/48 floor** (`+--selftest-stems`), 12/12
 > screenshots. ✅ **PUSHED** — `origin/main` tip is **`062c248`**, local `main` == `origin/main` (verified by
 > `git fetch` after the push). W24 turned out to have been pushed already, so every "push still held" note
-> above is stale. **Nothing is currently unpushed.** Still open: item 0, B4, B6-remaining, B8 leftovers.
+> above is stale.
+>
+> **Update 2026-08-04 later (W26):** **B6 SHIPPED** — the missing browser→track interaction plus two more
+> assignment surfaces, over one new `ProjectSession::setTrackInstrument` seam; the four W24 melodic voices
+> are no longer dead code. **B3 is now fully closed too** (its leftover render slice rides the new gate).
+> Build clean, **49/49 floor** (`+--selftest-instrument`), 12/12 screenshots. Still open: item 0 (Redo —
+> maintainer decision), B4 (capture count-in), B8 leftovers, and B6's optional library growth.
 
 ---
 
@@ -97,11 +103,12 @@ a false pass. Contract → `../tests/SELFTEST.md`.
 
 ---
 
-### B3 — Render-audibility gate legs — ✅ SHIPPED (W24) for demo + drumkit
+### B3 — Render-audibility gate legs — ✅ SHIPPED (W24 demo + drumkit; W26 melodic voices)
 Deferred render phases on `--selftest-demo` / `--selftest-drumkit` (600 ms async-ingestion pump →
 `Exporter::renderStems` → peak; three-state PASS/FAIL/SKIP). Verified genuine PASS (peaks ≈0.55/0.65).
-**Remaining slice:** the four W24 melodic voices (`13a1f0f` — PluckBass/Pad/Bell/Clav) are still ungated —
-apply the same leg pattern when B6 surfaces them (they are API-only until then).
+**Remaining slice CLOSED in W26:** the four melodic voices (PluckBass/Pad/Bell/Clav) now render in
+`--selftest-instrument`'s phase 2 — one note each on their own named tracks, all four in ONE `renderStems`
+pass after a 900 ms pump; first run `weakestPeak ≈ 0.31`. **B3 is fully done.**
 
 ---
 
@@ -133,24 +140,32 @@ let one slip through and mis-trim; a latent W23 hole, closed). Remaining documen
 
 ---
 
-### B6 — Browsable CC0 instrument library
-**Value: medium (the "give me a sound" workflow). Effort: high. Risk: medium.**
+### B6 — Browsable CC0 instrument library — ✅ SHIPPED (W26)
+The W24 groundwork (`13a1f0f`) had shipped four melodic voices as **dead code** — every reference lived in
+`src/engine/`, none in `src/ui/`, so nothing user-facing could assign them. W26 built the missing path:
 
-- **[inherited]** (W09 scope deferral, **not re-verified**): blocked on a missing **browser → Session-slot**
-  interaction — there is no way to drop/assign a library instrument onto a track from the browser.
-- **Groundwork SHIPPED (W24, `13a1f0f`):** four self-rendered CC0 melodic voices — PluckBass / Pad / Bell /
-  Clav (`InstrumentSamples::ensureMelodicOneShot`, `src/engine/dsp/InstrumentSamples.{h,cpp}`), each a
-  deterministic one-shot rendered at `kRootNote`, plus `PluginHost::InstrumentPreset::{PluckBass,Pad,Bell,
-  Clav}` wired through a shared `insertSamplerOneShot` helper (the Piano's chromatic-Sampler recipe,
-  factored). **Nothing user-facing assigns these yet**, and no gate leg renders them — fold the render proof
-  into the B3 pass.
+- **One seam:** `ProjectSession::setTrackInstrument(trackIndex, preset)` over the existing
+  `PluginHost::applyInstrumentPreset` (which already cleared the head synth first, so re-assignment replaces
+  rather than stacks). Every surface routes through it; none touches the plugin chain.
+- **One catalogue:** `PluginHost::getInstrumentChoices()` / `getInstrumentPresetName()` — the single name
+  table. `applyInstrumentPreset` now names the loaded Sampler sound from the same function, so a menu label
+  and the sound on the track cannot drift; two inline copies of those strings were removed.
+- **Three surfaces**, all rendered from that catalogue: an `Instrument ▸` submenu appended to the Arrange
+  lane-header menu; a **new** right-click menu on the Session track header (`TrackColumnComponent` gained a
+  header hit-test + `onHeaderRightClicked`); and an **INSTRUMENTS** list in the Browser above the file tree
+  (double-click or Enter). The Browser list is track-agnostic — the shell picks the target
+  (`instrumentTargetTrack()`: the focused Session column, else the last-selected Arrange lane, clamped) and
+  the status strip names both voice and track so the gesture is never a silent state change.
+- **Gate `--selftest-instrument`** (floor 48 → 49). Also **closes the B3 leftover**: all four melodic voices
+  now render non-silent in a deferred pass (first run `weakestPeak ≈ 0.31` — a genuine PASS, not a SKIP).
 
-**Build (remaining):** the interaction (browser item → track/slot) + a UI surface that assigns an
-`InstrumentPreset` to a track, then any further library growth. Self-rendered CC0 one-shots only — a public
-AGPLv3 repo; **no third-party packs**, a locked decision. Extend `InstrumentSamples`, never vendor.
+**Deliberately not built:** per-slot assignment. The engine is track-level — a slot clip plays through
+whatever its track hosts (the W21 "first-instrument-wins" gotcha; the W22 "Move to its own track" fix exists
+precisely because of it), so a per-slot picker would lie about what the engine does.
 
-**Territory:** `BrowserView`, `PluginHost`/`InstrumentSamples`, `SessionView`, `main.cpp`. **⚠ Conflicts with
-B1** on `BrowserView`.
+**Still open (library growth, not interaction):** more CC0 voices. Self-rendered one-shots only — a public
+AGPLv3 repo; **no third-party packs**, a locked decision. Extend `InstrumentSamples`, never vendor. Adding a
+voice is now: one enum value + one name + one `InstrumentSamples` renderer — every surface picks it up.
 
 ---
 
@@ -216,7 +231,7 @@ edits them (CLAUDE.md, Wave Orchestration Rule, Pillar 3).
 | item | owns | conflicts with |
 |---|---|---|
 | B4 capture count-in | `RecordController`, capture path, `TransportBar` | — |
-| B6 instrument library (remaining) | `BrowserView`, `PluginHost`, `SessionView` | — |
+| ~~B6 instrument library~~ | ~~`BrowserView`, `PluginHost`, `SessionView`~~ | **SHIPPED W26** — only optional library growth remains, and that is `InstrumentSamples` + the enum alone. |
 
 *(The W24 wave consumed the rest of this table — B1 + B5 + B7 ran as the suggested 3-agent fan-out with
 B2/B3 in the orchestrator's `main.cpp` pass, exactly as planned. B4 and B6-remaining don't conflict and
@@ -227,7 +242,7 @@ could even run together, but B4 wants its own focused wave per its risk note.)*
 ## The process (unchanged)
 
 Build → **one** integration build (`cmake --build .\build --config Debug`; kill `Forge.exe` first) → the
-**full selftest floor** (currently 48 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
+**full selftest floor** (currently 49 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
 docs (`HANDOFF` / `STATUS` / `CLAUDE.md` counts / `SELFTEST.md` / a devlog) → **sanitize scan** → scoped
 commit → **hold the push for the maintainer's OK**.
 

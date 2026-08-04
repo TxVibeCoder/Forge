@@ -62,7 +62,12 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY-EIGHT gates as of W25 (multi-stem import):
+- **Selftest floor** (must pass after any change — FORTY-NINE gates as of W26 (instrument assignment):
+  W26 added `--selftest-instrument` (the B6 seam `ProjectSession::setTrackInstrument` + BOTH picking
+  surfaces driven through their real public entry points — `SessionView::applyInstrumentToTrack` and
+  `BrowserView::activateInstrumentRow`, the latter WITHOUT stubbing the shell callback so it proves
+  browser→shell→seam end to end; plus a deferred render of all four W24 melodic voices, closing the B3
+  leftover — three-state PASS/FAIL/SKIP, first run a genuine PASS at peak ≈0.31).
   W25 added `--selftest-stems` (the multi-FILE drop fan-out — N dropped files → N clips on N consecutive,
   file-named Arrange lanes, via `ProjectSession::importFilesMultiTrack` / `importAudioFilesMultiTrack`;
   its Phase-A input order is deliberately UNSORTED so the seam's filename sort is load-bearing, and both
@@ -93,8 +98,8 @@ conflict, surface it.
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`,
   `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`, `--selftest-reload`,
-  `--selftest-stems`;
-  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload`/`-stems` are collision-free —
+  `--selftest-stems`, `--selftest-instrument`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload`/`-stems`/`-instrument` are collision-free —
   `-stems` shares no substring with `-stepclip` (they diverge at `ste[m|p]`) —
   placed before bare `--selftest`
   (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).

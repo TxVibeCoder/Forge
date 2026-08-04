@@ -240,6 +240,19 @@ void TrackColumnComponent::paint (Graphics& g)
     g.fillRect (0, headerH - 1, getWidth(), 1);
 }
 
+bool TrackColumnComponent::isInHeaderBand (int y)
+{
+    return y >= 0 && y < SessionLayout::headerH;
+}
+
+void TrackColumnComponent::mouseDown (const juce::MouseEvent& e)
+{
+    // Header right-click only. The M/S/R toggles are CHILD components, so their clicks never reach
+    // here; the pads are children too, so a click below the header belongs to a pad, not to us.
+    if (e.mods.isPopupMenu() && isInHeaderBand (e.y) && onHeaderRightClicked != nullptr)
+        onHeaderRightClicked (trackIndex, e);
+}
+
 void TrackColumnComponent::resized()
 {
     using namespace SessionLayout;

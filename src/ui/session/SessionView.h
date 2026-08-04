@@ -38,6 +38,7 @@
 #include "ui/session/SlotVisualState.h"
 #include "ui/session/SessionLayout.h"
 #include "services/files/ProjectSession.h"
+#include "engine/PluginHost.h"   // PluginHost::InstrumentPreset — applyInstrumentToTrack's argument
 
 namespace te = tracktion;
 
@@ -77,6 +78,14 @@ public:
 
     /** Track-column count (excludes the scene column), for diagnostics / self-tests. */
     int getNumColumns() const                { return columns.size(); }
+
+    /** Assigns a built-in instrument voice to the track at trackIdx (B6): routes through
+        ProjectSession::setTrackInstrument, fires onEditMutated so the shell seals + saves, and
+        refreshes that column's header (its instrument chip is derived from the plugin chain, which
+        the 25 Hz slot poll does not watch). Returns false if the assignment failed (logged by the
+        seam). PUBLIC so a headless gate can drive the Session instrument path without an OS mouse
+        event — the same discipline as PianoRollView::handleWheel. Message-thread only. */
+    bool applyInstrumentToTrack (int trackIdx, PluginHost::InstrumentPreset preset);
 
     /** Current keyboard/mouse focus TRACK index (the read side of onTrackFocusChanged). An INDEX,
         never a pointer (R1) — the shell resolves it fresh via te::getAudioTracks. */
@@ -170,6 +179,7 @@ private:
     void launchOrToggle          (int trackIdx, int sceneIdx);   // W1 mode-aware launch (shared by click + Enter)
     void handleSlotDoubleClicked (int trackIdx, int sceneIdx);
     void handleSlotRightClicked  (int trackIdx, int sceneIdx, const juce::MouseEvent&);
+    void handleHeaderRightClicked (int trackIdx, const juce::MouseEvent&);   // B6 track-header menu
     void handleSlotFilesDropped  (int trackIdx, int sceneIdx, const juce::File&);   // W07 OS-external drop
     void importAudioInto         (int trackIdx, int sceneIdx);
     void openSlotForEdit         (int trackIdx, int sceneIdx);   // route the slot's clip to the drawer

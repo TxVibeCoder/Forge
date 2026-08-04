@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "engine/PluginHost.h"   // PluginHost::InstrumentPreset — the setTrackInstrument seam's argument
+
 namespace te = tracktion;
 
 /** Per-clip launch mode (Wave 1). Trigger = today's one-shot launch; Gate = plays while the pad is held and
@@ -132,6 +134,29 @@ public:
     std::vector<te::WaveAudioClip::Ptr> importAudioFilesMultiTrack (const juce::Array<juce::File>&,
                                                                     te::TimePosition start,
                                                                     int firstTrackIndex = 0);
+
+    //==============================================================================
+    // Instrument assignment (B6) — the "give me a sound" seam. Message-thread only.
+
+    /** Replaces the HEAD instrument on the track at `trackIndex` with `preset`'s voice (a programmed
+        4OSC for Kick/Bass, the engine Sampler loaded with a self-rendered CC0 one-shot for the rest),
+        via PluginHost::applyInstrumentPreset — which removes any existing head synth first, so repeated
+        assignment never stacks instruments. Grows the track list on demand (getOrInsertAudioTrackAt), so
+        a picker aimed past the end still lands somewhere real.
+
+        This is the ONLY path the instrument-picking surfaces use — the Arrange lane-header menu, the
+        Session track-header menu and the Browser's Instruments list all route here; none of them calls
+        PluginHost or touches the plugin chain itself.
+
+        ⚠ The engine is TRACK-level: a Session slot clip plays through whatever its TRACK hosts, so there
+        is deliberately no per-slot variant (see the W21 "first-instrument-wins" gotcha and the W22
+        "Move to its own track" fix, which exist precisely because of this). Returns true if an
+        instrument was inserted; false + logs on no edit / bad index / insertion failure.
+
+        NOTE (headless callers): the Sampler-backed voices ingest their audio on an AsyncUpdater — a
+        headless RENDER must pump the message loop after this returns, or the note is silent. Structural
+        inspection needs no pump. */
+    bool setTrackInstrument (int trackIndex, PluginHost::InstrumentPreset preset);
 
     /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
         ensuring the track exists and is born audible (a default 4OSC instrument is added if the

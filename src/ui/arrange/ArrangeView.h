@@ -31,6 +31,7 @@
 
 #include <JuceHeader.h>
 
+#include "engine/PluginHost.h"   // PluginHost::InstrumentPreset — the lane-header Instrument submenu
 #include "ui/arrange/AutomationLane.h"
 
 #include <map>
@@ -411,6 +412,11 @@ public:
         save()+rebuild()s (mirrors onCreateMidiClipRequested). Default null => no-op. */
     std::function<void (int trackIndex, const juce::Array<juce::File>& files,
                         te::TimePosition startTime)> onFilesDropped;
+    /** Invoked when the user picks a voice from the lane header's Instrument ▸ submenu (B6).
+        trackIndex is the lane's track index within te::getAudioTracks(*edit). The shell binds this to
+        ProjectSession::setTrackInstrument — the view never touches the plugin chain. Default null =>
+        the submenu still renders but choosing is a no-op. */
+    std::function<void (int trackIndex, PluginHost::InstrumentPreset)> onInstrumentChosen;
 
 private:
     void selectClip (ClipComponent*);

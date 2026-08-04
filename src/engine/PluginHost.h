@@ -67,6 +67,25 @@ namespace PluginHost
         first three by name, so their ordinals must not move. */
     enum class InstrumentPreset { Kick, Bass, Piano, PluckBass, Pad, Bell, Clav };
 
+    /** The user-facing display name for a preset ("Pluck Bass", "Piano", …). THE canonical source of
+        these strings: applyInstrumentPreset names the loaded Sampler sound from this same function, so
+        a menu label and the sound actually loaded on the track cannot drift apart. */
+    juce::String getInstrumentPresetName (InstrumentPreset preset);
+
+    /** One selectable voice for a "give me a sound" UI: the preset plus its display name. */
+    struct InstrumentChoice
+    {
+        InstrumentPreset preset;
+        juce::String     name;
+    };
+
+    /** Every built-in instrument voice, in menu order (Kick, Bass, Piano, Pluck Bass, Pad, Bell, Clav)
+        — the ONE list every instrument-picking surface renders from (the Arrange lane-header menu, the
+        Session track-header menu and the Browser's Instruments list), so adding a voice to the enum and
+        this table lights it up everywhere at once. Order follows the enum; ordinals are not persisted
+        anywhere, so it is safe to reorder for presentation if that ever reads better. */
+    juce::Array<InstrumentChoice> getInstrumentChoices();
+
     /** Replaces the track's HEAD instrument with the given preset's instrument and configures it:
           Kick / Bass -> a 4OSC with programmed parameters (osc waveShape/tune/level, amp+filter ADSR,
                          filter) giving a punchy kick / round synth bass.

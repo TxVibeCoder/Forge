@@ -178,6 +178,8 @@ void SessionView::wireColumn (TrackColumnComponent& column)
 
     column.onTrackStopAll = [this] (int t) { session.stopTrackClips (t); };
 
+    column.onHeaderRightClicked = [this] (int t, const MouseEvent& e) { handleHeaderRightClicked (t, e); };
+
     column.onMute = [this] (int t)
     {
         if (auto* track = getTrackAt (t))
@@ -501,6 +503,61 @@ void SessionView::openSlotForEdit (int trackIdx, int sceneIdx)
         if (auto* clip = slot->getClip())
             if (onSlotSelected != nullptr)
                 onSlotSelected (clip);
+}
+
+bool SessionView::applyInstrumentToTrack (int trackIdx, PluginHost::InstrumentPreset preset)
+{
+    // Route through the ProjectSession seam like every other SessionView engine op — the view never
+    // touches the plugin chain. Public so a headless gate can drive the Session instrument path
+    // without an OS mouse event (the W23 handleWheel discipline).
+    if (! session.setTrackInstrument (trackIdx, preset))
+        return false;
+
+    if (onEditMutated != nullptr)
+        onEditMutated();
+
+    // The header's instrument chip is DERIVED from the track's plugin chain, so it is stale until the
+    // column re-reads the track. The 25 Hz poll watches slot state, not the chain — refresh explicitly.
+    if (auto* column = columns[trackIdx])
+        column->refreshHeader();
+
+    return true;
+}
+
+void SessionView::handleHeaderRightClicked (int trackIdx, const MouseEvent& e)
+{
+    if (getTrackAt (trackIdx) == nullptr)
+        return;
+
+    // Deliberately does NOT move pad focus: setFocus() needs a scene index, and inventing one would
+    // select a pad the user never clicked. The menu is track-scoped and carries trackIdx explicitly.
+
+    // A section header + the voices, rather than a one-item "Instrument >" submenu: the whole menu is
+    // about this track, so an extra hop would buy nothing. Future track-level items get their own
+    // section below this one.
+    PopupMenu menu;
+    menu.addSectionHeader ("Instrument");
+
+    enum { idInstrumentBase = 1 };
+    const auto choices = PluginHost::getInstrumentChoices();
+
+    for (int i = 0; i < choices.size(); ++i)
+        menu.addItem (idInstrumentBase + i, choices[i].name);
+
+    Component::SafePointer<SessionView> safeThis (this);
+
+    menu.showMenuAsync (PopupMenu::Options().withTargetScreenArea (
+                            juce::Rectangle<int> (e.getScreenPosition(), e.getScreenPosition()).expanded (1)),
+                        [safeThis, trackIdx, choices] (int result)
+                        {
+                            if (safeThis == nullptr || result == 0)
+                                return;
+
+                            const int index = result - idInstrumentBase;
+
+                            if (index >= 0 && index < choices.size())
+                                safeThis->applyInstrumentToTrack (trackIdx, choices[index].preset);
+                        });
 }
 
 void SessionView::handleSlotRightClicked (int trackIdx, int sceneIdx, const MouseEvent& e)
