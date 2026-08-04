@@ -58,12 +58,58 @@
 namespace te = tracktion;
 using namespace juce;
 
-enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload };
+enum class SelfTest { none, playback, record, session, screenshot, midi, midilearn, midiinput, midifile, controlsurface, automation, sync, livesync, tray, popout, undo, taptempo, slotdelete, addtrack, scene, dragdrop, sessionmixer, demo, sendarrange, followaction, launchmode, duplicate, slotmove, quantise, scenerename, scenedelete, scenereorder, capture, scenesend, sessionmaster, peakhold, stepclip, modifier, drumkit, nudge, retrocapture, movetotrack, pianoroll, timesig, trim, reload, stems };
 enum class ViewMode { Session, Arrange, Mixer };
 enum class BottomMode { Detail, PianoRoll, StepGrid };   // which editor fills the bottom drawer region (W10: StepGrid)
 enum class SidebarMode { Browser, Channel };   // which panel fills the left sidebar band (W04a)
 
 //==============================================================================
+/** Writes a mono sine tone to an EXPLICIT path (returns false on any I/O failure). Split out of
+    createSineWaveFile so --selftest-stems can build fixture stems with KNOWN, sortable file names —
+    its whole subject is which file lands on which lane, which a random temp name cannot express. */
+static bool writeSineWaveFile (const File& file, double sampleRate, double seconds,
+                               double frequencyHz, float gain)
+{
+    file.deleteFile();
+
+    if (auto outStream = file.createOutputStream())
+    {
+        WavAudioFormat wavFormat;
+
+        if (auto* writer = wavFormat.createWriterFor (outStream.get(), sampleRate, 1, 16, {}, 0))
+        {
+            outStream.release();
+            std::unique_ptr<AudioFormatWriter> writerOwner (writer);
+
+            const int numSamples = (int) (seconds * sampleRate);
+            AudioBuffer<float> buffer (1, numSamples);
+            auto* samples = buffer.getWritePointer (0);
+
+            const double phaseDelta = MathConstants<double>::twoPi * frequencyHz / sampleRate;
+            double phase = 0.0;
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                samples[i] = gain * (float) std::sin (phase);
+                phase += phaseDelta;
+            }
+
+            if (writerOwner->writeFromAudioSampleBuffer (buffer, 0, numSamples))
+                return true;
+
+            FORGE_LOG_ERROR ("Failed to write audio samples to " + file.getFullPathName()
+                             + " — I/O error or disk full");
+            return false;
+        }
+
+        FORGE_LOG_WARN ("Failed to create WAV writer for " + file.getFullPathName());
+        return false;
+    }
+
+    FORGE_LOG_WARN ("Failed to create WAV file " + file.getFullPathName() + " (createOutputStream returned null)");
+    return false;
+}
+
 static File createSineWaveFile (double sampleRate, double seconds, double frequencyHz, float gain)
 {
     auto file = File::createTempFile (".wav");
@@ -443,21 +489,29 @@ public:
         };
 
         // File drag-drop onto an Arrange lane (W07): the lane resolves its own track index and maps the
-        // drop x to a snapped start time; we import the dropped audio onto THAT track (importAudioFile is
-        // track-aware) and rebuild so the clip appears. Null-guarded — unwired it is a safe no-op.
-        arrangeView.onFilesDropped = [this] (int trackIndex, const File& file, te::TimePosition start)
+        // drop x to a snapped start time. W25: the lane now bubbles up EVERY accepted file, and the whole
+        // drop goes through ONE ProjectSession seam — importFilesMultiTrack sorts by filename, fans the
+        // files out over consecutive lanes from the dropped one, names each new lane after its file, and
+        // dispatches audio-vs-MIDI per file (a `.mid` still fans out per source track/channel). Doing the
+        // loop inside the seam is what keeps a six-stem drop to ONE save (six would be six undo steps,
+        // and every save trips the FourOsc redo-wipe defect). Null-guarded — unwired it is a safe no-op.
+        arrangeView.onFilesDropped = [this] (int trackIndex, const Array<File>& files, te::TimePosition start)
         {
-            // A .mid/.midi file imports as MidiClips (born-audible, tempo-independent beats) — W24 (B1):
-            // through the MULTI-track seam, so a multi-track file fans out one clip per non-empty source
-            // track/channel downward from the dropped lane (a single-track file lands exactly 1 clip on
-            // that lane, as before). Anything else routes to the audio importer at the drop time.
-            const bool ok = file.hasFileExtension ("mid;midi")
-                                ? ! session.importMidiFileMultiTrack (file, start, trackIndex).empty()
-                                : (session.importAudioFile (file, start, trackIndex) != nullptr);
-            if (! ok)
-                FORGE_LOG_ERROR ("Failed to import dropped file onto arrange track "
-                                 + juce::String (trackIndex) + ": " + file.getFullPathName());
-            session.save();
+            const auto result = session.importFilesMultiTrack (files, start, trackIndex);
+
+            if (! result.anyLanded())
+                FORGE_LOG_ERROR ("Failed to import " + juce::String (files.size())
+                                 + " dropped file(s) onto arrange track " + juce::String (trackIndex));
+            else if (result.filesFailed > 0)
+                FORGE_LOG_WARN ("Dropped-file import: " + juce::String (result.filesFailed)
+                                + " of " + juce::String (files.size()) + " file(s) failed to import");
+
+            // ONE save for the whole gesture. When the drop grew the track list the seam already fired
+            // onTracksChanged — which saves and rebuilds every track-caching view — so saving again here
+            // would be a second undo-tracked write for one user action.
+            if (! result.tracksGrew)
+                session.save();
+
             arrangeView.rebuild();
         };
 
@@ -997,6 +1051,12 @@ public:
         {
             // MIDI-file drag-drop import — write a .mid, import into a slot + arrange, assert notes/position.
             MessageManager::callAsync ([this] { runMidiFileSelftest(); });
+        }
+        else if (mode == SelfTest::stems)
+        {
+            // W25: multi-stem audio import — N dropped files fan out to N consecutive, file-named lanes.
+            // Synchronous seam work; one callAsync yield is enough (mirrors -midifile).
+            MessageManager::callAsync ([this] { runStemsSelftest(); });
         }
         else if (mode == SelfTest::demo)
         {
@@ -7734,6 +7794,292 @@ private:
         JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
+    // --selftest-stems (W25): multi-stem audio import — drop N files, get N clips on N consecutive
+    // Arrange lanes, named after the files. Drives ProjectSession::importAudioFilesMultiTrack /
+    // importFilesMultiTrack with REAL fixture WAVs whose file names and durations are both distinct, so
+    // "which file landed on which lane" is provable two independent ways (clip name AND clip length).
+    // Five phases: the core fan-out (deliberately fed in NON-sorted order so the filename sort is
+    // load-bearing), partial failure (an unreadable file BETWEEN two good ones must not leave a gap
+    // lane), the track-naming discipline (never rename a user-named lane, nor one already holding
+    // ARRANGE or SESSION-SLOT clips — two disjoint lists), the mixed audio+MIDI walk (a .mid consumes
+    // as many lanes as it lands clips), and the
+    // nothing-importable guard (a bad drop must mutate NOTHING). Plus a fire-count leg proving one drop
+    // is ONE onTracksChanged — the shell binds that to a save, and six saves for one gesture would be
+    // six undo steps (and six trips through the FourOsc redo-wipe defect).
+    void runStemsSelftest()
+    {
+        bool wroteStems = false, countOk = false, orderOk = false, lanesOk = false, namesOk = false,
+             startsOk = false, lengthsOk = false, tracksChangedOnce = false,
+             partialCountOk = false, partialLanesOk = false, partialNamesOk = false,
+             userNameKept = false, occupiedNameKept = false, occupiedDropLanded = false,
+             slotOnlyNameKept = false,
+             mixedAudioOk = false, mixedMidiOk = false, mixedLanesOk = false,
+             badDropEmpty = false, badDropNoMutation = false;
+        int clipCount = -1, partialClipCount = -1, tracksChangedFires = -1,
+            mixedAudioCount = -1, mixedMidiCount = -1;
+
+        const auto tempDir = File::getSpecialLocation (File::tempDirectory);
+
+        // Four fixture stems. Names sort bass < drums < keys < vocals; durations are all different, so a
+        // clip's LENGTH independently identifies which source file produced it (a name-only assert would
+        // pass even if the seam paired the right name with the wrong content).
+        struct Stem { const char* base; double seconds; double hz; };
+        const Stem stems[4] = { { "forge_stem_bass",   0.7, 110.0 },
+                                { "forge_stem_drums",  0.9, 220.0 },
+                                { "forge_stem_keys",   1.1, 330.0 },
+                                { "forge_stem_vocals", 1.3, 440.0 } };
+
+        Array<File> stemFiles;
+        wroteStems = true;
+
+        for (const auto& s : stems)
+        {
+            const auto f = tempDir.getChildFile (String (s.base) + ".wav");
+            wroteStems = writeSineWaveFile (f, 44100.0, s.seconds, s.hz, 0.2f) && wroteStems;
+            stemFiles.add (f);
+        }
+
+        if (auto* ed = session.getEdit())
+        {
+            // ── Phase A: the core fan-out ─────────────────────────────────────────────────────────
+            // Feed the files in a DELIBERATELY unsorted order (vocals, bass, keys, drums). If the seam
+            // ever stopped sorting, every order/lane/name leg below would fail — which is the point.
+            const Array<File> shuffled { stemFiles[3], stemFiles[0], stemFiles[2], stemFiles[1] };
+
+            const int  firstTrack = session.getNumAudioTracks();   // past the end -> all four lanes are new
+            const auto dropTime   = te::TimePosition::fromSeconds (2.0);
+
+            // Count the onTracksChanged fires across the whole drop (the "one gesture, one save" proof).
+            // Chain through the shell's real handler so the gate does not disable it, and restore after.
+            auto prevTracksChanged = session.onTracksChanged;
+            int  fires = 0;
+            session.onTracksChanged = [&fires, prevTracksChanged] { ++fires; if (prevTracksChanged) prevTracksChanged(); };
+
+            const auto clips = session.importAudioFilesMultiTrack (shuffled, dropTime, firstTrack);
+
+            session.onTracksChanged = prevTracksChanged;
+            tracksChangedFires = fires;
+            tracksChangedOnce  = fires == 1;   // 4 new lanes, but ONE fire for the gesture
+
+            clipCount = (int) clips.size();
+            countOk   = clipCount == 4;
+
+            if (countOk)
+            {
+                orderOk = lanesOk = namesOk = startsOk = lengthsOk = true;
+                auto allTracks = te::getAudioTracks (*ed);
+
+                for (int i = 0; i < 4; ++i)
+                {
+                    auto& c = clips[(size_t) i];
+
+                    // Sorted destination order: bass, drums, keys, vocals — NOT the input order. Keyed
+                    // on the resolved SOURCE FILE (ground truth), not the clip's display name.
+                    orderOk = orderOk && c->getCurrentSourceFile() == stemFiles[i];
+
+                    auto* at = dynamic_cast<te::AudioTrack*> (c->getTrack());
+                    lanesOk  = lanesOk && at != nullptr && allTracks.indexOf (at) == firstTrack + i;
+                    namesOk  = namesOk && at != nullptr && at->getName() == String (stems[i].base);
+
+                    startsOk = startsOk
+                               && std::abs (c->getPosition().getStart().inSeconds() - 2.0) < 0.02;
+
+                    // Content-level order proof: each stem has its own duration.
+                    lengthsOk = lengthsOk
+                                && std::abs (c->getPosition().getLength().inSeconds() - stems[i].seconds) < 0.05;
+                }
+            }
+
+            // ── Phase B: partial failure ──────────────────────────────────────────────────────────
+            // An EXISTING but unreadable .wav sorted BETWEEN two good ones. The good files must still
+            // land on CONSECUTIVE lanes — a failure that advanced the destination index would leave an
+            // empty gap lane between them.
+            const auto goodA  = tempDir.getChildFile ("forge_partial_a_good.wav");
+            const auto broken = tempDir.getChildFile ("forge_partial_b_broken.wav");
+            const auto goodC  = tempDir.getChildFile ("forge_partial_c_good.wav");
+
+            const bool partialFixturesOk = writeSineWaveFile (goodA, 44100.0, 0.5, 200.0, 0.2f)
+                                           && writeSineWaveFile (goodC, 44100.0, 0.6, 300.0, 0.2f)
+                                           // exists, but AudioFile::isValid() == false (sampleRate 0)
+                                           && broken.replaceWithText ("this is not a wav file");
+            if (! partialFixturesOk)
+                FORGE_LOG_WARN ("Stems selftest: failed to write the partial-failure fixtures");
+
+            const int partialFirst = session.getNumAudioTracks();
+            const auto partialClips = session.importAudioFilesMultiTrack ({ goodC, broken, goodA },
+                                                                          te::TimePosition(), partialFirst);
+            partialClipCount = (int) partialClips.size();
+            partialCountOk   = partialClipCount == 2;
+
+            if (partialCountOk)
+            {
+                auto allTracks = te::getAudioTracks (*ed);
+                auto* t0 = dynamic_cast<te::AudioTrack*> (partialClips[0]->getTrack());
+                auto* t1 = dynamic_cast<te::AudioTrack*> (partialClips[1]->getTrack());
+
+                partialLanesOk = t0 != nullptr && t1 != nullptr
+                                 && allTracks.indexOf (t0) == partialFirst
+                                 && allTracks.indexOf (t1) == partialFirst + 1;   // consecutive, no gap
+
+                partialNamesOk = t0 != nullptr && t1 != nullptr
+                                 && t0->getName() == "forge_partial_a_good"
+                                 && t1->getName() == "forge_partial_c_good";
+            }
+
+            // ── Phase C: the track-naming discipline ──────────────────────────────────────────────
+            // (1) A track the USER named keeps its name. (2) A track that already holds a clip keeps
+            // its name too (even though it is still engine-default-named) — the drop is additive, not a
+            // relabelling of someone's existing lane.
+            if (auto* named = session.appendAudioTrack ("KeepMyName"))
+            {
+                const int idx = te::getAudioTracks (*ed).indexOf (named);
+                session.importAudioFilesMultiTrack ({ stemFiles[0] }, te::TimePosition(), idx);
+                userNameKept = named->getName() == "KeepMyName";
+            }
+
+            if (auto* occupied = session.appendAudioTrack ({}))   // engine-default name (empty property)
+            {
+                const int idx = te::getAudioTracks (*ed).indexOf (occupied);
+                const auto defaultName = occupied->getName();     // "Track N"
+
+                session.importAudioFile (stemFiles[1], te::TimePosition(), idx);   // now it holds a clip
+                const auto landed = session.importAudioFilesMultiTrack ({ stemFiles[2] },
+                                                                        te::TimePosition::fromSeconds (4.0), idx);
+
+                occupiedDropLanded = landed.size() == 1;           // the drop still worked...
+                occupiedNameKept   = occupied->getName() == defaultName;   // ...but did not rename the lane
+            }
+
+            // (3) A track whose only content is a SESSION slot clip is in use too. Arrange clips and
+            // slot clips live in DISJOINT lists (the W10 gotcha), so a getClips()-only "is it empty?"
+            // check would happily rename this lane out from under the user.
+            if (auto* slotOnly = session.appendAudioTrack ({}))
+            {
+                const int  idx         = te::getAudioTracks (*ed).indexOf (slotOnly);
+                const auto defaultName = slotOnly->getName();
+
+                session.ensureScenes (2);
+                session.importAudioIntoSlot (idx, 0, stemFiles[3]);   // slot content only — no arrange clip
+                session.importAudioFilesMultiTrack ({ stemFiles[0] }, te::TimePosition(), idx);
+                slotOnlyNameKept = slotOnly->getName() == defaultName;
+            }
+
+            // ── Phase D: the mixed audio + MIDI walk ──────────────────────────────────────────────
+            // One sorted pass: alpha (audio, 1 lane) -> mid (a 2-part .mid, 2 lanes) -> omega (audio).
+            // omega landing on first+3 is the proof the MIDI leg advanced by its CLIP COUNT, not by 1.
+            const auto mixAlpha = tempDir.getChildFile ("forge_mix_a_alpha.wav");
+            const auto mixMidi  = tempDir.getChildFile ("forge_mix_b_parts.mid");
+            const auto mixOmega = tempDir.getChildFile ("forge_mix_c_omega.wav");
+
+            if (! (writeSineWaveFile (mixAlpha, 44100.0, 0.4, 150.0, 0.2f)
+                   && writeSineWaveFile (mixOmega, 44100.0, 0.4, 250.0, 0.2f)))
+                FORGE_LOG_WARN ("Stems selftest: failed to write the mixed-drop audio fixtures");
+
+            {   // a 2-part .mid (2 notes on ch 1, 3 notes on ch 2) -> importMidiFileMultiTrack lands 2 clips
+                const int tpqn = 960;
+                juce::MidiFile mf;
+                mf.setTicksPerQuarterNote (tpqn);
+
+                for (int t = 0; t < 2; ++t)
+                {
+                    juce::MidiMessageSequence seq;
+                    for (int i = 0; i < 2 + t; ++i)
+                    {
+                        seq.addEvent (juce::MidiMessage::noteOn  (t + 1, 60 + 12 * t + i, 0.8f), (double) (i * tpqn));
+                        seq.addEvent (juce::MidiMessage::noteOff (t + 1, 60 + 12 * t + i),       (double) ((i + 1) * tpqn));
+                    }
+                    seq.updateMatchedPairs();
+                    mf.addTrack (seq);
+                }
+
+                mixMidi.deleteFile();
+                if (auto out = std::unique_ptr<FileOutputStream> (mixMidi.createOutputStream()))
+                    mf.writeTo (*out);
+            }
+
+            const int  mixFirst = session.getNumAudioTracks();
+            const auto mixed    = session.importFilesMultiTrack ({ mixOmega, mixMidi, mixAlpha },
+                                                                 te::TimePosition(), mixFirst);
+
+            mixedAudioCount = (int) mixed.audioClips.size();
+            mixedMidiCount  = (int) mixed.midiClips.size();
+            mixedAudioOk    = mixedAudioCount == 2;
+            mixedMidiOk     = mixedMidiCount  == 2;
+
+            if (mixedAudioOk && mixedMidiOk)
+            {
+                auto allTracks = te::getAudioTracks (*ed);
+                auto* alphaTrk = dynamic_cast<te::AudioTrack*> (mixed.audioClips[0]->getTrack());
+                auto* omegaTrk = dynamic_cast<te::AudioTrack*> (mixed.audioClips[1]->getTrack());
+
+                mixedLanesOk = alphaTrk != nullptr && omegaTrk != nullptr
+                               && allTracks.indexOf (alphaTrk) == mixFirst          // audio, 1 lane
+                               && allTracks.indexOf (omegaTrk) == mixFirst + 3;     // after the .mid's 2 lanes
+            }
+
+            // ── Phase E: nothing importable mutates nothing ───────────────────────────────────────
+            const int  tracksBeforeBad = session.getNumAudioTracks();
+            const auto badDrop = session.importFilesMultiTrack ({ tempDir.getChildFile ("forge_no_such_stem_a.wav"),
+                                                                 tempDir.getChildFile ("forge_no_such_stem_b.wav") },
+                                                                te::TimePosition(), tracksBeforeBad);
+            badDropEmpty      = ! badDrop.anyLanded() && badDrop.totalClips() == 0;
+            badDropNoMutation = session.getNumAudioTracks() == tracksBeforeBad;
+
+            goodA.deleteFile(); goodC.deleteFile(); broken.deleteFile();
+            mixAlpha.deleteFile(); mixOmega.deleteFile(); mixMidi.deleteFile();
+        }
+
+        const bool pass = wroteStems && countOk && orderOk && lanesOk && namesOk && startsOk
+                          && lengthsOk && tracksChangedOnce
+                          && partialCountOk && partialLanesOk && partialNamesOk
+                          && userNameKept && occupiedDropLanded && occupiedNameKept && slotOnlyNameKept
+                          && mixedAudioOk && mixedMidiOk && mixedLanesOk
+                          && badDropEmpty && badDropNoMutation;
+
+        String report;
+        report << "mode=stems" << newLine
+               << "wroteStems="         << (wroteStems ? 1 : 0) << newLine
+               << "clipCount="          << clipCount << newLine
+               << "countOk="            << (countOk ? 1 : 0) << newLine
+               << "orderOk="            << (orderOk ? 1 : 0) << newLine
+               << "lanesOk="            << (lanesOk ? 1 : 0) << newLine
+               << "namesOk="            << (namesOk ? 1 : 0) << newLine
+               << "startsOk="           << (startsOk ? 1 : 0) << newLine
+               << "lengthsOk="          << (lengthsOk ? 1 : 0) << newLine
+               << "tracksChangedFires=" << tracksChangedFires << newLine
+               << "tracksChangedOnce="  << (tracksChangedOnce ? 1 : 0) << newLine
+               << "partialClipCount="   << partialClipCount << newLine
+               << "partialCountOk="     << (partialCountOk ? 1 : 0) << newLine
+               << "partialLanesOk="     << (partialLanesOk ? 1 : 0) << newLine
+               << "partialNamesOk="     << (partialNamesOk ? 1 : 0) << newLine
+               << "userNameKept="       << (userNameKept ? 1 : 0) << newLine
+               << "occupiedDropLanded=" << (occupiedDropLanded ? 1 : 0) << newLine
+               << "occupiedNameKept="   << (occupiedNameKept ? 1 : 0) << newLine
+               << "slotOnlyNameKept="   << (slotOnlyNameKept ? 1 : 0) << newLine
+               << "mixedAudioCount="    << mixedAudioCount << newLine
+               << "mixedMidiCount="     << mixedMidiCount << newLine
+               << "mixedAudioOk="       << (mixedAudioOk ? 1 : 0) << newLine
+               << "mixedMidiOk="        << (mixedMidiOk ? 1 : 0) << newLine
+               << "mixedLanesOk="       << (mixedLanesOk ? 1 : 0) << newLine
+               << "badDropEmpty="       << (badDropEmpty ? 1 : 0) << newLine
+               << "badDropNoMutation="  << (badDropNoMutation ? 1 : 0) << newLine
+               << "result="             << (pass ? "PASS" : "FAIL") << newLine
+               << "logFile="            << forge::log::getLogFile().getFullPathName() << newLine;
+
+        const auto reportFile = File::getSpecialLocation (File::tempDirectory)
+                                    .getChildFile ("forge_phase0_selftest.log");
+        if (! reportFile.replaceWithText (report))
+            FORGE_LOG_ERROR ("Failed to write stems selftest report to: " + reportFile.getFullPathName());
+
+        for (const auto& f : stemFiles)
+            f.deleteFile();
+
+        FORGE_LOG_INFO ("Multi-stem import selftest " + juce::String (pass ? "PASS" : "FAIL")
+                        + " - report: " + reportFile.getFullPathName());
+
+        JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
     // --selftest-demo (W09): the audible-demo gate. Proves the instrument PRESETS insert the right plugins
     // (a 4OSC for kick, the engine Sampler for piano), that the self-rendered CC0 piano one-shot exists on
     // disk, and that the demo note-seeding actually writes notes (so a launched clip is not silent).
@@ -8922,6 +9268,7 @@ public:
                             : commandLine.contains ("--selftest-timesig")        ? "selftest-timesig"        // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest-trim")           ? "selftest-trim"           // before bare --selftest (collision-free, W23)
                             : commandLine.contains ("--selftest-reload")         ? "selftest-reload"         // before bare --selftest (collision-free, W24)
+                            : commandLine.contains ("--selftest-stems")          ? "selftest-stems"          // before bare --selftest (collision-free vs -stepclip, W25)
                             : commandLine.contains ("--selftest")                ? "selftest-playback"
                                                                                  : "normal";
         forge::log::install (getApplicationName(), getApplicationVersion(), commandLine, modeDesc);
@@ -9001,6 +9348,7 @@ public:
                         : commandLine.contains ("--selftest-timesig")        ? SelfTest::timesig        // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest-trim")           ? SelfTest::trim           // before bare --selftest (collision-free, W23)
                         : commandLine.contains ("--selftest-reload")         ? SelfTest::reload         // before bare --selftest (collision-free, W24)
+                        : commandLine.contains ("--selftest-stems")          ? SelfTest::stems          // before bare --selftest (collision-free vs -stepclip, W25)
                         : commandLine.contains ("--selftest")                ? SelfTest::playback
                                                                              : SelfTest::none;
 

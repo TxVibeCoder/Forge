@@ -62,7 +62,11 @@ conflict, surface it.
   PATH in these shells).
 - **Kill `Forge.exe` before building or runtime-testing** — a running exe → `LNK1168` and holds the WASAPI
   device: `Get-Process Forge | Stop-Process -Force`. Use a 45–90 s build timeout.
-- **Selftest floor** (must pass after any change — FORTY-SEVEN gates as of W24 (backlog burn-down):
+- **Selftest floor** (must pass after any change — FORTY-EIGHT gates as of W25 (multi-stem import):
+  W25 added `--selftest-stems` (the multi-FILE drop fan-out — N dropped files → N clips on N consecutive,
+  file-named Arrange lanes, via `ProjectSession::importFilesMultiTrack` / `importAudioFilesMultiTrack`;
+  its Phase-A input order is deliberately UNSORTED so the seam's filename sort is load-bearing, and both
+  load-bearing rules were negative-controlled — see `tests/SELFTEST.md`).
   W24 added `--selftest-reload` (the save→reload round-trip — the first gate that re-reads state from DISK;
   its mutate-away-before-reopen step is load-bearing) and extended five gates in place: `-midifile` (+6
   multi-track fan-out legs, B1), `-demo`/`-drumkit` (+deferred render legs proving Sampler INGESTION, B3 —
@@ -88,8 +92,10 @@ conflict, surface it.
   `--selftest-quantise`, `--selftest-scenerename`, `--selftest-scenedelete`, `--selftest-scenereorder`,
   `--selftest-capture`, `--selftest-scenesend`, `--selftest-sessionmaster`, `--selftest-peakhold`,
   `--selftest-stepclip`, `--selftest-modifier`, `--selftest-drumkit`, `--selftest-nudge`, `--selftest-retrocapture`,
-  `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`, `--selftest-reload`;
-  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload` are collision-free —
+  `--selftest-movetotrack`, `--selftest-pianoroll`, `--selftest-timesig`, `--selftest-trim`, `--selftest-reload`,
+  `--selftest-stems`;
+  (`-modifier`/`-drumkit`/`-nudge`/`-retrocapture`/`-movetotrack`/`-pianoroll`/`-timesig`/`-trim`/`-reload`/`-stems` are collision-free —
+  `-stems` shares no substring with `-stepclip` (they diverge at `ste[m|p]`) —
   placed before bare `--selftest`
   (`--selftest-retrocapture` does NOT contain the substring `--selftest-capture`, so no longest-first needed).
   ⚠ new gate names that CONTAIN an existing name must be
@@ -244,6 +250,17 @@ conflict, surface it.
   `track->playSlotClips` is already true; `ProjectSession::commitRetrospectiveToSlot` relocates UNCONDITIONALLY (a
   first capture never has `playSlotClips` set) and so MUST hold the Ptr — QC-caught crash (`ClipSlot::setClip` →
   `ValueTree::getParent` on freed state).
+- **`AudioTrack::getName()` can never tell you whether the USER named a track (W25).** It returns the stored
+  name only if non-empty and otherwise **synthesises** `"Track N"` from the track's position
+  (`tracktion_AudioTrack.cpp:213` → `getNameAsTrackNumber`), so it is never empty and a `getName().isEmpty()`
+  test is dead code. Worse, `AudioTrack::sanityCheckName()` **resets** a literal `"Track <digits>"` name back
+  to empty, so string-matching `"Track "` is also wrong. The only honest read of "has this lane been named?"
+  is the raw property — `track.state[te::IDs::name].toString().isEmpty()` (the backing store of the
+  `trackName` CachedValue, `tracktion_Track.cpp:19`). Any feature that auto-names tracks (the multi-stem drop
+  does) must gate on that, or it will silently rename lanes the user already labelled. Pair it with an
+  "is it in use?" check that spans **both** clip lists — `getClips()` (arrange) and
+  `getClipSlotList().getClipSlots()` (Session) are deliberately disjoint (the W10 gotcha), so a `getClips()`-only
+  emptiness test reads a slot-filled track as empty.
 - **Viewport scroll:** the viewed component's top-left position *is* the scroll offset — size it with `setSize`,
   never `setBounds(0,0,…)` (which yanks the scroll to the top on any relayout).
 - **JUCE lock types:** `juce::CriticalSection::ScopedLockType` / `ScopedUnlockType` (the bare `ScopedLock` is the

@@ -1193,5 +1193,67 @@ would pass whether or not anything was read back from disk.
 | `slotFilledBack` / `notesAfterReload` / `noteCountBack` | slot (0,0) is filled and its MidiClip holds exactly the 2 seeded notes | 1 / 2 / 1 |
 
 > `-reload` is collision-free (no substring overlap with any existing gate name) — placed before the bare
-> `--selftest` in both ladders; verify `mode=reload`. **Floor is now 47 gates.** Undo history does NOT survive
+> `--selftest` in both ladders; verify `mode=reload`. Undo history does NOT survive
 > a project swap (by design) — the gate asserts nothing about it. The temp file is deleted after the report.
+
+## `Forge --selftest-stems` (W25 — multi-stem audio import)
+
+The acceptance gate for **multi-file drag-and-drop**: dropping N files onto an Arrange lane lands **one clip
+per file on N consecutive tracks, named after the files**. Drives `ProjectSession::importAudioFilesMultiTrack`
+/ `importFilesMultiTrack` with **real fixture WAVs** whose file names *and* durations are both distinct, so
+"which file landed on which lane" is provable two independent ways (resolved source file **and** clip length).
+
+**Phase A — the core fan-out.** Four stems (`forge_stem_bass/drums/keys/vocals`, 0.7 / 0.9 / 1.1 / 1.3 s) are
+fed to the seam in a **deliberately unsorted** order (vocals, bass, keys, drums) at a 2.0 s drop time, onto a
+first-track index past the end of the list (so all four lanes are created).
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `wroteStems` / `clipCount` / `countOk` | the four fixture WAVs exist; the seam returned exactly 4 clips | 1 / 4 / 1 |
+| `orderOk` | clip *i*'s resolved `getCurrentSourceFile()` is the *i*-th file in **filename** order — the sort is load-bearing, not the input order | 1 |
+| `lanesOk` | clip *i* sits on track `firstTrack + i` — consecutive lanes | 1 |
+| `namesOk` | each destination TRACK is named after its file (`bass`, `drums`, …), not `Track N` | 1 |
+| `startsOk` | every clip starts at the 2.0 s drop time (±0.02 s) | 1 |
+| `lengthsOk` | clip *i*'s length matches the *i*-th stem's duration (±0.05 s) — a content-level order proof independent of names | 1 |
+| `tracksChangedFires` / `tracksChangedOnce` | the whole 4-lane drop fires `onTracksChanged` **exactly once** — the shell binds it to a save, so this is the "one gesture, one save" proof | 1 / 1 |
+
+**Phase B — partial failure.** An *existing but unreadable* `.wav` (plain text, so `te::AudioFile::isValid()`
+is false) sorted **between** two good files. The good files must still land on **consecutive** lanes.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `partialClipCount` / `partialCountOk` | 3 files in, 2 clips out | 2 / 1 |
+| `partialLanesOk` | the survivors sit on `first` and `first + 1` — a failure that advanced the destination index would leave an empty **gap lane** between them | 1 |
+| `partialNamesOk` | both survivor lanes carry their own file's name (`a_good`, `c_good`) | 1 |
+
+**Phase C — the track-naming discipline.** Naming is the point of the feature, so *not* naming is gated too.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `userNameKept` | a lane the user named (`KeepMyName`) keeps its name when a stem is dropped on it | 1 |
+| `occupiedDropLanded` / `occupiedNameKept` | a default-named lane that already holds an ARRANGE clip still accepts the drop, but is **not** renamed | 1 / 1 |
+| `slotOnlyNameKept` | a default-named lane whose only content is a **Session slot clip** is likewise not renamed — arrange clips and slot clips live in disjoint lists (the W10 gotcha), so a `getClips()`-only emptiness check would have renamed it | 1 |
+
+**Phase D — the mixed audio + MIDI walk.** One sorted pass over `a_alpha.wav`, `b_parts.mid` (a 2-part file),
+`c_omega.wav`. Each file takes the next destination index; a `.mid` consumes as many lanes as it lands clips.
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `mixedAudioCount` / `mixedMidiCount` / `mixedAudioOk` / `mixedMidiOk` | 2 audio clips + 2 MIDI clips from 3 files | 2 / 2 / 1 / 1 |
+| `mixedLanesOk` | alpha on `first`, omega on `first + 3` — proof the MIDI leg advanced by its **clip count**, not by 1 | 1 |
+
+**Phase E — nothing importable mutates nothing.**
+
+| field | meaning | PASS requires |
+|---|---|---|
+| `badDropEmpty` / `badDropNoMutation` | a drop of two non-existent files lands no clips **and** leaves the track count unchanged | 1 / 1 |
+
+> **Negative controls run during the build** (the gate was proven to fail before it was trusted): deleting the
+> filename `std::sort` flips `orderOk` / `namesOk` / `lengthsOk` to 0; making the per-file failure path advance
+> the destination index flips `partialLanesOk` to 0 **with everything else still green**, isolating the
+> no-gap-lane rule.
+>
+> `-stems` is collision-free — it shares no substring with `--selftest-stepclip` (they diverge at `ste[m|p]`)
+> or any other gate name — so it only needs to sit **before** the bare `--selftest` in both ladders; verify
+> `mode=stems`. **Floor is now 48 gates.** The Session-grid (clip-slot) drop path is deliberately untouched:
+> it stays single-file, and `--selftest-dragdrop` still covers it.

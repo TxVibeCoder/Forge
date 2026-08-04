@@ -746,19 +746,20 @@ void TrackLaneComponent::filesDropped (const StringArray& files, int x, int)
     if (x < headerW)
         return;
 
-    // Re-filter to the FIRST accepted file (audio or .mid/.midi). Bubble UP with the raw File; the shell
-    // dispatches by extension (importAudioFile vs importMidiFile).
+    // Re-filter to EVERY accepted file (audio or .mid/.midi) — a six-stem drop must not collapse to
+    // one clip (W25). Bubble UP with the raw Files in the OS's order; the ProjectSession seam owns the
+    // deterministic filename sort, the consecutive-lane fan-out and the audio-vs-MIDI dispatch.
+    Array<File> accepted;
+
     for (const auto& f : files)
     {
         const File file (f);
         if (file.hasFileExtension (te::soundFileExtensions) || file.hasFileExtension ("mid;midi"))
-        {
-            if (onFilesDropped != nullptr)
-                onFilesDropped (*this, file, x - headerW, jmax (0, getWidth() - headerW));
-
-            return;
-        }
+            accepted.add (file);
     }
+
+    if (! accepted.isEmpty() && onFilesDropped != nullptr)
+        onFilesDropped (*this, accepted, x - headerW, jmax (0, getWidth() - headerW));
 }
 
 void TrackLaneComponent::paint (Graphics& g)
@@ -1034,11 +1035,12 @@ void ArrangeView::rebuild()
                 showClipAreaContextMenu (l, clipAreaX, clipAreaW, e);
             };
 
-            // An OS/Explorer audio file was dropped on this lane. Map the clip-area x -> edit time
-            // (snapped to the active grid, exactly like a New-MIDI-Clip drop), resolve the lane's
-            // track index, and forward to the shell's onFilesDropped (ProjectSession import seam +
-            // save + rebuild). The header is already subtracted by the lane before it calls us.
-            lane->onFilesDropped = [this] (TrackLaneComponent& l, const File& file,
+            // OS/Explorer file(s) were dropped on this lane. Map the clip-area x -> edit time (snapped
+            // to the active grid, exactly like a New-MIDI-Clip drop), resolve the lane's track index —
+            // the FIRST destination lane of the fan-out — and forward the whole collection unchanged to
+            // the shell's onFilesDropped (ProjectSession import seam + save + rebuild). The header is
+            // already subtracted by the lane before it calls us.
+            lane->onFilesDropped = [this] (TrackLaneComponent& l, const Array<File>& files,
                                            int clipAreaX, int clipAreaW)
             {
                 if (edit == nullptr || onFilesDropped == nullptr)
@@ -1050,7 +1052,7 @@ void ArrangeView::rebuild()
                     return;
 
                 const auto startTime = snapToGrid (view.xToTime (clipAreaX, clipAreaW));
-                onFilesDropped (trackIndex, file, startTime);
+                onFilesDropped (trackIndex, files, startTime);
             };
 
             lane->onHeaderClicked = [this] (TrackLaneComponent& l)

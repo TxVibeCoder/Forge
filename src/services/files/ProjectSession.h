@@ -76,6 +76,63 @@ public:
     std::vector<te::MidiClip::Ptr> importMidiFileMultiTrack (const juce::File&, te::TimePosition start,
                                                              int firstTrackIndex = 0);
 
+    //==============================================================================
+    // Multi-FILE drop fan-out (W25) — the stem-mixing workflow: drop N files, get N clips on N
+    // consecutive Arrange lanes. Message-thread only.
+
+    /** What a multi-file drop landed, in destination-track order. An audio file yields exactly one
+        WaveAudioClip; a `.mid`/`.midi` yields one MidiClip per non-empty source part (so its lane
+        count can exceed 1). `filesFailed` counts accepted files that produced no clip at all.
+        `tracksGrew` is true iff the import added tracks to the Edit — in which case the seam ALREADY
+        fired onTracksChanged (which saves + rebuilds), so a caller must not save again. */
+    struct MultiFileImport
+    {
+        std::vector<te::WaveAudioClip::Ptr> audioClips;
+        std::vector<te::MidiClip::Ptr>      midiClips;
+        int  filesFailed = 0;
+        bool tracksGrew  = false;
+
+        bool anyLanded()  const { return ! audioClips.empty() || ! midiClips.empty(); }
+        int  totalClips() const { return (int) (audioClips.size() + midiClips.size()); }
+    };
+
+    /** Imports N dropped FILES onto the LINEAR (Arrange) timeline: one clip per file on CONSECUTIVE
+        tracks beginning at `firstTrackIndex`, every clip positioned at `start`. THE seam behind an
+        Explorer multi-file drop (drag six stems onto a lane -> six named lanes).
+
+        Ordering is DETERMINISTIC: the OS hands a multi-selection over in arbitrary order, so the
+        accepted files are sorted by FILE NAME (juce natural compare, so `stem2` precedes `stem10`)
+        before anything is imported — without this, lane assignment would be unassertable.
+
+        Validation happens BEFORE the edit is touched (the importMidiFileMultiTrack discipline):
+        non-existent files are dropped with a WARN, and a drop with nothing importable mutates NOTHING.
+
+        MIXED drops are walked in that ONE sorted pass, each file taking the next destination index:
+        an audio file routes to importAudioFile (P6 edge fades included) and consumes one lane; a
+        `.mid`/`.midi` routes to importMidiFileMultiTrack at that index and consumes as many lanes as
+        it lands clips. Neither type is filtered out.
+
+        A per-file failure does NOT advance the destination index, so the next file retries that lane
+        and the clips that DID land stay on consecutive filled lanes with no silent gap.
+
+        Each destination track is named after its file (getFileNameWithoutExtension) — but ONLY when
+        the track was created by this import or is still unnamed AND empty. A track the user already
+        named, or one that already holds clips (ARRANGE clips or Session slot clips — two disjoint
+        lists), is never renamed. (MIDI destination lanes keep the engine's naming: one `.mid` can
+        span several lanes, so the file name would not identify them.)
+
+        markAsChanged fires once for the whole drop, and onTracksChanged once iff the track list
+        actually grew (see MultiFileImport::tracksGrew — the caller must not then save again). */
+    MultiFileImport importFilesMultiTrack (const juce::Array<juce::File>&, te::TimePosition start,
+                                           int firstTrackIndex = 0);
+
+    /** The audio-stem convenience over importFilesMultiTrack: returns just the WaveAudioClips, in
+        destination-track order (empty on total failure, logged). Identical semantics — a `.mid` in
+        the array still imports as MIDI clips, it just is not part of the returned vector. */
+    std::vector<te::WaveAudioClip::Ptr> importAudioFilesMultiTrack (const juce::Array<juce::File>&,
+                                                                    te::TimePosition start,
+                                                                    int firstTrackIndex = 0);
+
     /** Creates an empty MIDI clip spanning `range` (in SECONDS) on the track at `trackIndex`,
         ensuring the track exists and is born audible (a default 4OSC instrument is added if the
         track has none). Returns the new clip, or {} if there is no open edit / the insert failed. */
@@ -602,6 +659,20 @@ private:
     // failed insert. Does NOT markAsChanged (callers do). Message-thread only.
     te::Clip* insertClipCopyOnTimeline (te::AudioTrack& track, te::Clip& src,
                                         te::ClipPosition destPos, bool keepAsLoop);
+
+    // Set while importFilesMultiTrack walks a multi-file drop, so the per-file seams it delegates to
+    // (importMidiFileMultiTrack) do NOT each fire onTracksChanged — the shell binds that to a full
+    // save + rebuild of every track-caching view, and one user gesture deserves ONE of those. The
+    // walker fires it itself, once, at the end. RAII so an early return can't leave it latched.
+    bool deferTracksChanged = false;
+
+    struct ScopedTracksChangedDefer
+    {
+        explicit ScopedTracksChangedDefer (bool& f) : flag (f), wasSet (f) { f = true; }
+        ~ScopedTracksChangedDefer()                                        { flag = wasSet; }
+        bool& flag;
+        bool  wasSet;
+    };
 
     // The single active record slot (W7). {-1,-1} == none. Set by recordArmSlot, cleared by
     // commitSlotRecord / recordDisarmSlot. Tracks which cell beginSlotRecord may roll for.

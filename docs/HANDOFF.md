@@ -1,8 +1,42 @@
 # Forge — Session Handoff
 
 > Pick-up-cold handoff. Pairs with **[DIRECTION.md](DIRECTION.md)** (the authoritative product brief) and
-> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-07-22**, end of **"W24 — backlog
-> burn-down"**: the first wave driven straight off **[BACKLOG.md](BACKLOG.md)** — five "Ready to build"
+> [STATUS.md](STATUS.md) (the living roadmap). Last updated **2026-08-04**, end of **"W25 — multi-stem audio
+> import"**: a maintainer brief ("the last gap between Forge and a complete stem-mixing workflow"), filed as
+> backlog **B9** and burned down the same day. **Dropping N files onto an Arrange lane now lands one clip per
+> file on N consecutive tracks, named after the files** — it previously imported the first file and discarded
+> the rest, so a 6-stem separation meant six separate drags. New `ProjectSession::importFilesMultiTrack` (+ the
+> audio-only `importAudioFilesMultiTrack` convenience the brief named), built on **W24's
+> `importMidiFileMultiTrack` as the template** rather than a new invention: validate before touching the edit ·
+> `EngineHelpers::getOrInsertAudioTrackAt` grows lanes on demand · a per-file failure does **not** advance the
+> destination index (so survivors stay on consecutive lanes with no silent gap) · one `markAsChanged` ·
+> `onTracksChanged` only if the track list actually grew. The per-file body reuses `importAudioFile` verbatim,
+> so the P6 anti-click edge fades come along unchanged. **Three things the MIDI seam did not need:** a
+> **deterministic filename sort** (the OS hands a multi-selection over in arbitrary order — without it lane
+> assignment is unassertable), **destination-track naming** after the file (the difference between a mixer
+> reading `vocals / drums / bass` and `Track 1 / Track 2 / Track 3` — guarded so it never renames a lane the
+> user named, nor one already holding ARRANGE or Session-slot clips), and an explicit **mixed audio+MIDI walk**
+> (one sorted pass, each file taking the next index; a `.mid` consumes as many lanes as it lands clips).
+> `TrackLaneComponent::filesDropped` now bubbles up **every** accepted file instead of `return`ing on the
+> first; `ArrangeView::onFilesDropped` and the lane callback both changed `const juce::File&` → a
+> `juce::Array<juce::File>`; the shell dispatches through the ONE seam and does **ONE save per drop** (six
+> saves would be six undo steps — and every save trips the FourOsc redo-wipe defect, BACKLOG item 0). ⚠ **New
+> engine gotcha:** `AudioTrack::getName()` **synthesises** "Track N" when unnamed (and `sanityCheckName()`
+> *resets* a literal "Track N" back to empty), so it can never answer "did the user name this lane?" — read
+> `track.state[te::IDs::name]` instead, and pair it with an in-use check spanning **both** disjoint clip lists
+> (`getClips()` and `getClipSlotList().getClipSlots()`). New gate **`--selftest-stems`** (floor **47 → 48**, 24
+> legs over 5 phases). Build **clean (0 warnings)** · **48/48 selftest floor** (the 47-gate baseline was run
+> against the pre-change binary first — 47/47 — so the bump is measured, not assumed) · **12/12 screenshots**
+> (unchanged: the wave adds no new UI state). Also corrected `README.md`'s stale "sixteen gates / 9
+> screenshots" → 48 / 12. ⚠ **W25 is committed locally on `main` and NOT pushed — push HELD for the
+> maintainer's OK.** Everything through **W24 IS on `origin/main`** (verified by `git fetch` on 2026-08-04:
+> `origin/main` tip = `5ae8418`, so local `main` is exactly ONE commit ahead — the W24 blocks below saying
+> "NOT pushed" were true when written and are now stale). Out of scope by design (all from the brief, all still open if wanted): Browser
+> multi-select, folder drops, auto-grouping/aux-routing stems, Session-grid multi-import, gain-staging. Full
+> record → [devlog/wave-25-multistem-import.md](devlog/wave-25-multistem-import.md).
+
+> The prior wave, **W24 — backlog
+> burn-down**: the first wave driven straight off **[BACKLOG.md](BACKLOG.md)** — five "Ready to build"
 > items shipped in one pass (3 parallel file-disjoint agents + the orchestrator owning `main.cpp`), plus two
 > standalone landings earlier the same day. **(B1) MIDI import** — new `ProjectSession::importMidiFileMultiTrack`
 > (rides the engine's own `te::readFileToMidiList` parse, one born-audible clip per non-empty source
@@ -20,8 +54,9 @@
 > voices: PluckBass/Pad/Bell/Clav + `InstrumentPreset` plumbing; API-only, no UI assigns them yet) and the
 > **B8 curated launch-quantise submenu** (`14c2c61` — 8 musical values + "More…", ids enum-keyed). Build
 > **clean (0 warnings)** · **47/47 selftest floor** (46 → 47: `+reload`; 5 gates extended in place) ·
-> **12/12 screenshots** (B7 dot visually confirmed in `mix`). ⚠ **NOT pushed — the whole batch is committed
-> locally on `main`, push HELD for the maintainer's OK.** Remaining on the backlog: item 0 (Redo — needs the
+> **12/12 screenshots** (B7 dot visually confirmed in `mix`). ✅ **PUSHED** — `origin/main` tip is W24's
+> `5ae8418` (verified 2026-08-04 during W25; the "push HELD" note that stood here was true when written).
+> Remaining on the backlog: item 0 (Redo — needs the
 > maintainer's A/B/C call), B4 (capture count-in, its own wave), B6's browser→slot interaction, B8 leftovers.
 > Full record → [devlog/wave-24-backlog-burndown.md](devlog/wave-24-backlog-burndown.md).
 

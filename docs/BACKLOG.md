@@ -21,6 +21,12 @@
 > screenshots; full record → `devlog/wave-24-backlog-burndown.md`). Their sections below are now stubs.
 > **Still open: item 0 (Redo — maintainer decision), B4 (capture count-in), B6's remaining interaction, the
 > B8 leftovers.** Push still held.
+>
+> **Update 2026-08-04 (W25):** **B9 — multi-stem audio import SHIPPED** (a maintainer brief, added to this
+> page and burned down in the same pass). Build clean, **48/48 floor** (`+--selftest-stems`), 12/12
+> screenshots. **W25 is the only unpushed commit** — everything through W24 is on `origin/main` (tip
+> `5ae8418`, verified by `git fetch`), so the "push still held" notes above are stale for W24 and current
+> for W25 only. Still open: item 0, B4, B6-remaining, B8 leftovers.
 
 ---
 
@@ -157,6 +163,26 @@ Channel/Return strips, ChannelTray, and SessionMixerStrip. Gated (`-menu` count+
 
 ---
 
+### B9 — Multi-stem audio import (drop N files → N tracks) — ✅ SHIPPED (W25)
+*Maintainer brief, 2026-08-04: "the last gap between Forge and a complete stem-mixing workflow".*
+
+New `ProjectSession::importFilesMultiTrack` (+ the audio-only `importAudioFilesMultiTrack` convenience)
+mirrors W24's `importMidiFileMultiTrack` structure: validate/order before touching the edit, grow tracks via
+`getOrInsertAudioTrackAt`, never advance the destination index on a per-file failure (no gap lanes), one
+`markAsChanged`, `onTracksChanged` only if the list actually grew. Adds three things the MIDI seam did not
+need: a **deterministic filename sort** (the OS drop order is arbitrary), **destination-track naming** after
+the file (guarded — never renames a user-named lane, nor one already holding arrange **or** Session-slot
+clips), and an explicit **mixed audio+MIDI walk** (each file takes the next index; a `.mid` consumes as many
+lanes as it lands clips). The Arrange drop path now carries every accepted file instead of returning on the
+first, and the shell does **one** save per drop. Gate `--selftest-stems` (floor 47 → 48, 24 legs, both
+load-bearing rules negative-controlled). Details → `devlog/wave-25-multistem-import.md`.
+
+**Deliberately out of scope (unchanged):** Browser multi-select (stays single-file double-click), folder
+drops, auto-grouping / aux-routing stems, Session-grid (clip-slot) multi-import, and anything in the mixer /
+EQ / exporter — all verified already working before the brief was written.
+
+---
+
 ### B8 — Opportunistic small items (fold into any wave)
 
 | item | source | note |
@@ -167,6 +193,7 @@ Channel/Return strips, ChannelTray, and SessionMixerStrip. Gated (`-menu` count+
 | Scene colour / multi-select | W15 f/u | |
 | Strip re-bind edge + absolute-index re-resolve | W08 QC | **Latent traps, not live bugs.** Add invariant comments now; only fix if a strip-reuse or drag-reorder feature lands. |
 | Aux-return ordering (cosmetic) | W07 f/u | |
+| `--selftest-popout` is intermittent | W25 | Failed **once** in a full-floor run (6 PASS / 1 FAIL on the same binary; PASS on the pre-change baseline), with no WARN/ERROR — a leg assertion flipped. Its window-visibility / focus legs read live OS state behind a fixed 300 ms yield. Widen the yield **only if it recurs**; also archive per-gate reports on failure so the failing leg is knowable. Details → `devlog/wave-25-multistem-import.md`. |
 
 ---
 
@@ -200,7 +227,7 @@ could even run together, but B4 wants its own focused wave per its risk note.)*
 ## The process (unchanged)
 
 Build → **one** integration build (`cmake --build .\build --config Debug`; kill `Forge.exe` first) → the
-**full selftest floor** (currently 47 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
+**full selftest floor** (currently 48 gates; see `tests/SELFTEST.md`) → `--screenshot` → adversarial QC →
 docs (`HANDOFF` / `STATUS` / `CLAUDE.md` counts / `SELFTEST.md` / a devlog) → **sanitize scan** → scoped
 commit → **hold the push for the maintainer's OK**.
 

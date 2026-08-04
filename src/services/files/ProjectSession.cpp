@@ -4,6 +4,8 @@
 #include "engine/ClipFades.h"
 #include "core/Log.h"
 
+#include <algorithm>   // std::sort — the multi-file drop's deterministic filename ordering
+
 ProjectSession::ProjectSession (te::Engine& e)
     : engine (e)
 {
@@ -1259,10 +1261,154 @@ std::vector<te::MidiClip::Ptr> ProjectSession::importMidiFileMultiTrack (const j
 
     // A multi-track file routinely GROWS the track list (e.g. a 3-track .mid into a 1-track project);
     // views that cache track refs must rebuild (same invariant as appendAudioTrack / ensureAuxBus).
-    if (te::getAudioTracks (*edit).size() > tracksBefore && onTracksChanged != nullptr)
+    // Suppressed while importFilesMultiTrack walks a multi-FILE drop — that walker owns the single
+    // end-of-gesture fire, so one drop is one save + one rebuild rather than one per file.
+    if (! deferTracksChanged
+        && te::getAudioTracks (*edit).size() > tracksBefore
+        && onTracksChanged != nullptr)
         onTracksChanged();
 
     return clips;
+}
+
+ProjectSession::MultiFileImport ProjectSession::importFilesMultiTrack (const juce::Array<juce::File>& files,
+                                                                      te::TimePosition start,
+                                                                      int firstTrackIndex)
+{
+    MultiFileImport out;
+
+    if (edit == nullptr || firstTrackIndex < 0)
+        return out;
+
+    // Validate + ORDER before the edit is touched (importMidiFileMultiTrack's parse-first discipline):
+    // a drop with nothing importable in it must mutate NOTHING. The OS hands a multi-selection over in
+    // arbitrary order, so sort by FILE NAME — lane assignment would otherwise be non-deterministic and
+    // no gate could assert which stem landed where. compareNatural so `stem2` precedes `stem10`.
+    std::vector<juce::File> accepted;
+    accepted.reserve ((size_t) files.size());
+
+    for (const auto& f : files)
+    {
+        if (f.existsAsFile())
+            accepted.push_back (f);
+        else
+            FORGE_LOG_WARN ("Multi-file import: skipping non-existent file " + f.getFullPathName());
+    }
+
+    if (accepted.empty())
+    {
+        FORGE_LOG_WARN ("Multi-file import: no existing files in a " + juce::String (files.size())
+                        + "-file drop — nothing imported");
+        return out;
+    }
+
+    std::sort (accepted.begin(), accepted.end(), [] (const juce::File& a, const juce::File& b)
+    {
+        return a.getFileName().compareNatural (b.getFileName()) < 0;
+    });
+
+    const int tracksBefore = te::getAudioTracks (*edit).size();
+    int destIndex = firstTrackIndex;
+
+    {
+        // Hold the per-file seams' own onTracksChanged fires for the duration of the walk (see the
+        // member's note) — this walker fires once, below, for the whole gesture.
+        ScopedTracksChangedDefer defer (deferTracksChanged);
+
+        for (const auto& f : accepted)
+        {
+            // A .mid/.midi takes THIS index and consumes as many lanes as it lands clips. One sorted
+            // pass serves a mixed drop: no filtering, no per-type special case (W25 product decision).
+            if (f.hasFileExtension ("mid;midi"))
+            {
+                auto midi = importMidiFileMultiTrack (f, start, destIndex);
+
+                if (midi.empty())
+                {
+                    ++out.filesFailed;   // logged by the seam; do NOT advance — the next file retries this lane
+                    continue;
+                }
+
+                destIndex += (int) midi.size();
+                out.midiClips.insert (out.midiClips.end(), midi.begin(), midi.end());
+                continue;
+            }
+
+            // Audio. Decide nameability BEFORE the import, while the destination is still untouched:
+            // a track past the end does not exist yet, so it is ours to name; an existing one only if
+            // the user never named it AND it holds no clips. AudioTrack::getName() SYNTHESISES
+            // "Track N" when unnamed, so the stored `name` property (empty by default — the engine's
+            // own sanityCheckName resets a literal "Track N" back to empty) is the only honest read of
+            // "has the user named this?".
+            const auto existing = te::getAudioTracks (*edit);
+            bool nameable = destIndex >= existing.size();
+
+            if (! nameable)
+            {
+                if (auto* t = existing[destIndex])
+                {
+                    // "Holds clips" spans BOTH surfaces: arrange clips live in getClips(), Session
+                    // launcher clips in the ClipSlotList (they are deliberately disjoint — the W10
+                    // gotcha), and a track carrying either is a lane the user is already using.
+                    bool hasSlotClip = false;
+                    for (auto* s : t->getClipSlotList().getClipSlots())
+                        if (s != nullptr && s->getClip() != nullptr) { hasSlotClip = true; break; }
+
+                    nameable = t->state[te::IDs::name].toString().isEmpty()
+                               && t->getClips().isEmpty()
+                               && ! hasSlotClip;
+                }
+            }
+
+            // Reuse the single-file seam verbatim — it wraps EngineHelpers::loadAudioFileAsClip AND
+            // applies the P6 anti-click edge fades. Never reimplement the per-file body here.
+            auto clip = importAudioFile (f, start, destIndex);
+
+            if (clip == nullptr)
+            {
+                ++out.filesFailed;   // logged by importAudioFile; do NOT advance (no silent gap lane)
+                continue;
+            }
+
+            // Name the LANE after the file. loadAudioFileAsClip already named the CLIP; the track is
+            // what turns a mixer reading "Track 1 / Track 2" into "vocals / drums". A blank base name
+            // (a file called ".wav") would just resetName() back to the default, so skip it.
+            const auto laneName = f.getFileNameWithoutExtension();
+
+            if (nameable && laneName.isNotEmpty())
+                if (auto* at = dynamic_cast<te::AudioTrack*> (clip->getTrack()))
+                    at->setName (laneName);
+
+            out.audioClips.push_back (clip);
+            ++destIndex;
+        }
+    }
+
+    if (! out.anyLanded())
+    {
+        FORGE_LOG_WARN ("Multi-file import: nothing importable among " + juce::String ((int) accepted.size())
+                        + " dropped file(s)");
+        return out;
+    }
+
+    edit->markAsChanged();   // ONCE for the whole drop, not once per file
+
+    // A stem drop routinely GROWS the track list; views that cache track refs must rebuild (the same
+    // invariant appendAudioTrack / ensureAuxBus / importMidiFileMultiTrack hold). The shell binds this
+    // to save + rebuild, so a caller that sees tracksGrew must NOT save again — one gesture, one save.
+    out.tracksGrew = te::getAudioTracks (*edit).size() > tracksBefore;
+
+    if (out.tracksGrew && onTracksChanged != nullptr)
+        onTracksChanged();
+
+    return out;
+}
+
+std::vector<te::WaveAudioClip::Ptr> ProjectSession::importAudioFilesMultiTrack (const juce::Array<juce::File>& files,
+                                                                                te::TimePosition start,
+                                                                                int firstTrackIndex)
+{
+    return importFilesMultiTrack (files, start, firstTrackIndex).audioClips;
 }
 
 bool ProjectSession::clearSlot (int trackIndex, int sceneIndex)

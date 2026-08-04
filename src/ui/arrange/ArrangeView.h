@@ -271,11 +271,14 @@ public:
     std::function<bool (te::AudioTrack&)> queryAutomationShown;
     /** Invoked after a control (mute/solo/colour) mutates the Edit, so the shell can save. */
     std::function<void()> onEditMutated;
-    /** An audio file was dropped on this lane's clip area. clipAreaX is the drop x relative to the
-        clip area (header already subtracted) and clipAreaWidth its width, so the owner maps x -> time
-        via the shared TimelineView + snap; file is the first accepted audio file. ArrangeView binds
-        this to the ProjectSession import seam (on the lane's track index) + refresh/persist. */
-    std::function<void (TrackLaneComponent&, const juce::File& file, int clipAreaX, int clipAreaWidth)> onFilesDropped;
+    /** One or more files were dropped on this lane's clip area. clipAreaX is the drop x relative to
+        the clip area (header already subtracted) and clipAreaWidth its width, so the owner maps
+        x -> time via the shared TimelineView + snap; `files` carries EVERY accepted file in the drop
+        (audio and/or `.mid`/`.midi`), in whatever order the OS supplied — the ProjectSession seam owns
+        the deterministic filename sort. ArrangeView binds this to that seam (starting at the lane's
+        track index) + refresh/persist. */
+    std::function<void (TrackLaneComponent&, const juce::Array<juce::File>& files,
+                        int clipAreaX, int clipAreaWidth)> onFilesDropped;
 
 private:
     TimelineView& view;
@@ -399,12 +402,15 @@ public:
         startTime is the (snapped) clip start. The shell binds this to ProjectSession::createMidiClip
         and then rebuild()s. Default null => no-op. */
     std::function<void (int trackIndex, te::TimePosition startTime)> onCreateMidiClipRequested;
-    /** Invoked when an audio file is dropped from the OS (Explorer) onto a track lane. trackIndex is
-        the dropped lane's track index within te::getAudioTracks(*edit); startTime is the (snapped)
-        drop time; file is the first accepted audio file. The shell binds this to
-        ProjectSession::importAudioFile(file, startTime, trackIndex) and then save()+rebuild()s
-        (mirrors onCreateMidiClipRequested). Default null => no-op. */
-    std::function<void (int trackIndex, const juce::File& file, te::TimePosition startTime)> onFilesDropped;
+    /** Invoked when one or more files are dropped from the OS (Explorer) onto a track lane.
+        trackIndex is the dropped lane's track index within te::getAudioTracks(*edit) — the FIRST
+        destination lane; startTime is the (snapped) drop time; `files` carries every accepted file in
+        the drop (audio and/or `.mid`/`.midi`) in the OS's arbitrary order. The shell binds this to
+        ProjectSession::importFilesMultiTrack(files, startTime, trackIndex) — which sorts by filename,
+        fans the drop out over consecutive lanes and names them after their files — and then
+        save()+rebuild()s (mirrors onCreateMidiClipRequested). Default null => no-op. */
+    std::function<void (int trackIndex, const juce::Array<juce::File>& files,
+                        te::TimePosition startTime)> onFilesDropped;
 
 private:
     void selectClip (ClipComponent*);

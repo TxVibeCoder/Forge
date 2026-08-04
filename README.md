@@ -97,8 +97,8 @@ cmake --build build --config Debug
 
 ### Headless self-tests
 
-The verification floor is **sixteen** headless PASS/FAIL gates (each writes a report to
-`%TEMP%\forge_phase0_selftest.log` and quits), plus `--screenshot` (renders a 9-state UI matrix incl. the
+The verification floor is **forty-eight** headless PASS/FAIL gates (each writes a report to
+`%TEMP%\forge_phase0_selftest.log` and quits), plus `--screenshot` (renders a 12-state UI matrix incl. the
 window-level `shell_window` to `%TEMP%\forge_shot_*.png` — not a gate). A representative few:
 
 - `Forge --selftest` — imports a generated tone, plays it, verifies device + clip + arrange + playhead.
@@ -111,9 +111,13 @@ window-level `shell_window` to `%TEMP%\forge_shot_*.png` — not a gate). A repr
 - `Forge --selftest-undo` — create/delete/undo/redo round-trip on a slot clip + a note-level leg, with
   `canUndo`/`canRedo` transition asserts (W05).
 
+- `Forge --selftest-stems` — drops four fixture WAVs in scrambled order and verifies they fan out to four
+  consecutive Arrange lanes in filename order, each lane named after its file (W25 multi-stem import).
+
 The rest cover MIDI-learn (`-midilearn`, `-midiinput`), the control surface (`-controlsurface`), offline
 LUFS (`-lufs`), automation (`-automation`), MIDI-clock (`-sync`), live cross-surface refresh (`-livesync`),
-and the UX layer (`-lcd`, `-menu`, `-tray`, `-popout`). See
+disk persistence (`-reload`), the Session-grid clip primitives, the launcher's follow-actions / launch modes /
+scene lifecycle, and the UX layer (`-lcd`, `-menu`, `-tray`, `-popout`). See
 [`tests/SELFTEST.md`](tests/SELFTEST.md) for the full field contract of every gate.
 
 ## Layout

@@ -190,7 +190,12 @@ forge/
 > - **`services/files/ProjectSession`** — owns the Edit (create/open/save/import; `createMidiClip`), plus the
 >   **aux buses / sends** seam (`ensureAuxBus`, `addOrUpdateAuxSend`, `getAuxReturnTrack` — an aux bus is a plain
 >   `AudioTrack` hosting an `AuxReturnPlugin`) and the **markers / cue points** seam (`addMarker` / `moveMarker` /
->   `renameMarker` / `removeMarker` / `getMarkers`, keyed by stable `te::EditItemID`).
+>   `renameMarker` / `removeMarker` / `getMarkers`, keyed by stable `te::EditItemID`). Import fans out through
+>   three layers: single-file (`importAudioFile` / `importMidiFile` / the `…IntoSlot` pair), single-file-to-many-lanes
+>   (`importMidiFileMultiTrack`, W24 — one clip per non-empty source part), and **many-files-to-many-lanes**
+>   (`importFilesMultiTrack` / `importAudioFilesMultiTrack`, W25 — the multi-stem drop: filename-sorted, one
+>   consecutive lane per file, lanes named after their files, audio and `.mid` dispatched in one walk).
+>   The UI never imports directly — `ArrangeView` bubbles a drop up and the shell calls the seam.
 > - **`services/export/Exporter`** — WAV mixdown + per-track stems, with **async** off-message-thread variants
 >   (`renderEditToWavAsync` / `renderStemsAsync`, progress + cancel) alongside the preserved sync API.
 > - **`engine/`** — `EngineHelpers` · `RecordController` (incl. MIDI slot-record) · `PluginHost` (incl. the 4OSC
@@ -206,10 +211,10 @@ forge/
 >   windows, W04b), **`ui/common/`** (`PeakMeter.h` + `StripWidgets.h` — shared meter + strip styling),
 >   **`ui/markers/MarkerBar`**, and **`ui/export/ExportProgress`**.
 >
-> **Headless verification** is **sixteen** PASS/FAIL selftests (playback, record, session, midi, midilearn,
-> midiinput, controlsurface, lufs, automation, sync, livesync, lcd, menu, tray, popout, undo) — plus
-> `--screenshot`, which renders a **9-state UI matrix** incl. the window-level `shell_window` (not a gate).
-> Field contracts in [`../tests/SELFTEST.md`](../tests/SELFTEST.md).
+> **Headless verification** is **forty-eight** PASS/FAIL selftests (as of W25) — plus `--screenshot`, which
+> renders a **12-state UI matrix** incl. the window-level `shell_window` (not a gate). The gate list changes
+> most waves, so it is NOT mirrored here: [`../tests/SELFTEST.md`](../tests/SELFTEST.md) is the single
+> canonical source for both the roster and every gate's field contract.
 
 ---
 ## 11. Build roadmap
