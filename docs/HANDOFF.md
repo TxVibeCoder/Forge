@@ -6,7 +6,7 @@
 
 | fact | value | how it was verified |
 |---|---|---|
-| `origin/main` tip | **`f977596`** | `git fetch` + `git log origin/main` after the push |
+| `origin/main` tip **at the end of the W29 wave work** | **`f977596`** | `git fetch` + `git log origin/main` after that push. ⚠ Doc-close commits land after it, so the LIVE tip is later — never trust this cell for "is my checkout current?"; run `git log -1 origin/main`. |
 | local vs remote | **in sync**, 0 ahead / 0 behind, working tree clean | `git rev-list --count` both ways · `git status --porcelain` |
 | build | **clean, 0 warnings** (MSVC Debug) | full `cmake --build` |
 | selftest floor | **50/50 PASS** | full-floor run; count re-derived from `src/main.cpp`, not from these docs |
@@ -174,7 +174,7 @@ identify a cause. If it recurs, the persistent log now names the failing leg —
 > mis-trim hole) and MIDI trim handles CC-only clips. **(B7) Modulate polish** — Edit ▸ Modulate… (Ctrl+M)
 > + a modulated-parameter accent dot on the mixer/tray/Session strips (edge-compared cache on existing
 > polls, no new timers). Earlier same-day: **B6 groundwork** (`13a1f0f` — four self-rendered CC0 melodic
-> voices: PluckBass/Pad/Bell/Clav + `InstrumentPreset` plumbing; API-only, no UI assigns them yet) and the
+> voices: PluckBass/Pad/Bell/Clav + `InstrumentPreset` plumbing; API-only, no UI assigned them yet — CLOSED in W26) and the
 > **B8 curated launch-quantise submenu** (`14c2c61` — 8 musical values + "More…", ids enum-keyed). Build
 > **clean (0 warnings)** · **47/47 selftest floor** (46 → 47: `+reload`; 5 gates extended in place) ·
 > **12/12 screenshots** (B7 dot visually confirmed in `mix`). ✅ **PUSHED** — `origin/main` tip is W24's

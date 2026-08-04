@@ -120,9 +120,11 @@ the W05 polish sweep. Kept here as the design record — the "still open" tail f
   IDs applied consistently: **amber = selection/interactive only**, **playGreen/playGreenDim = playing/
   queued**, **recordRed = recording**, **timeTempo = the clock family** (LCD, playhead). One colour, one
   meaning.
-- **The state-matrix screenshot harness (W04a/b).** `--screenshot` walks a 9-state matrix (view × selection ×
-  transport/drawer state) incl. the window-level `shell_window` (which captures the menu bar — window chrome
-  invisible to component snapshots), the headless stand-in for a live visual review.
+- **The state-matrix screenshot harness (W04a/b).** `--screenshot` walks a **12**-state matrix (view ×
+  selection × transport/drawer state) incl. the window-level `shell_window` (which captures the menu bar —
+  window chrome invisible to component snapshots), the headless stand-in for a live visual review. The state
+  list grows most waves, so it is not mirrored here — derive it:
+  `ls %TEMP%\forge_shot_*.png` after a run, or see [../tests/SELFTEST.md](../tests/SELFTEST.md).
 - **Global Undo/Redo (W05).** Edit ▸ Undo/Redo with live enablement + Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y over the
   Edit's own UndoManager; per-gesture transaction seals; a synchronous cross-surface refresh after every step;
   blocked with a status message while recording. Gate: `--selftest-undo`.

@@ -28,7 +28,8 @@
 > `git fetch` after the push). W24 turned out to have been pushed already, so every "push still held" note
 > above is stale.
 >
-> **Update 2026-08-04 — SESSION CLOSE.** `origin/main` = **`f977596`**, local in sync, tree clean, build
+> **Update 2026-08-04 — SESSION CLOSE.** `origin/main` was **`f977596`** at the end of the W29 wave work
+> (later doc commits move it — check `git log -1 origin/main`); local in sync, tree clean, build
 > clean, **50/50 floor**, 12/12 screenshots — all verified, not assumed. **"Ready to build" is now EMPTY.**
 > Remaining: **item 0** (Redo — a maintainer A/B/C decision, the only broken core interaction), the B8
 > smalls, and optional B6 library growth. ⚠ Unresolved and carried forward: the `--selftest-popout`

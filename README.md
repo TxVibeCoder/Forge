@@ -21,7 +21,7 @@ piano-roll / mixer now live inside slots and scenes. On top of the grid, later w
 seams (MIDI-learn + HW routing, a Forge-native control-surface driver, offline LUFS, volume/pan
 automation, MIDI-clock out, live cross-surface refresh) and a full **UX layer** (a traditional menu
 bar, a GarageBand-style transport LCD, a channel tray, tear-off windows, animated slide-outs, sequence
-lighting + a semantic accent vocabulary, and **global Undo/Redo**). Building clean; **all sixteen
+lighting + a semantic accent vocabulary, and **global Undo/Redo**). Building clean; **all fifty
 headless self-tests PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/STATUS.md).
 
 **What works today:**
@@ -33,6 +33,9 @@ headless self-tests PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/
 - **Project** save/load — a real `.tracktionedit` on disk (create / open / save / save-as).
 - **Audio** import (WAV/AIFF/FLAC/OGG) onto tracks; a timeline with **waveform thumbnails**,
   a moving **playhead** (drag to scrub), clip **drag-to-move** + selectable **snap grid**.
+- **Multi-stem import** — drag a whole stem set onto an Arrange lane and get **one clip per file on
+  consecutive tracks, each lane named after its file** (filename-sorted, so lane assignment is
+  deterministic). A `.mid` in the same drop fans out per source track/channel in the same pass.
 - **Transport** — play / stop / record / loop + timecode and bars|beats.
 - **Recording** — the verified Tracktion recipe; **verified end-to-end on real hardware**
   (`--selftest-record` captures a real take). Output-only startup; the capture input opens
@@ -47,8 +50,16 @@ headless self-tests PASS** on Windows. Full roadmap → [`docs/STATUS.md`](docs/
   (bypass + reorder), per-track **A/B aux sends** feeding **aux-return strips**, a master strip with
   a post-fader meter.
 - **Plugins** — built-in effects + **VST3/AU** scanning & hosting, with floating editor windows.
-- **Browser** (file tree, double-click to import) and a **clip Inspector** (name/gain/fades/waveform).
+- **Browser** — an **INSTRUMENTS** list of the built-in CC0 voices above a file tree; double-click a voice
+  to load it onto the selected track, or a file to import it. Plus a **clip Inspector**
+  (name/gain/fades/waveform).
+- **Instruments on demand** — seven built-in voices (Kick, Bass, Piano, Pluck Bass, Pad, Bell, Clav; the
+  sampled ones are **self-rendered CC0 one-shots**, no third-party packs). Assign from the Browser list, the
+  Arrange lane-header **Instrument ▸** submenu, or the Session track-header menu. Re-assigning replaces the
+  track's instrument rather than stacking one on top.
 - **Metronome** — an engine **click** with a native **count-in** (TransportBar toggle + count-in selector).
+  The same count-in also pre-rolls **performance capture** — audible, shown on the LCD, and without putting
+  the transport into record mode.
 - **Markers** — a timeline marker strip: add / move / rename / delete cue points, click to jump the transport.
 - **Export** — WAV mixdown + per-track **stems**, now **async / off the message thread** with a
   progress + cancel panel (mixdown and stems both).

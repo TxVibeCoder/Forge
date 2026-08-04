@@ -114,7 +114,11 @@ The packet asked to re-verify that `LaunchHandle::getPlayedRange()` span timing 
 
 ---
 
-# Follow-up round — the LCD count-in readout
+# Wave 28 — the LCD count-in readout (W27's follow-up round)
+
+> **There is no `wave-28-*.md`** — W28's record lives here, appended to the wave it closes out (the same
+> pattern W23's follow-up round used). ⚠ Its commit subject reads `[W27 f/u]`, predating the W28 label;
+> the docs use **W28** throughout.
 
 > W27 shipped with one documented limit: the count-in was **audible but not shown**, because the LCD's
 > count-in face latched only on a *record* rising edge (W04a). Closed immediately after, in the same
